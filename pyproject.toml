@@ -20,6 +20,18 @@ dependencies = [
     "uvicorn",
     "click"
 ]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "Apache-2.0 WITH LLVM-exception"
+license-files = ["LICENSE"]
+
+[project.urls]
+Homepage = "https://github.com/llnl/mada"
+Documentation = "https://software.llnl.gov/mada
+Issues = "https://github.com/llnl/mada/issues"
+"Release Notes" = "https://github.com/llnl/mada/releases"
 
 [project.optional-dependencies]
 # Testing requirements
