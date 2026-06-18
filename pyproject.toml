@@ -29,7 +29,7 @@ license-files = ["LICENSE"]
 
 [project.urls]
 Homepage = "https://github.com/llnl/mada"
-Documentation = "https://software.llnl.gov/mada
+Documentation = "https://software.llnl.gov/mada"
 Issues = "https://github.com/llnl/mada/issues"
 "Release Notes" = "https://github.com/llnl/mada/releases"
 
