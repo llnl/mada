@@ -26,9 +26,15 @@ def create_agent_table(
         The configured Gradio Dataframe component representing agents
     """
 
-
     # Headers for the agent table
-    headers = ["Agent Name", "Description", "Domain", "MCP Servers", "MCP Server Tools", "Instructions"]
+    headers = [
+        "Agent Name",
+        "Description",
+        "Domain",
+        "MCP Servers",
+        "MCP Server Tools",
+        "Instructions",
+    ]
 
     # Convert agents to table rows
     table_rows = []
@@ -36,10 +42,12 @@ def create_agent_table(
         row = [
             agent.agent_name,
             agent.description,
-            getattr(agent, 'domain', ''),
-            ', '.join(agent.mcp_servers) if agent.mcp_servers else '',
-            "Need to connect first..." if agent_dict is None else str(agent_dict[agent.agent_name]),
-            agent.instructions
+            getattr(agent, "domain", ""),
+            ", ".join(agent.mcp_servers) if agent.mcp_servers else "",
+            "Need to connect first..."
+            if agent_dict is None
+            else str(agent_dict[agent.agent_name]),
+            agent.instructions,
         ]
         table_rows.append(row)
 
@@ -52,7 +60,7 @@ def create_agent_table(
         value=table_rows,
         interactive=False,
         elem_id="my_df",
-        column_widths=[f"{math.floor(100/len(row))}%"] * len(row)
+        column_widths=[f"{math.floor(100 / len(row))}%"] * len(row),
     )
 
 

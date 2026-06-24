@@ -68,7 +68,9 @@ class SQLiteChatDatabase(BaseChatDatabase):
                 )
             """)
 
-    def add_message(self, session_id: str, role: str, content: str, timestamp: datetime = None):
+    def add_message(
+        self, session_id: str, role: str, content: str, timestamp: datetime = None
+    ):
         """
         Add a single message to the messages table in the database.
 
@@ -82,19 +84,28 @@ class SQLiteChatDatabase(BaseChatDatabase):
             timestamp = datetime.now()
         with self._connect() as conn:
             # Ensure the session exists in the sessions table
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO sessions (session_id, last_updated)
                 VALUES (?, ?)
-            """, (session_id, timestamp))
+            """,
+                (session_id, timestamp),
+            )
             # Insert the message
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO messages (session_id, role, content, timestamp)
                 VALUES (?, ?, ?, ?)
-            """, (session_id, role, content, timestamp))
+            """,
+                (session_id, role, content, timestamp),
+            )
             # Update last_updated in sessions
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE sessions SET last_updated = ? WHERE session_id = ?
-            """, (timestamp, session_id))
+            """,
+                (timestamp, session_id),
+            )
 
     def create_session(self, session_id: str):
         """
@@ -105,10 +116,13 @@ class SQLiteChatDatabase(BaseChatDatabase):
         """
         with self._connect() as conn:
             # Ensure the session exists in the sessions table
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO sessions (session_id, last_updated)
                 VALUES (?, ?)
-            """, (session_id, datetime.now()))
+            """,
+                (session_id, datetime.now()),
+            )
 
     def load_session(self, session_id: str) -> List[dict]:
         """
@@ -121,11 +135,14 @@ class SQLiteChatDatabase(BaseChatDatabase):
             List of messages from the session.
         """
         with self._connect() as conn:
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 SELECT role, content, timestamp FROM messages
                 WHERE session_id = ?
                 ORDER BY message_id ASC
-            """, (session_id,))
+            """,
+                (session_id,),
+            )
             return [
                 {"role": row[0], "content": row[1], "timestamp": row[2]}
                 for row in cursor.fetchall()
@@ -143,9 +160,9 @@ class SQLiteChatDatabase(BaseChatDatabase):
                 "SELECT session_id, last_updated FROM sessions ORDER BY last_updated DESC"
             ).fetchall()
             return [
-                    (session_id, datetime.fromisoformat(last_updated))
-                    for session_id, last_updated in results
-                ]
+                (session_id, datetime.fromisoformat(last_updated))
+                for session_id, last_updated in results
+            ]
 
     def delete_session(self, session_id: str):
         """

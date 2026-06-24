@@ -36,6 +36,7 @@ class AgentConfig:
         instructions (Optional[str]): A system prompt used to initialize the agent's behavior.
         server_path (Optional[str]): Legacy field for backward compatibility.
     """
+
     agent_name: str
     description: str
     mcp_servers: List[str]
@@ -74,7 +75,7 @@ class AgentConfig:
         return result
 
     @classmethod
-    def from_dict(cls, agent_dict: Dict[str, Any]) -> 'AgentConfig':
+    def from_dict(cls, agent_dict: Dict[str, Any]) -> "AgentConfig":
         """
         Create an AgentConfig instance from a dictionary using raw field names as keys.
 
@@ -87,16 +88,19 @@ class AgentConfig:
         kwargs = {}
 
         # Backward compatibility: map system_message -> instructions if needed
-        if ("instructions" not in agent_dict or not agent_dict.get("instructions")) \
-        and "system_message" in agent_dict:
+        if (
+            "instructions" not in agent_dict or not agent_dict.get("instructions")
+        ) and "system_message" in agent_dict:
             agent_dict = dict(agent_dict)  # shallow copy to avoid mutating caller
             agent_dict["instructions"] = agent_dict.get("system_message", "")
 
-        for name, field in cls.__dataclass_fields__.items():
+        for name, dataclass_field in cls.__dataclass_fields__.items():
             value = agent_dict.get(name, "")
 
             # Handle list fields (like mcp_servers)
-            if field.type == List[str] or str(field.type).startswith('typing.List'):
+            if dataclass_field.type == List[str] or str(
+                dataclass_field.type
+            ).startswith("typing.List"):
                 if isinstance(value, str):
                     # Convert comma-separated string back to list
                     kwargs[name] = [s.strip() for s in value.split(",") if s.strip()]
@@ -105,7 +109,9 @@ class AgentConfig:
                 else:
                     kwargs[name] = []
             # Handle dict fields (like extra)
-            elif field.type == Dict[str, Any] or str(field.type).startswith('typing.Dict'):
+            elif dataclass_field.type == Dict[str, Any] or str(
+                dataclass_field.type
+            ).startswith("typing.Dict"):
                 if isinstance(value, str):
                     try:
                         kwargs[name] = json.loads(value)

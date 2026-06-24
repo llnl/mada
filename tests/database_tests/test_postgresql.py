@@ -19,7 +19,7 @@ def postgresql_db_unit() -> Tuple[PostgreSQLChatDatabase, MagicMock]:
         port=5432,
         database="test_db_unit",
         user="test_user",
-        password="test_password"
+        password="test_password",
     )
 
     patcher = patch.object(PostgreSQLChatDatabase, "_connect", return_value=MagicMock())
@@ -46,7 +46,9 @@ def postgresql_db_unit() -> Tuple[PostgreSQLChatDatabase, MagicMock]:
 
 
 @pytest.fixture
-def postgresql_db_integration(postgres_connection: PostgreSQLConfig) -> PostgreSQLChatDatabase:
+def postgresql_db_integration(
+    postgres_connection: PostgreSQLConfig,
+) -> PostgreSQLChatDatabase:
     """Fixture to initialize PostgreSQLChatDatabase with PostgreSQLConfig for integration tests."""
     db = PostgreSQLChatDatabase(db_config=postgres_connection)
     db.flush_database(confirm=False)  # Ensure we have a clean database each time
@@ -55,9 +57,7 @@ def postgresql_db_integration(postgres_connection: PostgreSQLConfig) -> PostgreS
 
 @pytest.mark.unit
 class TestPostgreSQLChatDatabaseUnit:
-
     class TestInitDB:
-
         def test_init_db_creates_table(self, postgresql_db_unit):
             """Test that the init_db method creates the sessions table."""
             _, mock_conn = postgresql_db_unit
@@ -71,7 +71,6 @@ class TestPostgreSQLChatDatabaseUnit:
                 """)
 
     class TestSaveSession:
-
         @patch("mada.core.database.postgresql.datetime")
         def test_save_session_inserts_data(self, mock_datetime, postgresql_db_unit):
             """Test that save_session inserts data into the database."""
@@ -83,16 +82,21 @@ class TestPostgreSQLChatDatabaseUnit:
             mock_datetime.now.return_value = datetime(2025, 12, 18, 17, 58, 43)
             db.save_session(session_id, messages)
 
-            mock_conn.execute.assert_any_call("""
+            mock_conn.execute.assert_any_call(
+                """
                     INSERT INTO sessions (session_id, last_updated, messages)
                     VALUES (%s, %s, %s)
                     ON CONFLICT (session_id) DO UPDATE
                     SET last_updated = EXCLUDED.last_updated,
                         messages = EXCLUDED.messages
-                """, (session_id, mock_datetime.now.return_value, json.dumps(messages)))
+                """,
+                (session_id, mock_datetime.now.return_value, json.dumps(messages)),
+            )
 
         @patch("mada.core.database.postgresql.datetime")
-        def test_save_session_handles_empty_messages(self, mock_datetime, postgresql_db_unit):
+        def test_save_session_handles_empty_messages(
+            self, mock_datetime, postgresql_db_unit
+        ):
             """Test that save_session handles empty messages gracefully."""
             db, mock_conn = postgresql_db_unit
 
@@ -102,28 +106,31 @@ class TestPostgreSQLChatDatabaseUnit:
             mock_datetime.now.return_value = datetime(2025, 12, 18, 17, 58, 43)
             db.save_session(session_id, messages)
 
-            mock_conn.execute.assert_any_call("""
+            mock_conn.execute.assert_any_call(
+                """
                     INSERT INTO sessions (session_id, last_updated, messages)
                     VALUES (%s, %s, %s)
                     ON CONFLICT (session_id) DO UPDATE
                     SET last_updated = EXCLUDED.last_updated,
                         messages = EXCLUDED.messages
-                """, (session_id, mock_datetime.now.return_value, json.dumps(messages)))
+                """,
+                (session_id, mock_datetime.now.return_value, json.dumps(messages)),
+            )
 
     class TestLoadSession:
-
         def test_load_session_returns_messages(self, postgresql_db_unit):
             """Test that load_session retrieves messages from the database."""
             db, mock_conn = postgresql_db_unit
-            mock_conn.fetchone.return_value = [json.dumps([{"user": "Hello", "bot": "Hi"}])]
+            mock_conn.fetchone.return_value = [
+                json.dumps([{"user": "Hello", "bot": "Hi"}])
+            ]
 
             session_id = "test_session"
             loaded_messages = db.load_session(session_id)
 
             assert loaded_messages == [{"user": "Hello", "bot": "Hi"}]
             mock_conn.execute.assert_any_call(
-                "SELECT messages FROM sessions WHERE session_id = %s",
-                (session_id,)
+                "SELECT messages FROM sessions WHERE session_id = %s", (session_id,)
             )
 
         def test_load_session_returns_empty_list_if_not_found(self, postgresql_db_unit):
@@ -136,17 +143,16 @@ class TestPostgreSQLChatDatabaseUnit:
             assert loaded_messages == []
             mock_conn.execute.assert_any_call(
                 "SELECT messages FROM sessions WHERE session_id = %s",
-                ("nonexistent_session",)
+                ("nonexistent_session",),
             )
 
     class TestListSessions:
-
         def test_list_sessions_returns_all_sessions(self, postgresql_db_unit):
             """Test that list_sessions returns all sessions in the database."""
             db, mock_conn = postgresql_db_unit
             mock_conn.fetchall.return_value = [
                 ("session_1", datetime(2025, 12, 18, 17, 58, 43)),
-                ("session_2", datetime(2025, 12, 18, 17, 59, 43))
+                ("session_2", datetime(2025, 12, 18, 17, 59, 43)),
             ]
 
             sessions = db.list_sessions()
@@ -158,7 +164,9 @@ class TestPostgreSQLChatDatabaseUnit:
                 "SELECT session_id, last_updated FROM sessions ORDER BY last_updated DESC"
             )
 
-        def test_list_sessions_returns_empty_list_if_no_sessions(self, postgresql_db_unit):
+        def test_list_sessions_returns_empty_list_if_no_sessions(
+            self, postgresql_db_unit
+        ):
             """Test that list_sessions returns an empty list if there are no sessions."""
             db, mock_conn = postgresql_db_unit
             mock_conn.fetchall.return_value = []
@@ -171,7 +179,6 @@ class TestPostgreSQLChatDatabaseUnit:
             )
 
     class TestDeleteSession:
-
         def test_delete_session_removes_data(self, postgresql_db_unit):
             """Test that delete_session removes a session from the database."""
             db, mock_conn = postgresql_db_unit
@@ -180,14 +187,14 @@ class TestPostgreSQLChatDatabaseUnit:
             db.delete_session(session_id)
 
             mock_conn.execute.assert_any_call(
-                "DELETE FROM sessions WHERE session_id = %s",
-                (session_id,)
+                "DELETE FROM sessions WHERE session_id = %s", (session_id,)
             )
 
     class TestFlushDatabase:
-
         @patch.object(PostgreSQLChatDatabase, "confirm_db_flush", return_value=True)
-        def test_flush_database_removes_all_data(self, mock_confirm_flush, postgresql_db_unit):
+        def test_flush_database_removes_all_data(
+            self, mock_confirm_flush, postgresql_db_unit
+        ):
             """Test that flush_database removes all data from the database."""
             db, mock_conn = postgresql_db_unit
 
@@ -197,7 +204,9 @@ class TestPostgreSQLChatDatabaseUnit:
             mock_conn.execute.assert_any_call("DELETE FROM sessions")
 
         @patch.object(PostgreSQLChatDatabase, "confirm_db_flush", return_value=False)
-        def test_flush_database_cancels_on_user_decline(self, mock_confirm_flush, postgresql_db_unit):
+        def test_flush_database_cancels_on_user_decline(
+            self, mock_confirm_flush, postgresql_db_unit
+        ):
             """Test that flush_database does not remove data if user declines."""
             db, mock_conn = postgresql_db_unit
 
@@ -210,9 +219,7 @@ class TestPostgreSQLChatDatabaseUnit:
 @pytest.mark.integration
 @pytest.mark.allocation_required
 class TestPostgreSQLChatDatabaseIntegration:
-
     class TestInitDB:
-
         def test_init_db_creates_table(self, postgresql_db_integration):
             """Integration test for init_db method."""
             # Verify table creation
@@ -229,7 +236,6 @@ class TestPostgreSQLChatDatabaseIntegration:
             print("done with init test")
 
     class TestSaveSession:
-
         def test_save_session_inserts_data(self, postgresql_db_integration):
             """Integration test for save_session method."""
             session_id = "test_save_session_inserts_data"
@@ -240,11 +246,14 @@ class TestPostgreSQLChatDatabaseIntegration:
             # Verify data in the database
             with postgresql_db_integration._connect() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT session_id, messages
                     FROM sessions
                     WHERE session_id = %s
-                """, (session_id,))
+                """,
+                    (session_id,),
+                )
                 result = cursor.fetchone()
 
             assert result is not None, "Session data was not saved."
@@ -261,11 +270,14 @@ class TestPostgreSQLChatDatabaseIntegration:
             # Verify data in the database
             with postgresql_db_integration._connect() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT session_id, messages
                     FROM sessions
                     WHERE session_id = %s
-                """, (session_id,))
+                """,
+                    (session_id,),
+                )
                 result = cursor.fetchone()
 
             assert result is not None, "Session data was not saved."
@@ -273,7 +285,6 @@ class TestPostgreSQLChatDatabaseIntegration:
             assert json.loads(result[1]) == messages, "Messages mismatch."
 
     class TestLoadSession:
-
         def test_load_session_returns_messages(self, postgresql_db_integration):
             """Integration test for load_session method."""
             session_id = "test_load_session_returns_messages"
@@ -285,9 +296,13 @@ class TestPostgreSQLChatDatabaseIntegration:
             # Load session
             loaded_messages = postgresql_db_integration.load_session(session_id)
 
-            assert loaded_messages == messages, "Loaded messages do not match saved messages."
+            assert loaded_messages == messages, (
+                "Loaded messages do not match saved messages."
+            )
 
-        def test_load_session_returns_empty_list_if_not_found(self, postgresql_db_integration):
+        def test_load_session_returns_empty_list_if_not_found(
+            self, postgresql_db_integration
+        ):
             """Integration test for load_session method when session is not found."""
             session_id = "nonexistent_session"
 
@@ -297,7 +312,6 @@ class TestPostgreSQLChatDatabaseIntegration:
             assert loaded_messages == [], "Expected empty list for nonexistent session."
 
     class TestListSessions:
-
         def test_list_sessions_returns_all_sessions(self, postgresql_db_integration):
             """Integration test for list_sessions method."""
             session_1 = "test_list_sessions_returns_all_sessions_1"
@@ -313,10 +327,16 @@ class TestPostgreSQLChatDatabaseIntegration:
             sessions = postgresql_db_integration.list_sessions()
 
             assert len(sessions) == 2, "Expected two sessions in the database."
-            assert sessions[0][0] == session_2, "Expected test_list_sessions_returns_all_sessions_2 to be listed first."
-            assert sessions[1][0] == session_1, "Expected test_list_sessions_returns_all_sessions_1 to be listed second."
+            assert sessions[0][0] == session_2, (
+                "Expected test_list_sessions_returns_all_sessions_2 to be listed first."
+            )
+            assert sessions[1][0] == session_1, (
+                "Expected test_list_sessions_returns_all_sessions_1 to be listed second."
+            )
 
-        def test_list_sessions_returns_empty_list_if_no_sessions(self, postgresql_db_integration):
+        def test_list_sessions_returns_empty_list_if_no_sessions(
+            self, postgresql_db_integration
+        ):
             """Integration test for list_sessions method when no sessions exist."""
             # List sessions
             sessions = postgresql_db_integration.list_sessions()
@@ -324,7 +344,6 @@ class TestPostgreSQLChatDatabaseIntegration:
             assert sessions == [], "Expected empty list when no sessions exist."
 
     class TestDeleteSession:
-
         def test_delete_session_removes_data(self, postgresql_db_integration):
             """Integration test for delete_session method."""
             session_id = "test_delete_session_removes_data"
@@ -339,19 +358,23 @@ class TestPostgreSQLChatDatabaseIntegration:
             # Verify session is deleted
             with postgresql_db_integration._connect() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT session_id
                     FROM sessions
                     WHERE session_id = %s
-                """, (session_id,))
+                """,
+                    (session_id,),
+                )
                 result = cursor.fetchone()
 
             assert result is None, "Session was not deleted."
 
     class TestFlushDatabase:
-
         @patch("builtins.input", return_value="y")
-        def test_flush_database_removes_all_data(self, mock_input, postgresql_db_integration):
+        def test_flush_database_removes_all_data(
+            self, mock_input, postgresql_db_integration
+        ):
             """Integration test for flush_database method."""
             session_1 = "test_flush_database_removes_all_data_1"
             session_2 = "test_flush_database_removes_all_data_2"
@@ -370,7 +393,9 @@ class TestPostgreSQLChatDatabaseIntegration:
             assert sessions == [], "Database was not flushed."
 
         @patch("builtins.input", return_value="n")
-        def test_flush_database_cancels_on_user_decline(self, mock_input, postgresql_db_integration):
+        def test_flush_database_cancels_on_user_decline(
+            self, mock_input, postgresql_db_integration
+        ):
             """Test that flush_database does not remove data if user declines."""
             session = "test_flush_database_cancels_on_user_decline"
             messages = [{"user": "Hi", "bot": "Hello"}]
@@ -384,4 +409,6 @@ class TestPostgreSQLChatDatabaseIntegration:
             # Verify nothing happened since the user declined the flush
             sessions = postgresql_db_integration.list_sessions()
             assert len(sessions) == 1, "Expected the session to remain in the database."
-            assert sessions[0][0] == session, "Expected the session ID to match the saved session."
+            assert sessions[0][0] == session, (
+                "Expected the session ID to match the saved session."
+            )

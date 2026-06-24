@@ -15,7 +15,6 @@ A provider adapter is responsible for:
   the user-supplied model configuration
 """
 
-
 from abc import ABC, abstractmethod
 from typing import Type
 

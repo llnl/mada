@@ -19,13 +19,19 @@ from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
 from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
 
+try:
+    BaseExceptionGroup
+except NameError:
+    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
+
+
 LOG = logging.getLogger("mada-gradio")
 
 
 class MCPGradioClientSession:
     """
     MCP client session for Gradio interface.
-    
+
     This class handles connecting to MCP servers and processing messages
     for the Gradio interface using the existing MADAOrchestrator.
     """
@@ -53,7 +59,9 @@ class MCPGradioClientSession:
         self.session_manager = ChatSessionManager(database_config)
         self.session_bearer_token = None  # Store session bearer token
 
-    async def connect_servers(self, agent_table: gr.Dataframe, request: gr.Request) -> Tuple[str, str]:
+    async def connect_servers(
+        self, agent_table: gr.Dataframe, request: gr.Request
+    ) -> Tuple[str, str]:
         """
         Connect to MCP servers based on the agent table configuration.
 
@@ -74,10 +82,7 @@ class MCPGradioClientSession:
                 LOG.info(f"Client IP: {request.client.host}")
 
             # Store request wormhole community subtoken for use in session
-            if (
-                hasattr(request, "headers")
-                and "x-subtoken" in request.headers
-            ):
+            if hasattr(request, "headers") and "x-subtoken" in request.headers:
                 token = request.headers["x-subtoken"]
                 self.session_bearer_token = token
 
@@ -86,7 +91,10 @@ class MCPGradioClientSession:
             if self.orchestrator is None:
                 LOG.info("Creating orchestrator instance...")
                 self.orchestrator = MADAOrchestrator(
-                    self.model_config, self.database_config, session_manager=self.session_manager, bearer_token=self.session_bearer_token
+                    self.model_config,
+                    self.database_config,
+                    session_manager=self.session_manager,
+                    bearer_token=self.session_bearer_token,
                 )
                 # Enter the async context manager (required for proper setup)
                 LOG.info("Entering orchestrator async context...")
@@ -94,7 +102,9 @@ class MCPGradioClientSession:
                 LOG.info("Orchestrator context entered successfully")
 
             # Initialize orchestrator with agents
-            LOG.info(f"Initializing orchestrator with {len(self.agents)} agents and {len(self.mcp_servers)} MCP servers...")
+            LOG.info(
+                f"Initializing orchestrator with {len(self.agents)} agents and {len(self.mcp_servers)} MCP servers..."
+            )
             status_msg, tools = await self.orchestrator.initialize_orchestrator(
                 agent_configs=self.agents,  # Use provided agents
                 mcp_servers=self.mcp_servers,  # Placeholder for MCP server config, replace with real config when available
@@ -103,8 +113,10 @@ class MCPGradioClientSession:
 
             agent_dict = cycle_through_tools(self.orchestrator.specialist_agents)
             self.initialized = True
-            return gr.Button(status_msg, elem_id="green_btn"), create_agent_table(self.agents, agent_dict)
-            
+            return gr.Button(status_msg, elem_id="green_btn"), create_agent_table(
+                self.agents, agent_dict
+            )
+
         except BaseExceptionGroup as eg:
             error_msg = f"Failed to connect to MCP servers: {len(eg.exceptions)} error(s) occurred"
             LOG.error(error_msg, exc_info=True)
@@ -112,9 +124,9 @@ class MCPGradioClientSession:
         except Exception as e:
             error_msg = f"Failed to connect to MCP servers: {e}"
             LOG.error(error_msg)
-            LOG.error(f"Full traceback:", exc_info=True)
+            LOG.error("Full traceback:", exc_info=True)
             return gr.Button(error_msg, variant="stop"), create_agent_table(self.agents)
-        
+
     def list_sessions(self) -> List[str]:
         """
         List all sessions available and create a list of labels for each session.
@@ -123,8 +135,11 @@ class MCPGradioClientSession:
             A list of labels of the form "timestamp | ID" for each session.
         """
         sessions = self.session_manager.list_sessions()
-        return [f"{ts.isoformat(sep=' ', timespec='seconds')} | {sid}" for sid, ts in sessions]
-        
+        return [
+            f"{ts.isoformat(sep=' ', timespec='seconds')} | {sid}"
+            for sid, ts in sessions
+        ]
+
     def get_session_choices(self) -> List[str]:
         """
         List all chat sessions.
@@ -135,7 +150,7 @@ class MCPGradioClientSession:
             A list of chat session labels of the form "timestamp | session ID".
         """
         return self.list_sessions()
-    
+
     def update_session_choices(self) -> gr.update:
         """
         Update the list of chat sessions.
@@ -157,8 +172,10 @@ class MCPGradioClientSession:
         self.session_manager.create_new_session(new_id)
         self.session_manager.select_session(new_id)
         updated_sessions = self.list_sessions()
-        return gr.update(choices=updated_sessions, value=None), []  # update sessions list, empty chat history
-    
+        return gr.update(
+            choices=updated_sessions, value=None
+        ), []  # update sessions list, empty chat history
+
     def _extract_id_from_label(self, session_label: str) -> str:
         """
         Extract session id from label.
@@ -195,7 +212,7 @@ class MCPGradioClientSession:
         history = self.session_manager.select_session(session_id)
 
         return history
-    
+
     def delete_session(self, session_label: str) -> Tuple[gr.update, List]:
         """
         Delete a chat session.
@@ -216,7 +233,9 @@ class MCPGradioClientSession:
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
         updated_sessions = self.list_sessions()
-        return gr.update(choices=updated_sessions, value=None), []  # update sessions list, clear chat history
+        return gr.update(
+            choices=updated_sessions, value=None
+        ), []  # update sessions list, clear chat history
 
     def delete_all_sessions(self) -> Tuple[gr.update, List]:
         """
@@ -283,8 +302,9 @@ class MCPGradioClientSession:
             try:
                 await self.orchestrator.__aexit__(None, None, None)
             except BaseExceptionGroup as eg:
-                LOG.warning(f"Multiple errors during cleanup ({len(eg.exceptions)} errors, suppressed)")
+                LOG.warning(
+                    f"Multiple errors during cleanup ({len(eg.exceptions)} errors, suppressed)"
+                )
             except Exception as e:
                 LOG.error(f"Error during cleanup: {e}")
         self.initialized = False
-

@@ -4,6 +4,7 @@
 import pytest
 from mada.core.config import SQLiteConfig, PostgreSQLConfig
 
+
 @pytest.mark.unit
 class TestSQLiteConfig:
     def test_default_path(self):
@@ -11,7 +12,9 @@ class TestSQLiteConfig:
         config = SQLiteConfig()
         assert config.path.exists(), "Default SQLite path should exist."
         assert "~" not in str(config.path)
-        assert str(config.path) == str(config.path.expanduser()), "SQLite path should be expanded correctly."
+        assert str(config.path) == str(config.path.expanduser()), (
+            "SQLite path should be expanded correctly."
+        )
 
 
 @pytest.mark.unit
@@ -20,7 +23,9 @@ class TestPostgreSQLConfig:
         """Test that PostgreSQLConfig initializes correctly with a connection string."""
         connection_string = "postgresql://user:password@localhost:5432/testdb"
         config = PostgreSQLConfig(connection_string=connection_string)
-        assert config.get_connection_string() == connection_string, "PostgreSQL connection string should match the initialized value."
+        assert config.get_connection_string() == connection_string, (
+            "PostgreSQL connection string should match the initialized value."
+        )
 
     def test_individual_fields_initialization(self):
         """Test that PostgreSQLConfig constructs a connection string from individual fields."""
@@ -32,7 +37,9 @@ class TestPostgreSQLConfig:
             password="password",
         )
         expected_connection_string = "postgresql://user:password@localhost:5432/testdb"
-        assert config.get_connection_string() == expected_connection_string, "PostgreSQL connection string should be constructed from individual fields."
+        assert config.get_connection_string() == expected_connection_string, (
+            "PostgreSQL connection string should be constructed from individual fields."
+        )
 
     def test_missing_fields_validation(self):
         """Test that PostgreSQLConfig raises a ValueError when required fields are missing."""
@@ -57,7 +64,9 @@ class TestPostgreSQLConfig:
             port=5432,
             database="${DB_DATABASE}",
             user="${DB_USER}",
-            password="${DB_PASSWORD}"
+            password="${DB_PASSWORD}",
         )
         expected_connection_string = "postgresql://user:password@localhost:5432/testdb"
-        assert config.get_connection_string() == expected_connection_string, "PostgreSQL connection string should expand environment variables correctly."
+        assert config.get_connection_string() == expected_connection_string, (
+            "PostgreSQL connection string should expand environment variables correctly."
+        )

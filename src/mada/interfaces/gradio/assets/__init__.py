@@ -6,4 +6,3 @@ Static assets for the Gradio UI.
 
 This package exists so we can load bundled CSS/JS via importlib.resources.
 """
-

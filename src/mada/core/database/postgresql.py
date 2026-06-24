@@ -46,7 +46,9 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
         Returns:
             psycopg2.connection: Database connection object.
         """
-        return psycopg2.connect(self.db_config.get_connection_string(), sslmode="require")
+        return psycopg2.connect(
+            self.db_config.get_connection_string(), sslmode="require"
+        )
 
     def init_db(self):
         """
@@ -71,7 +73,9 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
                 """)
             conn.commit()
 
-    def add_message(self, session_id: str, role: str, content: str, timestamp: datetime = None):
+    def add_message(
+        self, session_id: str, role: str, content: str, timestamp: datetime = None
+    ):
         """
         Add a single message to the messages table in the database.
 
@@ -86,20 +90,29 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
         with self._connect() as conn:
             with conn.cursor() as cursor:
                 # Ensure the session exists
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO sessions (session_id, last_updated)
                     VALUES (%s, %s)
                     ON CONFLICT (session_id) DO NOTHING
-                """, (session_id, timestamp))
+                """,
+                    (session_id, timestamp),
+                )
                 # Insert the message
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO messages (session_id, role, content, timestamp)
                     VALUES (%s, %s, %s, %s)
-                """, (session_id, role, content, timestamp))
+                """,
+                    (session_id, role, content, timestamp),
+                )
                 # Update session's last_updated
-                cursor.execute("""
+                cursor.execute(
+                    """
                     UPDATE sessions SET last_updated = %s WHERE session_id = %s
-                """, (timestamp, session_id))
+                """,
+                    (timestamp, session_id),
+                )
             conn.commit()
 
     def create_session(self, session_id: str):
@@ -111,11 +124,14 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
         """
         with self._connect() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO sessions (session_id, last_updated)
                     VALUES (%s, %s)
                     ON CONFLICT (session_id) DO NOTHING
-                """, (session_id, datetime.now()))
+                """,
+                    (session_id, datetime.now()),
+                )
 
     def load_session(self, session_id: str) -> List[dict]:
         """
@@ -129,11 +145,14 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
         """
         with self._connect() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT role, content, timestamp FROM messages
                     WHERE session_id = %s
                     ORDER BY message_id ASC
-                """, (session_id,))
+                """,
+                    (session_id,),
+                )
                 return [
                     {"role": row[0], "content": row[1], "timestamp": row[2]}
                     for row in cursor.fetchall()
@@ -148,7 +167,9 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
         """
         with self._connect() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT session_id, last_updated FROM sessions ORDER BY last_updated DESC")
+                cursor.execute(
+                    "SELECT session_id, last_updated FROM sessions ORDER BY last_updated DESC"
+                )
                 return [
                     (session_id, last_updated)
                     for session_id, last_updated in cursor.fetchall()
@@ -163,8 +184,12 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
         """
         with self._connect() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM messages WHERE session_id = %s", (session_id,))
-                cursor.execute("DELETE FROM sessions WHERE session_id = %s", (session_id,))
+                cursor.execute(
+                    "DELETE FROM messages WHERE session_id = %s", (session_id,)
+                )
+                cursor.execute(
+                    "DELETE FROM sessions WHERE session_id = %s", (session_id,)
+                )
             conn.commit()
 
     def flush_database(self, confirm: bool = True):

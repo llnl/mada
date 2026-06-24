@@ -23,7 +23,7 @@ IGNORE_PATTERNS = []
 def should_ignore(path: Path) -> bool:
     """
     Check if the given path matches any ignore patterns.
-    
+
     Args:
         path (Path): The path to check.
 

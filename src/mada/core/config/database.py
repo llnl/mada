@@ -25,17 +25,18 @@ LOG = logging.getLogger("mada-interface")
 class SQLiteConfig:
     """
     Configuration for SQLite database.
-    
+
     Attributes:
         type (str): The type of database that this config is used for.
         path (str | Path): The path for SQLite to use as the store.
         session_id (str): An optional session ID to connect to. If no
             session ID is provided, a new session (chat) will be created.
     """
+
     type: str = "sqlite"
     path: str | Path = Path.home() / ".mada" / "chat_history.db"
     session_id: str = None
-    
+
     def __post_init__(self):
         """
         After initialization, expand variables in the path and
@@ -53,7 +54,7 @@ class SQLiteConfig:
 class PostgreSQLConfig:
     """
     Configuration for PostgreSQL database.
-    
+
     When connecting to PostgreSQL, we use a connection string.
     This class allows you to provide the connection string yourself
     or individual settings that will eventually be converted to a
@@ -85,19 +86,20 @@ class PostgreSQLConfig:
     Methods:
         get_connection_string: Get the connection string for the database.
     """
+
     type: str = "postgresql"
     session_id: str = None
 
     # Option 1: Connection string (takes precedence)
     connection_string: str | None = None
-    
+
     # Option 2: Individual fields
     host: str | None = None
     port: int = 5432
     database: str | None = None
     user: str | None = None
     password: str | None = None
-    
+
     def __post_init__(self):
         """
         After initialization, expand variables and ensure required
@@ -118,7 +120,7 @@ class PostgreSQLConfig:
                     f"PostgreSQL requires either 'connection_string' or "
                     f"all of: {', '.join(required)}. Missing: {', '.join(missing)}"
                 )
-            
+
             # Expand env vars in individual fields
             if self.host:
                 self.host = os.path.expandvars(self.host)
@@ -132,7 +134,7 @@ class PostgreSQLConfig:
     def get_connection_string(self) -> str:
         """
         Build the connection string (if necessary) and return it.
-        
+
         Returns:
             The connection string for the database.
         """
@@ -143,7 +145,7 @@ class PostgreSQLConfig:
             f"postgresql://{self.user}:{self.password}"
             f"@{self.host}:{self.port}/{self.database}"
         )
-    
+
 
 DatabaseConfig = Union[SQLiteConfig | PostgreSQLConfig]
 
@@ -151,7 +153,7 @@ DatabaseConfig = Union[SQLiteConfig | PostgreSQLConfig]
 def load_database_config(config_dict: dict) -> DatabaseConfig:
     """
     Factory function to create the appropriate config from a dict.
-    
+
     Args:
         config_dict: The configuration for the database provided by
             the user.

@@ -36,7 +36,12 @@ class MADAMultiAgentGradioInterface:
         client: Client object for handling server connections and message processing
     """
 
-    def __init__(self, interface_config: InterfaceConfig, agents: List[AgentConfig], client: MCPGradioClientSession):
+    def __init__(
+        self,
+        interface_config: InterfaceConfig,
+        agents: List[AgentConfig],
+        client: MCPGradioClientSession,
+    ):
         """
         Initialize the multi-agent Gradio interface.
 
@@ -66,7 +71,9 @@ class MADAMultiAgentGradioInterface:
         """
         pass
 
-    def get_additional_chat_inputs(self, agent_table: gr.Dataframe) -> List[gr.Component]:
+    def get_additional_chat_inputs(
+        self, agent_table: gr.Dataframe
+    ) -> List[gr.Component]:
         """
         Provide additional input components for the chat interface.
 
@@ -77,7 +84,7 @@ class MADAMultiAgentGradioInterface:
             List of Gradio components to include as additional inputs
         """
         return [agent_table]
-    
+
     def create_accordion(self) -> gr.Accordion:
         """
         Create a collapsible accordion component for MCP server connection settings.
@@ -85,11 +92,8 @@ class MADAMultiAgentGradioInterface:
         Returns:
             The configured Gradio Accordion component
         """
-        return gr.Accordion(
-            "MCP Server Connection",
-            open=True
-        )
-    
+        return gr.Accordion("MCP Server Connection", open=True)
+
     def create_chat_interface(self, agent_table: gr.Dataframe) -> gr.ChatInterface:
         """
         Create the chat interface component.
@@ -101,7 +105,7 @@ class MADAMultiAgentGradioInterface:
             The configured Gradio chat interface component
         """
         placeholder = "Describe your workflow or ask for help..."
-        if self.interface_config and hasattr(self.interface_config, 'chat_placeholder'):
+        if self.interface_config and hasattr(self.interface_config, "chat_placeholder"):
             placeholder = self.interface_config.chat_placeholder
 
         chatbot = gr.Chatbot(
@@ -113,14 +117,11 @@ class MADAMultiAgentGradioInterface:
         return gr.ChatInterface(
             fn=self.client.process_message,
             chatbot=chatbot,
-            textbox=gr.Textbox(
-                label="Your Message",
-                placeholder=placeholder
-            ),
+            textbox=gr.Textbox(label="Your Message", placeholder=placeholder),
             additional_inputs=self.get_additional_chat_inputs(agent_table),
             fill_height=True,
         )
-    
+
     def create_interface(self) -> gr.Blocks:
         """
         Construct and return the complete Gradio interface for the multi-agent system.
@@ -130,10 +131,10 @@ class MADAMultiAgentGradioInterface:
         """
         title = "MADA Multi-Agent Orchestrator"
         description = "Coordinate multiple agents for complex engineering workflows"
-        
+
         if self.interface_config:
-            title = getattr(self.interface_config, 'title', title)
-            description = getattr(self.interface_config, 'description', description)
+            title = getattr(self.interface_config, "title", title)
+            description = getattr(self.interface_config, "description", description)
 
         with gr.Blocks(fill_height=True) as demo:
             # Title and description
@@ -149,39 +150,53 @@ class MADAMultiAgentGradioInterface:
                     session_list = gr.Radio(
                         choices=self.client.get_session_choices(),
                         label="Sessions",
-                        interactive=True
+                        interactive=True,
                     )
-                    delete_chat_btn = gr.Button("🗑️ Delete selected chat", variant="stop")
+                    delete_chat_btn = gr.Button(
+                        "🗑️ Delete selected chat", variant="stop"
+                    )
                     delete_all_btn = gr.Button("🗑️ Delete ALL chats", variant="stop")
 
                     # Confirmation panel for delete all (initially hidden)
                     with gr.Group(visible=False) as delete_all_confirm:
                         gr.Markdown("⚠️ **WARNING**")
-                        gr.Markdown("This will permanently delete ALL chat sessions and cannot be undone!")
+                        gr.Markdown(
+                            "This will permanently delete ALL chat sessions and cannot be undone!"
+                        )
                         with gr.Row():
-                            confirm_delete_all_btn = gr.Button("Yes, delete all", variant="stop", size="sm")
-                            cancel_delete_all_btn = gr.Button("Cancel", variant="secondary", size="sm")
+                            confirm_delete_all_btn = gr.Button(
+                                "Yes, delete all", variant="stop", size="sm"
+                            )
+                            cancel_delete_all_btn = gr.Button(
+                                "Cancel", variant="secondary", size="sm"
+                            )
 
                 # Right main column for tools + chat
                 with gr.Column(scale=4):
                     # MCP Server connection section
                     with self.create_accordion():
                         agent_table = create_agent_table(self.agents)
-                        
-                        connect_button = gr.Button("Connect to MCP Servers", variant="primary")
+
+                        connect_button = gr.Button(
+                            "Connect to MCP Servers", variant="primary"
+                        )
 
                         connect_button.click(
                             fn=self.client.connect_servers,
                             inputs=[agent_table],
                             outputs=[connect_button, agent_table],
-                            show_progress="full"
+                            show_progress="full",
                         )
-                    
+
                     if self.in_situ_viz_config is not None:
                         sim_server = self.in_situ_viz_config["sim_server"]
-                        update_time = self.in_situ_viz_config["update_time"]  # in seconds
+                        update_time = self.in_situ_viz_config[
+                            "update_time"
+                        ]  # in seconds
 
-                        gr.Markdown(f"### Simulation Visualization: Updates every {update_time} seconds.")
+                        gr.Markdown(
+                            f"### Simulation Visualization: Updates every {update_time} seconds."
+                        )
 
                         self.sim_status = gr.Markdown(
                             value=f"Using {sim_server} for in-situ visualization..."
@@ -196,12 +211,12 @@ class MADAMultiAgentGradioInterface:
                             inputs=[],
                             outputs=[self.sim_image, self.sim_status],
                             show_progress="hidden",
-                            concurrency_limit=1
+                            concurrency_limit=1,
                         )
 
                     # Custom components (subclasses can add their own)
                     self.create_custom_components(demo)
-                    
+
                     # Chat interface
                     chat_interface = self.create_chat_interface(agent_table)
 
@@ -218,47 +233,45 @@ class MADAMultiAgentGradioInterface:
             new_chat_btn.click(
                 fn=self.client.create_new_session,
                 inputs=None,
-                outputs=[session_list, chatbot]  # set choices, value, history
+                outputs=[session_list, chatbot],  # set choices, value, history
             )
 
             # Selecting a session -> load history into chatbot
             session_list.change(
-                fn=self.client.select_session,
-                inputs=session_list,
-                outputs=chatbot
+                fn=self.client.select_session, inputs=session_list, outputs=chatbot
             )
 
             # Deleting a session
             delete_chat_btn.click(
                 fn=self.client.delete_session,
                 inputs=session_list,
-                outputs=[session_list, chatbot]
+                outputs=[session_list, chatbot],
             )
 
             # Show confirmation panel when "Delete ALL chats" is clicked
             delete_all_btn.click(
                 fn=lambda: gr.update(visible=True),
                 inputs=None,
-                outputs=delete_all_confirm
+                outputs=delete_all_confirm,
             )
 
             # Actually delete all sessions when confirmed
             confirm_delete_all_btn.click(
                 fn=self.client.delete_all_sessions,
                 inputs=None,
-                outputs=[session_list, chatbot]
+                outputs=[session_list, chatbot],
             ).then(
                 # Hide confirmation panel after deletion
                 fn=lambda: gr.update(visible=False),
                 inputs=None,
-                outputs=delete_all_confirm
+                outputs=delete_all_confirm,
             )
 
             # Hide confirmation panel when cancelled
             cancel_delete_all_btn.click(
                 fn=lambda: gr.update(visible=False),
                 inputs=None,
-                outputs=delete_all_confirm
+                outputs=delete_all_confirm,
             )
 
         return demo
@@ -302,13 +315,19 @@ class MADAMultiAgentGradioInterface:
         sim_server = self.in_situ_viz_config["sim_server"]
 
         try:
-
             # Check if the mcp server has in_situ_viz tool
             if self.in_situ_viz_tool is None:
-                self.in_situ_viz_tool = cycle_through_tools(self.client.orchestrator.specialist_agents, sim_server, return_tool=True)
+                self.in_situ_viz_tool = cycle_through_tools(
+                    self.client.orchestrator.specialist_agents,
+                    sim_server,
+                    return_tool=True,
+                )
 
                 if self.in_situ_viz_tool is None:
-                    return gr.skip(), f"Could not find tool 'in_situ_viz' for server '{sim_server}'."
+                    return (
+                        gr.skip(),
+                        f"Could not find tool 'in_situ_viz' for server '{sim_server}'.",
+                    )
 
             # Call the in_situ_viz tool from the mcp server
             result = await self.in_situ_viz_tool.invoke()
@@ -329,11 +348,11 @@ class MADAMultiAgentGradioInterface:
             with open(gif_path, "rb") as f:
                 gif_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-            html = f'''
+            html = f"""
                 <div style="display:flex; justify-content:center;">
                     <img src="data:image/gif;base64,{gif_b64}" style="max-height:300px; max-width:100%;" />
                 </div>
-                '''
+                """
 
             return html, status_text
 

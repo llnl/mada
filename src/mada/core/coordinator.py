@@ -41,7 +41,9 @@ class MCPAgentManager:
         create_chat_agent: Given an agent configuration, create an Agent.
     """
 
-    def __init__(self, model_config: Optional[ModelConfig] = None, timeout: int = 86400):
+    def __init__(
+        self, model_config: Optional[ModelConfig] = None, timeout: int = 86400
+    ):
         """
         Initialize the MCP agent manager.
 
@@ -66,7 +68,7 @@ class MCPAgentManager:
         self,
         agent_config: AgentConfig,
         tools: List[Any] = None,
-        **kwargs: Dict[str, Any]
+        **kwargs: Dict[str, Any],
     ) -> Agent:
         """
         Create an Agent from configuration.
@@ -83,5 +85,5 @@ class MCPAgentManager:
             name=agent_config.agent_name,
             instructions=agent_config.instructions,
             tools=tools or [],
-            **kwargs
+            **kwargs,
         )

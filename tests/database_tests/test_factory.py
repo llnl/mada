@@ -43,11 +43,11 @@ class DummyValidDB(BaseChatDatabase):
 
 class DummyInvalidDB:
     """Does not inherit from BaseChatDatabase, should fail validation."""
+
     pass
 
 
 class TestInitialization:
-
     @pytest.mark.unit
     def test_factory_registers_builtins_on_init(self):
         """
@@ -64,8 +64,8 @@ class TestInitialization:
         assert "postgres" in factory._aliases
         assert "psql" in factory._aliases
 
-class TestCreate:
 
+class TestCreate:
     @pytest.mark.unit
     def test_basic_creation(self):
         """
@@ -111,7 +111,9 @@ class TestCreate:
         """
         """Check that sqlite creation works"""
         factory = ChatDatabaseFactory()
-        sqlite_instance = factory.create("sqlite", SQLiteConfig(path=tmp_path / "test_basic_creation.db"))
+        sqlite_instance = factory.create(
+            "sqlite", SQLiteConfig(path=tmp_path / "test_basic_creation.db")
+        )
         assert isinstance(sqlite_instance, SQLiteChatDatabase)
 
     @pytest.mark.allocation_required
@@ -138,7 +140,6 @@ class TestCreate:
 
 
 class TestRegister:
-
     @pytest.mark.unit
     def test_register_valid_subclass(self):
         """
@@ -176,7 +177,6 @@ class TestRegister:
 
 
 class TestListAvailable:
-
     @pytest.mark.unit
     def test_list_available_returns_only_canonical_names(self):
         """

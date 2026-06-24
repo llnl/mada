@@ -23,6 +23,7 @@ from mada.core.config import PostgreSQLConfig
 # Custom Pytest Configurations #
 ################################
 
+
 def pytest_addoption(parser):
     """
     Add custom command-line options to pytest.
@@ -34,7 +35,7 @@ def pytest_addoption(parser):
         "--include-allocation-required",
         action="store_true",
         default=False,
-        help="Run tests marked with 'allocation_required'."
+        help="Run tests marked with 'allocation_required'.",
     )
 
 
@@ -66,6 +67,7 @@ def pytest_runtest_setup(item):
 ###################
 # Global Fixtures #
 ###################
+
 
 @pytest.fixture(scope="session")
 def session_tmp_path(tmp_path_factory: pytest.TempdirFactory) -> Path:
@@ -104,9 +106,13 @@ def postgres_connection(session_tmp_path: Path, request: pytest.FixtureRequest):
         request: A fixture providing information about the requesting test function.
     """
     # Ensure allocation-required tests are included if this fixture is used
-    include_alloc_reqd_tests = request.config.getoption("--include-allocation-required", False)
+    include_alloc_reqd_tests = request.config.getoption(
+        "--include-allocation-required", False
+    )
     if not include_alloc_reqd_tests:
-        pytest.skip("Test requires allocation; use --include-allocation-required when running tests to enable this test.")
+        pytest.skip(
+            "Test requires allocation; use --include-allocation-required when running tests to enable this test."
+        )
 
     # Spin up container using JEDS
     postgres_client = PostgreSQL()

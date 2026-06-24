@@ -22,6 +22,7 @@ def _run_gradio_from_args(args: list[str]):
     Args:
         args: command line arguments.
     """
+
     @click.command(
         context_settings={
             "help_option_names": ["-h", "--help"],
@@ -62,6 +63,7 @@ def _run_cli_from_args(args: list[str]):
     Args:
         args: command line arguments.
     """
+
     @click.command(
         context_settings={
             "help_option_names": ["-h", "--help"],
@@ -147,7 +149,9 @@ def _run_openai_api_from_args(args: list[str]):
 
         CONFIG_FILE is the path to the MADA configuration file.
         """
-        openai_api_entrypoint(host, port, model_name, api_key, bearer_token, config_file)
+        openai_api_entrypoint(
+            host, port, model_name, api_key, bearer_token, config_file
+        )
 
     openai_api_cmd.main(args=args, standalone_mode=False)
 
@@ -192,6 +196,7 @@ def main(ctx: click.Context, mode: str) -> None:
     else:
         # Protected by click.Choice, here just in case
         raise click.ClickException(f"Unsupported mode: {mode}")
+
 
 if __name__ == "__main__":
     main()

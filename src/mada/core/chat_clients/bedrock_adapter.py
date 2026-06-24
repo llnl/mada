@@ -66,7 +66,9 @@ class BedrockAdapter(ProviderAdapter):
                 f"got {type(model_config).__name__}"
             )
 
-    def _set_env_if_allowed(self, name: str, value: str, override: bool = False) -> None:
+    def _set_env_if_allowed(
+        self, name: str, value: str, override: bool = False
+    ) -> None:
         """
         Set an environment variable if a value is provided and overwriting is
         allowed.
@@ -113,8 +115,16 @@ class BedrockAdapter(ProviderAdapter):
         """
         override = getattr(model_config, "override_env_credentials", False)
 
-        self._set_env_if_allowed("AWS_BEARER_TOKEN_BEDROCK", model_config.bearer_token, override)
+        self._set_env_if_allowed(
+            "AWS_BEARER_TOKEN_BEDROCK", model_config.bearer_token, override
+        )
         self._set_env_if_allowed("AWS_PROFILE", model_config.aws_profile, override)
-        self._set_env_if_allowed("AWS_ACCESS_KEY_ID", model_config.aws_access_key_id, override)
-        self._set_env_if_allowed("AWS_SECRET_ACCESS_KEY", model_config.aws_secret_access_key, override)
-        self._set_env_if_allowed("AWS_SESSION_TOKEN", model_config.aws_session_token, override)
+        self._set_env_if_allowed(
+            "AWS_ACCESS_KEY_ID", model_config.aws_access_key_id, override
+        )
+        self._set_env_if_allowed(
+            "AWS_SECRET_ACCESS_KEY", model_config.aws_secret_access_key, override
+        )
+        self._set_env_if_allowed(
+            "AWS_SESSION_TOKEN", model_config.aws_session_token, override
+        )

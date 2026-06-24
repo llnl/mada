@@ -18,26 +18,31 @@ from mada.core.config import AppConfig, load_config_from_json
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
 
+try:
+    BaseExceptionGroup
+except NameError:
+    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
+
 
 class MADACLIInterface:
     """
     Simple command-line interface for MADA.
-    
+
     Uses the core MADAOrchestrator for all orchestration logic,
     providing a clean separation between UI and core functionality.
     """
-    
+
     def __init__(self, config: AppConfig):
         """
         Initialize the CLI with configuration.
-        
+
         Args:
             config: Application configuration
         """
         self.config = config
         self.orchestrator = None
         self.session_manager = ChatSessionManager(config.database)
-    
+
     def _print_history_summary(self, history: List[Dict[str, str]]):
         """
         Print a brief summary of session history for context.
@@ -103,7 +108,9 @@ class MADACLIInterface:
 
             if choice == "s" and sessions:
                 try:
-                    selection = input("Enter the number of the session to select: ").strip()
+                    selection = input(
+                        "Enter the number of the session to select: "
+                    ).strip()
                     idx = int(selection)
                     if 1 <= idx <= len(sessions):
                         label = sessions[idx - 1]
@@ -119,11 +126,17 @@ class MADACLIInterface:
 
             if choice == "d" and sessions:
                 try:
-                    selection = input("Enter the number of the session to delete: ").strip()
+                    selection = input(
+                        "Enter the number of the session to delete: "
+                    ).strip()
                     idx = int(selection)
                     if 1 <= idx <= len(sessions):
                         label = sessions[idx - 1]
-                        confirm = input(f"Are you sure you want to delete '{label}'? [y/N]: ").strip().lower()
+                        confirm = (
+                            input(f"Are you sure you want to delete '{label}'? [y/N]: ")
+                            .strip()
+                            .lower()
+                        )
                         if confirm == "y":
                             self.delete_session(label)
                             print("Session deleted.")
@@ -136,8 +149,16 @@ class MADACLIInterface:
                 continue
 
             if choice == "a" and sessions:
-                print(f"\nWARNING: This will delete ALL {len(sessions)} session(s) and cannot be undone!")
-                confirm = input("Are you absolutely sure you want to delete ALL sessions? [y/N]: ").strip().lower()
+                print(
+                    f"\nWARNING: This will delete ALL {len(sessions)} session(s) and cannot be undone!"
+                )
+                confirm = (
+                    input(
+                        "Are you absolutely sure you want to delete ALL sessions? [y/N]: "
+                    )
+                    .strip()
+                    .lower()
+                )
                 if confirm == "y":
                     # Use confirm=False since we already confirmed
                     self.session_manager.delete_all_sessions(confirm=False)
@@ -156,7 +177,10 @@ class MADACLIInterface:
             A list of labels of the form "timestamp | ID" for each session.
         """
         sessions = self.session_manager.list_sessions()
-        return [f"{ts.isoformat(sep=' ', timespec='seconds')} | {sid}" for sid, ts in sessions]
+        return [
+            f"{ts.isoformat(sep=' ', timespec='seconds')} | {sid}"
+            for sid, ts in sessions
+        ]
 
     def create_new_session(self):
         """
@@ -165,7 +189,7 @@ class MADACLIInterface:
         new_id = self.session_manager.create_session_id()
         self.session_manager.create_new_session(new_id)
         self.session_manager.select_session(new_id)
-    
+
     def _extract_id_from_label(self, session_label: str) -> str:
         """
         Extract session id from label.
@@ -202,7 +226,7 @@ class MADACLIInterface:
         history = self.session_manager.select_session(session_id)
 
         return history
-    
+
     def delete_session(self, session_label: str):
         """
         Delete a chat session.
@@ -212,7 +236,7 @@ class MADACLIInterface:
         """
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
-    
+
     async def run(self):
         """Run the interactive CLI session."""
         print("MADA Multi-Agent Orchestrator")
@@ -236,9 +260,13 @@ class MADACLIInterface:
                 # Setup agents - continue even if some MCP servers fail
                 print("\nInitializing agents and MCP servers...")
                 try:
-                    status, tools = await orchestrator.initialize_orchestrator(self.config.agents, self.config.mcp_servers)
+                    status, tools = await orchestrator.initialize_orchestrator(
+                        self.config.agents, self.config.mcp_servers
+                    )
                     print(f"Status: {status}")
-                    print(f"Model: {self.config.model.model} from {self.config.model.provider}")
+                    print(
+                        f"Model: {self.config.model.model} from {self.config.model.provider}"
+                    )
 
                     if tools:
                         print("\nAvailable tools:")
@@ -250,11 +278,14 @@ class MADACLIInterface:
                         print("\nNo MCP tools available (LLM-only agents)")
 
                 except BaseExceptionGroup as eg:
-                    print(f"\nWARNING: {len(eg.exceptions)} initialization error(s) occurred. Continuing with available agents...")
+                    print(
+                        f"\nWARNING: {len(eg.exceptions)} initialization error(s) occurred. Continuing with available agents..."
+                    )
                 except Exception as e:
                     print(f"\nWARNING: Initialization error: {e}")
                     print("Continuing with available agents...")
                     import traceback
+
                     traceback.print_exc()
 
                 print("\nChat with the agents (type 'quit' to exit)")
@@ -265,7 +296,7 @@ class MADACLIInterface:
                     try:
                         user_input = input("\nYou: ").strip()
 
-                        if user_input.lower() in ['quit', 'exit', 'q']:
+                        if user_input.lower() in ["quit", "exit", "q"]:
                             print("\nGoodbye!")
                             break
 
@@ -276,7 +307,9 @@ class MADACLIInterface:
                         print("-" * 20)
 
                         # Process message through orchestrator
-                        async for response_chunk in orchestrator.process_message(user_input):
+                        async for response_chunk in orchestrator.process_message(
+                            user_input
+                        ):
                             print(response_chunk, end="", flush=True)
 
                         print("\n")
@@ -287,16 +320,21 @@ class MADACLIInterface:
                     except Exception as e:
                         print(f"Error processing message: {e}")
                         import traceback
+
                         traceback.print_exc()
 
         except BaseExceptionGroup as eg:
-            print(f"\nFATAL ERROR: Multiple errors creating orchestrator ({len(eg.exceptions)} errors)")
+            print(
+                f"\nFATAL ERROR: Multiple errors creating orchestrator ({len(eg.exceptions)} errors)"
+            )
             import traceback
+
             traceback.print_exc()
             return
         except Exception as e:
             print(f"\nFATAL ERROR: Failed to create orchestrator: {e}")
             import traceback
+
             traceback.print_exc()
             return
 
@@ -306,18 +344,18 @@ class MADACLIInterface:
 async def async_main(config_file: str):
     """
     Async main entry point for CLI.
-    
+
     Args:
         config_file: The path to the MADA configuration file.
     """
     try:
         # Load configuration
         config = load_config_from_json(config_file)
-        
+
         # Run CLI
         cli = MADACLIInterface(config)
         await cli.run()
-        
+
     except FileNotFoundError:
         print(f"Configuration file not found: {config_file}")
         sys.exit(1)

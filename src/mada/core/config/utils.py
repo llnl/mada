@@ -12,16 +12,16 @@ import re
 def expand_env_vars(value: str | None) -> str | None:
     """
     Expand environment variable references in configuration values.
-    
+
     Supports formats:
     - ${VAR_NAME} - expands to os.getenv("VAR_NAME")
     - ${VAR_NAME:-default} - expands with default value if not set
-    
+
     Args:
         value:
             String that may contain environment variable references
             or None.
-        
+
     Returns:
         String with environment variables expanded or None.
     """
@@ -35,7 +35,7 @@ def expand_env_vars(value: str | None) -> str | None:
             return os.getenv(var_name, default_value)
         else:
             return os.getenv(var_expr, match.group(0))  # Return original if not found
-    
+
     # Pattern matches ${VAR_NAME} or ${VAR_NAME:-default}
-    pattern = r'\$\{([^}]+)\}'
+    pattern = r"\$\{([^}]+)\}"
     return re.sub(pattern, replace_env_var, value)

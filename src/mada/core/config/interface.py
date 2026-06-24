@@ -39,6 +39,7 @@ class InterfaceConfig:
         dataframe_kwargs (Dict[str, Any]): Additional keyword arguments for customizing the agents DataFrame.
         chat_interface_kwargs (Dict[str, Any]): Additional keyword arguments for customizing the chat interface.
     """
+
     title: str
     description: str
     chat_placeholder: str = "Type your message here"

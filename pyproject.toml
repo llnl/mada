@@ -39,6 +39,8 @@ tests = [
     "pytest",
     "pytest-asyncio",
     "jeds-cli",
+    "pre-commit",
+    "ruff",
 ]
 
 # Documentation requirements

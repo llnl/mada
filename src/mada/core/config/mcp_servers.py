@@ -23,7 +23,7 @@ LOG = logging.getLogger("mada-interface")
 class MCPServerConfig:
     """
     Configuration for an individual MCP server.
-    
+
     Attributes:
         transport (str): Transport method ('streamable-http' or 'stdio')
         url (Optional[str]): URL for streamable-http transport
@@ -31,6 +31,7 @@ class MCPServerConfig:
         description (Optional[str]): Human-readable description of the server
         python_executable (str): Path to Python executable (used for stdio transport).
     """
+
     transport: str
     url: Optional[str] = None
     command: Optional[str] = None
