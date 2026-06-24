@@ -4,7 +4,7 @@
 import pytest
 from mada.core.config import SQLiteConfig, PostgreSQLConfig
 
-@pytest.mark.unit
+
 class TestSQLiteConfig:
     def test_default_path(self):
         """Test that the default SQLite path exists and is expanded correctly."""
@@ -14,7 +14,6 @@ class TestSQLiteConfig:
         assert str(config.path) == str(config.path.expanduser()), "SQLite path should be expanded correctly."
 
 
-@pytest.mark.unit
 class TestPostgreSQLConfig:
     def test_connection_string_initialization(self):
         """Test that PostgreSQLConfig initializes correctly with a connection string."""
