@@ -11,7 +11,8 @@ from pathlib import Path
 from time import sleep
 
 import pytest
-from jeds.postgresql import PostgreSQL
+# from jeds.postgresql import PostgreSQL
+from testcontainers.postgres import PostgresContainer
 
 from mada.core.config import PostgreSQLConfig
 from mada.core.database import BaseChatDatabase
@@ -142,16 +143,17 @@ def postgres_connection(session_tmp_path: Path, request: pytest.FixtureRequest):
             "Test requires allocation; use --include-allocation-required when running tests to enable this test."
         )
 
-    # Spin up container using JEDS
-    postgres_client = PostgreSQL()
-    postgres_client.run()
+    # Spin up container using testcontainer library
+    postgres_client = PostgresContainer("postgres:16")
+    postgres_client.start()
 
     postgres_config = PostgreSQLConfig(
-        host=postgres_client.conf["service-host"],
-        port=postgres_client.conf["service-port"],
-        database=postgres_client.conf["database-name"],
-        user=postgres_client.conf["database-user"],
-        password=postgres_client.conf["database-password"],
+        host=postgres_client.get_container_host_ip(),
+        port=postgres_client.get_exposed_port(5432),
+        database=postgres_client.dbname,
+        user=postgres_client.username,
+        password=postgres_client.password,
+        sslmode="disable",
     )
 
     sleep(5)  # Give some time for the client to spin up
