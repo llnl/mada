@@ -44,7 +44,7 @@ else:
     UVICORN_IMPORT_ERROR = None
 
 from mada.core.config import AppConfig
-from mada.core.utils import load_config_from_json
+from mada.core import load_config_from_json
 
 if TYPE_CHECKING:
     from mada.core.orchestrator import MADAOrchestrator
