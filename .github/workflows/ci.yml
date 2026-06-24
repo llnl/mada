@@ -47,7 +47,7 @@ jobs:
     with:
       python-version: ${{ matrix.python-version }}
       test-name: "unit"
-      test-command: 'pytest -m "unit and not allocation_required" tests/'
+      test-command: 'pytest -m unit --include-allocation-required tests/'
 
   integration:
     strategy:
@@ -58,7 +58,7 @@ jobs:
     with:
       python-version: ${{ matrix.python-version }}
       test-name: "integration"
-      test-command: 'pytest -m "integration and not allocation_required" tests/'
+      test-command: 'pytest -m integration --include-allocation-required tests/'
 
   e2e:
     strategy:
@@ -69,4 +69,4 @@ jobs:
     with:
       python-version: ${{ matrix.python-version }}
       test-name: "e2e"
-      test-command: 'pytest -m "e2e and not allocation_required" tests/'
+      test-command: 'pytest -m e2e --include-allocation-required tests/'
