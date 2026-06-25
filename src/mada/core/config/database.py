@@ -82,6 +82,11 @@ class PostgreSQLConfig:
             is the 'database-password' setting. You will likely want to
             store this as an environment variable and then pass in a
             reference to that environment variable.
+        sslmode (str): Controls how the client uses SSL/TLS when connecting
+            to PostgreSQL. Common values include "require" for production or
+            HPC environments where encrypted connections are required, and
+            "disable" for local or containerized test databases that do not
+            have SSL configured.
 
     Methods:
         get_connection_string: Get the connection string for the database.
@@ -99,6 +104,7 @@ class PostgreSQLConfig:
     database: str | None = None
     user: str | None = None
     password: str | None = None
+    sslmode: str = "require"
 
     def __post_init__(self):
         """

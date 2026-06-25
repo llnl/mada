@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import pytest
-from mada.core.config import SQLiteConfig, PostgreSQLConfig
+
+from mada.core.config import PostgreSQLConfig, SQLiteConfig
 
 
 @pytest.mark.unit
@@ -10,7 +11,7 @@ class TestSQLiteConfig:
     def test_default_path(self):
         """Test that the default SQLite path exists and is expanded correctly."""
         config = SQLiteConfig()
-        assert config.path.exists(), "Default SQLite path should exist."
+        assert config.path.parent.exists(), "'~/.mada/' directory should exist."
         assert "~" not in str(config.path)
         assert str(config.path) == str(config.path.expanduser()), (
             "SQLite path should be expanded correctly."

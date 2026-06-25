@@ -4,3 +4,4 @@ Welcome to the Developer Guide for the MADA Orchestrator! This comprehensive gui
 
 - A guide to the [architecture of the codebase](./architecture.md)
 - A [Testing Guide](./testing.md)
+- The [Release Workflow](./releases.md)

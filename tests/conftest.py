@@ -10,18 +10,56 @@ checks, temporary directories, and PostgreSQL integration tests.
 """
 
 import os
-import pytest
 from pathlib import Path
 from time import sleep
 
-from jeds.postgresql import PostgreSQL
+import pytest
+
+# from jeds.postgresql import PostgreSQL
+from testcontainers.postgres import PostgresContainer
 
 from mada.core.config import PostgreSQLConfig
+from mada.core.database import BaseChatDatabase
+
+TESTS_DIR = Path(__file__).parent
+E2E_DIR = TESTS_DIR / "e2e"
+INTEGRATION_DIR = TESTS_DIR / "integration"
+UNIT_DIR = TESTS_DIR / "unit"
 
 
 ################################
 # Custom Pytest Configurations #
 ################################
+
+
+def pytest_collection_modifyitems(config, items):
+    """
+    Modifies pytest items prior to running the tests. In our case,
+    this is specifically marking tests appropriately.
+    """
+    # Resolve test directories
+    e2e_dir = E2E_DIR.resolve()
+    integration_dir = INTEGRATION_DIR.resolve()
+    unit_dir = UNIT_DIR.resolve()
+
+    # Loop through and mark tests appropriately
+    for item in items:
+        try:
+            path = item.path.resolve()
+        except Exception:
+            continue
+
+        # Mark end-to-end tests
+        if e2e_dir in path.parents or path == e2e_dir:
+            item.add_marker(pytest.mark.e2e)
+
+        # Mark integration tests
+        if integration_dir in path.parents or path == integration_dir:
+            item.add_marker(pytest.mark.integration)
+
+        # Mark unit tests
+        if unit_dir in path.parents or path == unit_dir:
+            item.add_marker(pytest.mark.unit)
 
 
 def pytest_addoption(parser):
@@ -59,8 +97,7 @@ def pytest_runtest_setup(item):
 
         if missing:
             pytest.skip(
-                f"Skipping {item.name} because required env var(s) not set: "
-                f"{', '.join(missing)}"
+                f"Skipping {item.name} because required env var(s) not set: {', '.join(missing)}"
             )
 
 
@@ -114,16 +151,17 @@ def postgres_connection(session_tmp_path: Path, request: pytest.FixtureRequest):
             "Test requires allocation; use --include-allocation-required when running tests to enable this test."
         )
 
-    # Spin up container using JEDS
-    postgres_client = PostgreSQL()
-    postgres_client.run()
+    # Spin up container using testcontainer library
+    postgres_client = PostgresContainer("postgres:16")
+    postgres_client.start()
 
     postgres_config = PostgreSQLConfig(
-        host=postgres_client.conf["service-host"],
-        port=postgres_client.conf["service-port"],
-        database=postgres_client.conf["database-name"],
-        user=postgres_client.conf["database-user"],
-        password=postgres_client.conf["database-password"],
+        host=postgres_client.get_container_host_ip(),
+        port=postgres_client.get_exposed_port(5432),
+        database=postgres_client.dbname,
+        user=postgres_client.username,
+        password=postgres_client.password,
+        sslmode="disable",
     )
 
     sleep(5)  # Give some time for the client to spin up
@@ -132,3 +170,50 @@ def postgres_connection(session_tmp_path: Path, request: pytest.FixtureRequest):
 
     # Stop container after tests have ran
     postgres_client.stop()
+
+
+@pytest.fixture
+def dummy_valid_db_class() -> "DummyValidDB":  # noqa: F821
+    """
+    A fixture that provides a valid database class that inherits from
+    `BaseChatDatabase`.
+
+    This fixture is used across unit, integration, and e2e tests which
+    is why it's located here.
+
+    Returns:
+        The class representation for `DummyValidDB` so mocking can take
+        place in tests.
+    """
+
+    class DummyValidDB(BaseChatDatabase):
+        """
+        Simple valid `BaseChatDatabase` subclass for testing registration and creation.
+        """
+
+        def __init__(self, db_config):
+            self.init_called = False
+            super().__init__(db_config)
+
+        def init_db(self):
+            self.init_called = True
+
+        def add_message(self, session_id, role, content, timestamp):
+            pass
+
+        def create_session(self, session_id):
+            pass
+
+        def load_session(self, session_id):
+            return []
+
+        def list_sessions(self):
+            return []
+
+        def delete_session(self, session_id):
+            pass
+
+        def flush_database(self, confirm: bool = True):
+            pass
+
+    return DummyValidDB

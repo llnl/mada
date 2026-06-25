@@ -47,7 +47,7 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
             psycopg2.connection: Database connection object.
         """
         return psycopg2.connect(
-            self.db_config.get_connection_string(), sslmode="require"
+            self.db_config.get_connection_string(), sslmode=self.db_config.sslmode
         )
 
     def init_db(self):
