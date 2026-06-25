@@ -3,10 +3,10 @@ name: Develop Docs
 on:
   push:
     branches:
-      - feature/setup-docs
+      - develop
 
 jobs:
-  api-docs:
+  upload:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
