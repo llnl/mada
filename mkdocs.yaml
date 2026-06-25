@@ -22,6 +22,7 @@ nav:
     - Codebase Architecture: "developer_guide/architecture.md"
     - Testing Guide: "developer_guide/testing.md"
     - Documentation Deployment: "developer_guide/docs_deployment.md"
+    - Release Workflow: "developer_guide/releases.md"
     - API Reference: "developer_guide/"
 
 exclude_docs: |
