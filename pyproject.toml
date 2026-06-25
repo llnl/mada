@@ -9,8 +9,16 @@ version = "0.1.0"
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
-    "agent-framework>=1.0.1",
-    "autogen-ext[mcp]>=0.7.4",
+    # Can't use basic `agent-framework` install since hyperlight breaks install on HPCs
+    "agent-framework-core>=1.0.1",
+    "agent-framework-a2a",
+    "agent-framework-ag-ui",
+    "agent-framework-anthropic",
+    "agent-framework-bedrock",
+    "agent-framework-claude",
+    "agent-framework-ollama",
+    "agent-framework-openai",
+    "agent-framework-orchestrations",
     "fastapi",
     "gradio>=6.2.0",
     "openai",
