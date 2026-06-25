@@ -21,6 +21,7 @@ nav:
     - Developer Guide Overview: "developer_guide/index.md"
     - Codebase Architecture: "developer_guide/architecture.md"
     - Testing Guide: "developer_guide/testing.md"
+    - Documentation Deployment: "developer_guide/docs_deployment.md"
     - API Reference: "developer_guide/"
 
 exclude_docs: |
@@ -79,6 +80,7 @@ markdown_extensions:
 plugins:
   - glightbox
   - search
+  - mike
   - codeinclude:
       title_mode: pymdownx.tabbed
   - gen-files:
@@ -94,6 +96,8 @@ plugins:
       nav_file: SUMMARY.md
 
 extra:
+  version:
+    provider: mike
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/llnl/mada
