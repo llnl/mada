@@ -35,12 +35,12 @@ jobs:
       test-name: "docs"
       test-command: "mkdocs build --strict"
 
-  # lint:
-  #   uses: ./.github/workflows/test-job.yml
-  #   with:
-  #     python-version: 3.x
-  #     test-name: "linter"
-  #     test-command: "pre-commit run --all-files"
+  lint:
+    uses: ./.github/workflows/test-job.yml
+    with:
+      python-version: 3.x
+      test-name: "linter"
+      test-command: "pre-commit run --all-files"
 
   unit:
     strategy:
