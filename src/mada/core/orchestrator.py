@@ -26,6 +26,11 @@ from mada.core.config import AgentConfig, DatabaseConfig, ModelConfig, MCPServer
 from mada.core.coordinator import MCPAgentManager
 from mada.core.database import ChatSessionManager
 
+try:
+    BaseExceptionGroup
+except NameError:
+    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
+
 
 LOG = logging.getLogger(__name__)
 

@@ -18,6 +18,11 @@ from mada.core.config import AppConfig, load_config_from_json
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
 
+try:
+    BaseExceptionGroup
+except NameError:
+    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
+
 
 class MADACLIInterface:
     """

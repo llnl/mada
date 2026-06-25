@@ -19,6 +19,11 @@ from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
 from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
 
+try:
+    BaseExceptionGroup
+except NameError:
+    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
+
 LOG = logging.getLogger("mada-gradio")
 
 
