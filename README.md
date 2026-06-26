@@ -41,7 +41,7 @@ mada/
 
 - **Orchestrator** (`src/mada/core/orchestrator.py`) - Main coordination engine
 - **Agents** - Specialized agents for different domains
-- **MCP Servers** - External tool providers 
+- **MCP Servers** - External tool providers
 - **Interfaces** - CLI, Gradio web, and OpenAI-compatible API interfaces
 
 
@@ -71,7 +71,7 @@ pip install --pre -e .
    ```bash
    # SSH access (preferred)
    git clone git@github.com:llnl/mada-tools.git
-   
+
    # HTTPS access (alternative)
    git clone https://github.com/llnl/mada-tools.git
    ```
@@ -85,7 +85,7 @@ pip install --pre -e .
 MADA uses a single JSON configuration file that defines all agents and their MCP server connections. The configuration file specifies:
 
 - **Model settings**: LLM model, API credentials, and connection details
-- **Agent definitions**: Specialized agents and their MCP server connections  
+- **Agent definitions**: Specialized agents and their MCP server connections
 - **MCP server endpoints**: Transport types, URLs, and descriptions
 - **Orchestration settings**: Timeouts, concurrency limits, coordination options
 - **Interface configuration**: UI titles, descriptions, and placeholders

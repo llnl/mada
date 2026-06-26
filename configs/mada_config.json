@@ -16,7 +16,7 @@
     {
       "agent_name": "InverseDesignAgent",
       "description": "Analyzes simulation results and calculates Quality of Interest (QoI)",
-      "domain": "inverse_design", 
+      "domain": "inverse_design",
       "mcp_servers": ["professor"],
       "system_message": "You are an Inverse Design Agent specialized in analyzing simulation results and calculating Quality of Interest (QoI). You have access to Professor for surrogate modeling. Your responsibilities include analyzing completed simulation results, calculating QoI metrics, identifying best designs, and building surrogate models for optimization. You do NOT generate parameters or execute jobs - that is handled by the JobManagementAgent."
     }

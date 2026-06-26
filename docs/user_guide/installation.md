@@ -24,7 +24,7 @@ Developers, see above and also [Installing Optional Dependencies](#installing-op
         ```bash
         source mada_venv/bin/activate
         ```
-    
+
     === "csh"
 
         ```csh
@@ -65,7 +65,7 @@ Developers, see above and also [Installing Optional Dependencies](#installing-op
         ```bash
         source mada_venv/bin/activate
         ```
-    
+
     === "csh"
 
         ```csh

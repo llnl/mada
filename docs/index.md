@@ -144,7 +144,7 @@ Now let's [point MADA to the agents](./user_guide/configuration.md#agent-configu
         {
             "agent_name": "InverseDesignAgent",
             "description": "Analyzes simulation results and calculates Quality of Interest (QoI)",
-            "domain": "inverse_design", 
+            "domain": "inverse_design",
             "mcp_servers": ["professor"],
             "incstructions": [
                 "You are an Inverse Design Agent specialized in analyzing simulation results and calculating Quality of Interest (QoI).",
@@ -216,7 +216,7 @@ Finally, we'll [tell MADA which model to use](./user_guide/configuration.md#mode
         {
             "agent_name": "InverseDesignAgent",
             "description": "Analyzes simulation results and calculates Quality of Interest (QoI)",
-            "domain": "inverse_design", 
+            "domain": "inverse_design",
             "mcp_servers": ["professor"],
             "incstructions": [
                 "You are an Inverse Design Agent specialized in analyzing simulation results and calculating Quality of Interest (QoI).",

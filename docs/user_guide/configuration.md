@@ -48,7 +48,7 @@ Agent configuration defines the autonomous agents that MADA will orchestrate in 
     {
         "agent_name": "InverseDesignAgent",
         "description": "Analyzes simulation results and calculates Quality of Interest (QoI)",
-        "domain": "inverse_design", 
+        "domain": "inverse_design",
         "mcp_servers": ["professor"],
         "incstructions": [
             "You are an Inverse Design Agent specialized in analyzing simulation results and calculating Quality of Interest (QoI).",
