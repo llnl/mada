@@ -6,10 +6,10 @@
       
       
       
-        <link rel="prev" href="../releases/">
+        <link rel="prev" href="../docs_deployment/">
       
       
-        <link rel="next" href="exceptions/">
+        <link rel="next" href="../common/">
       
       
         
@@ -20,7 +20,7 @@
     
     
       
-        <title>Index - MADA</title>
+        <title>Release Workflow - MADA</title>
       
     
     
@@ -83,7 +83,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#common" class="md-skip">
+        <a href="#release-workflow" class="md-skip">
           Skip to content
         </a>
       
@@ -123,7 +123,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Index
+              Release Workflow
             
           </span>
         </div>
@@ -973,10 +973,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../releases/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Workflow
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -992,6 +1019,92 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#branch-roles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Branch roles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bumping-the-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bumping the Version
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stable-releases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stable releases
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pre-releases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-releases
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#branch-synchronization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Branch synchronization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1001,10 +1114,8 @@
                 
   
   
-    
   
   
-  
     
     
       
@@ -1023,11 +1134,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6" checked="">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6">
         
           
           <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="0">
@@ -1048,7 +1159,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_6_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_6_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1063,8 +1174,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1083,15 +1192,15 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_1" checked="">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_1">
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="./" class="md-nav__link md-nav__link--active">
+            <a href="../common/" class="md-nav__link ">
               
   
   
@@ -1109,13 +1218,13 @@
             </a>
             
               
-              <label class="md-nav__link md-nav__link--active" for="__nav_3_6_1" id="__nav_3_6_1_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_6_1" id="__nav_3_6_1_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_6_1_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_6_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_6_1">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1135,7 +1244,7 @@
   
   
     <li class="md-nav__item">
-      <a href="exceptions/" class="md-nav__link">
+      <a href="../common/exceptions/" class="md-nav__link">
         
   
   
@@ -2600,6 +2709,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -2608,10 +2719,65 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
       
         <li class="md-nav__item">
-  <a href="#common" class="md-nav__link">
+  <a href="#branch-roles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        common
+        Branch roles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bumping-the-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bumping the Version
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stable-releases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stable releases
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pre-releases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-releases
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#branch-synchronization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Branch synchronization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
       
     </span>
   </a>
@@ -2635,66 +2801,82 @@
 
 
 
-  <h1>Index</h1>
-
-<div class="doc doc-object doc-module">
-
-
-
-<a id="common"></a>
-    <div class="doc doc-contents first">
-
-        <p>The common package includes code commonly used across the entire
-MADA project.</p>
-
-
-<p><span class="doc-section-title">Modules:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Description</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td><code><a class="autorefs autorefs-internal" title="common.exceptions" href="exceptions/#common.exceptions">exceptions</a></code></td>
-            <td>
-              <div class="doc-md-description">
-                <p>Custom exceptions for MADA.</p>
-              </div>
-            </td>
-          </tr>
-      </tbody>
-    </table>
-
-
-
-
-
-
-
-
-
-
-<div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-
-
-  </div>
-
-    </div>
-
-</div>
+<h1 id="release-workflow">Release Workflow</h1>
+<p>This project uses a branch-based release process designed to keep ongoing development separate from stable published releases.</p>
+<h2 id="branch-roles">Branch roles</h2>
+<table>
+<thead>
+<tr>
+<th>Branch</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>develop</code></td>
+<td>Active development branch for ongoing work, feature integration, and pre-release preparation</td>
+</tr>
+<tr>
+<td><code>release/&lt;version&gt;</code></td>
+<td>Temporary release branch used to finalize a stable release</td>
+</tr>
+<tr>
+<td><code>main</code></td>
+<td>Stable branch containing only released, production-ready code</td>
+</tr>
+</tbody>
+</table>
+<h2 id="bumping-the-version">Bumping the Version</h2>
+<p>Bumping the version number can be done from the top of the repository with:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>bump_version.py<span class="w"> </span>&lt;version<span class="w"> </span>number&gt;
+</span></code></pre></div>
+<p>This script will:</p>
+<ol>
+<li>Update the version in <code>src/mada/__init__.py</code></li>
+<li>Update the version in <code>pyproject.toml</code></li>
+<li>Tag the "Unreleased" section of the <code>CHANGELOG.md</code> file with a version number and date, trim empty sections, and create a new, blank "Unreleased" section at the top of the file</li>
+</ol>
+<h2 id="stable-releases">Stable releases</h2>
+<p>Stable releases are prepared from a dedicated release branch so that final release changes are isolated from ongoing development work.</p>
+<ol>
+<li>Create a <code>release/&lt;version&gt;</code> branch from <code>develop</code>.</li>
+<li>Use the release branch to <a href="#bumping-the-version">finalize the version number</a>, update the changelog, and apply any last release-specific fixes.</li>
+<li>Merge <code>release/&lt;version&gt;</code> into <code>main</code>.</li>
+<li>Create the stable GitHub release from <code>main</code>. During this process, you'll need to create a new tag (e.g., "v0.1.1") that's associated with this release.</li>
+</ol>
+<p>The <code>release/&lt;version&gt;</code> branch can be retained for reference.</p>
+<h2 id="pre-releases">Pre-releases</h2>
+<p>Pre-releases are created directly from <code>develop</code>.</p>
+<ol>
+<li><a href="#bumping-the-version">Update the version</a> in <code>develop</code> to the next development version or pre-release version.</li>
+<li>Create the GitHub pre-release from <code>develop</code>. During this process, you'll need to create a new tag (e.g., "v0.1.1b1") that's associated with this release.</li>
+</ol>
+<p>This keeps pre-release work aligned with active development while avoiding disruption to the stable release process.</p>
+<h2 id="branch-synchronization">Branch synchronization</h2>
+<p>In this workflow, <code>main</code> and <code>develop</code> are usually synchronized only at release boundaries. After a stable release, <code>main</code> contains the released version, while <code>develop</code> may continue forward with the next development or pre-release version.</p>
+<p>If the stable release includes changes that are not already present in <code>develop</code>, merge <code>main</code> back into <code>develop</code> so the two branches remain consistent.</p>
+<h2 id="summary">Summary</h2>
+<table>
+<thead>
+<tr>
+<th>Release type</th>
+<th>Branch path</th>
+<th>Release source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stable release</td>
+<td><code>develop</code> -&gt; <code>release/&lt;version&gt;</code> -&gt; <code>main</code></td>
+<td><code>main</code></td>
+</tr>
+<tr>
+<td>Pre-release</td>
+<td><code>develop</code></td>
+<td><code>develop</code></td>
+</tr>
+</tbody>
+</table>
 
 
 

@@ -83,7 +83,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#mada-testing-guide" class="md-skip">
+        <a href="#mada-tools-testing-guide" class="md-skip">
           Skip to content
         </a>
       
@@ -828,6 +828,8 @@
       
         
       
+        
+      
     
     
     
@@ -927,6 +929,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing Guide
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -943,6 +963,97 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#test-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#creating-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating Tests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Creating Tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#file-system-organization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File System Organization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#marking-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Marking Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixture-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixture Architecture
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -983,6 +1094,34 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../releases/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
     
     
       
@@ -1005,10 +1144,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6">
         
           
-          <label class="md-nav__link" for="__nav_3_5" id="__nav_3_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="0">
             
   
   
@@ -1026,8 +1165,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1063,7 +1202,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_1">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_1">
         
           
           <div class="md-nav__link md-nav__container">
@@ -1085,14 +1224,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_5_1" id="__nav_3_5_1_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_6_1" id="__nav_3_6_1_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_5_1_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5_1">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_6_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6_1">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1174,7 +1313,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_2">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_2">
         
           
           <div class="md-nav__link md-nav__container">
@@ -1196,14 +1335,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_5_2" id="__nav_3_5_2_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_6_2" id="__nav_3_6_2_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_5_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5_2">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_6_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6_2">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1249,7 +1388,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_2_2">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_2_2">
         
           
           <div class="md-nav__link md-nav__container">
@@ -1271,14 +1410,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_5_2_2" id="__nav_3_5_2_2_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_6_2_2" id="__nav_3_6_2_2_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_5_2_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5_2_2">
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_6_2_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6_2_2">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1476,7 +1615,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_2_3">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_2_3">
         
           
           <div class="md-nav__link md-nav__container">
@@ -1498,14 +1637,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_5_2_3" id="__nav_3_5_2_3_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_6_2_3" id="__nav_3_6_2_3_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_5_2_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5_2_3">
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_6_2_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6_2_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1783,7 +1922,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_2_5">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_2_5">
         
           
           <div class="md-nav__link md-nav__container">
@@ -1805,14 +1944,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_5_2_5" id="__nav_3_5_2_5_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_6_2_5" id="__nav_3_6_2_5_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_5_2_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5_2_5">
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_6_2_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6_2_5">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2038,7 +2177,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_3">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_3">
         
           
           <div class="md-nav__link md-nav__container">
@@ -2060,14 +2199,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_5_3" id="__nav_3_5_3_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_6_3" id="__nav_3_6_3_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_5_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5_3">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_6_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2105,7 +2244,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_3_2">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_3_2">
         
           
           <div class="md-nav__link md-nav__container">
@@ -2127,14 +2266,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_5_3_2" id="__nav_3_5_3_2_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_6_3_2" id="__nav_3_6_3_2_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_5_3_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5_3_2">
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_6_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6_3_2">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2216,7 +2355,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_3_3">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_3_3">
         
           
           <div class="md-nav__link md-nav__container">
@@ -2238,14 +2377,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_5_3_3" id="__nav_3_5_3_3_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_6_3_3" id="__nav_3_6_3_3_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_5_3_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5_3_3">
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_6_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6_3_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2431,7 +2570,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_3_4">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_3_4">
         
           
           <div class="md-nav__link md-nav__container">
@@ -2453,14 +2592,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_5_3_4" id="__nav_3_5_3_4_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_6_3_4" id="__nav_3_6_3_4_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_5_3_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5_3_4">
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_6_3_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6_3_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2579,6 +2718,86 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#test-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#creating-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating Tests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Creating Tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#file-system-organization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File System Organization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#marking-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Marking Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixture-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixture Architecture
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -2594,8 +2813,77 @@
 
 
 
-<h1 id="mada-testing-guide">MADA Testing Guide</h1>
-<p>Coming soon!</p>
+<h1 id="mada-tools-testing-guide">MADA Tools Testing Guide</h1>
+<p>This page is intended to help devs understand the test suite for the MADA Tools repository. It walks through:</p>
+<ul>
+<li><a href="#test-requirements">Test Requirements</a></li>
+<li><a href="#creating-tests">Creating Tests</a></li>
+<li><a href="#running-tests">Running Tests</a></li>
+</ul>
+<h2 id="test-requirements">Test Requirements</h2>
+<p>This test suite uses the <a href="https://docs.pytest.org/en/stable/">Pytest library</a>.</p>
+<p>In order to install the test requirements:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="o">[</span>tests<span class="o">]</span>
+</span></code></pre></div>
+<p>To add new test requirements, go to the <code>pyproject.toml</code> file at the top of the repo, find the <code>[project.optional-dependencies]</code> section, and add your dependencies to the <code>tests</code> list.</p>
+<h2 id="creating-tests">Creating Tests</h2>
+<p>It's recommended that you reference <a href="https://docs.pytest.org/en/stable/">Pytest's Documentation</a> for understanding what all this library can do. This section will walk through:</p>
+<ul>
+<li><a href="#file-system-organization">File System Organization</a></li>
+<li><a href="#marking-tests">Marking Tests</a></li>
+<li><a href="#fixture-architecture">Fixture Architecture</a></li>
+</ul>
+<h3 id="file-system-organization">File System Organization</h3>
+<p>The test suite is organized by test type:</p>
+<ul>
+<li>end-to-end (e2e) tests</li>
+<li>integration tests</li>
+<li>unit tests</li>
+</ul>
+<p>Each test type has their own directory in the test suite.</p>
+<p>When creating unit tests, please follow the same directory structure as the <code>src/</code> directory. In other words, create a new folder in the appropriate location for each server that unit tests are being written for. For example, the code for the <code>ChatDatabaseFactory</code> class has its source files at <code>mada/core/database/db_factory.py</code> and therefore its test files live at <code>unit/core/database/test_db_factory.py</code>.</p>
+<h3 id="marking-tests">Marking Tests</h3>
+<p>Depending on which test type (e2e, integration, etc.) you put a test file under, the test will be automatically marked with one of the following marks:</p>
+<ul>
+<li><code>unit</code>: Marks tests as unit tests</li>
+<li><code>integration</code>: Marks tests as integration tests</li>
+<li><code>e2e</code>: Marks tests as end-to-end tests</li>
+</ul>
+<p>If you create a test that requires an allocation, mark the test with <code>@pytest.mark.allocation_required</code>.</p>
+<p>If you create a test that requires a specific environment variable, mark the test with <code>@pytest.mark.requires_env("MY_VAR")</code>.</p>
+<p>You'll see how these marks are utilized in the <a href="#running-tests">Running Tests</a> section.</p>
+<h3 id="fixture-architecture">Fixture Architecture</h3>
+<p>Fixtures can be defined at different levels of a test suite by using <code>conftest.py</code> files, and they can also be defined directly inside individual test modules. Where you define a fixture determines how broadly it is available. In general, fixtures defined in a test module are only available in that module, while fixtures defined in a <code>conftest.py</code> file are available to tests in that directory and its subdirectories. Because fixture discovery is scoped this way, fixture names should still be chosen carefully to avoid confusion or unintended overriding.</p>
+<h2 id="running-tests">Running Tests</h2>
+<p>There are multiple ways to run the test suite, due to the <a href="#marking-tests">marks mentioned earlier</a>. Here is how the test suite can be ran:</p>
+<ul>
+<li>
+<p>Run all tests not requiring an allocation:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pytest<span class="w"> </span>tests/
+</span></code></pre></div>
+</li>
+<li>
+<p>Run all unit tests not requiring an allocation:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>pytest<span class="w"> </span>-m<span class="w"> </span>unit<span class="w"> </span>tests/
+</span></code></pre></div>
+</li>
+<li>
+<p>Run all integration tests not requiring an allocation:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pytest<span class="w"> </span>-m<span class="w"> </span>integration<span class="w"> </span>tests/
+</span></code></pre></div>
+</li>
+<li>
+<p>Run all end-to-end tests not requiring an allocation:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pytest<span class="w"> </span>-m<span class="w"> </span>e2e<span class="w"> </span>tests/
+</span></code></pre></div>
+</li>
+</ul>
+<p>For all of the commands given above, this will <em>not</em> automatically run tests that require an allocation. To include these tests, first get an allocation and then add <code>--include-allocation-required</code> as an argument to pytest. For example, to run all integration tests, including tests requiring an allocation, execute:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>flux<span class="w"> </span>alloc<span class="w"> </span>-N<span class="w"> </span><span class="m">1</span><span class="w"> </span>-q<span class="w"> </span>pdebug<span class="w"> </span>-t<span class="w"> </span><span class="m">60</span><span class="w"> </span>pytest<span class="w"> </span>-m<span class="w"> </span>integration<span class="w"> </span>--include-allocation-required<span class="w"> </span>tests/
+</span></code></pre></div>
+<p>You can also choose to run <em>only</em> the tests that require an allocation using:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>flux<span class="w"> </span>alloc<span class="w"> </span>-N<span class="w"> </span><span class="m">1</span><span class="w"> </span>-q<span class="w"> </span>pdebug<span class="w"> </span>-t<span class="w"> </span><span class="m">60</span><span class="w">  </span>pytest<span class="w"> </span>-m<span class="w"> </span>allocation_required<span class="w"> </span>--include-allocation-required<span class="w"> </span>tests/
+</span></code></pre></div>
 
 
 
