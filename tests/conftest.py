@@ -10,12 +10,11 @@ checks, temporary directories, and PostgreSQL integration tests.
 """
 
 import os
+import sys
 from pathlib import Path
 from time import sleep
 
 import pytest
-
-# from jeds.postgresql import PostgreSQL
 from testcontainers.postgres import PostgresContainer
 
 from mada.core.config import PostgreSQLConfig
@@ -142,6 +141,13 @@ def postgres_connection(session_tmp_path: Path, request: pytest.FixtureRequest):
         session_tmp_path: A fixture for the temporary directory for the entire test session.
         request: A fixture providing information about the requesting test function.
     """
+    # Early exit if running on Windows CI / host ; Docker images are Linux-based and
+    # cannot be run on Windows hosts in GitHub CI. This is a known limitation of Docker on Windows.
+    if sys.platform == "win32":
+        pytest.skip(
+            "Skipping PostgreSQL container tests: Linux containers are not supported on Windows CI hosts."
+        )
+
     # Ensure allocation-required tests are included if this fixture is used
     include_alloc_reqd_tests = request.config.getoption(
         "--include-allocation-required", False
