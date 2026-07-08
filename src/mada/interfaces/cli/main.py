@@ -27,16 +27,22 @@ class MADACLIInterface:
     providing a clean separation between UI and core functionality.
     """
     
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, blocking: bool = False):
         """
         Initialize the CLI with configuration.
         
         Args:
             config: Application configuration
+            blocking: If True, process one query at a time. If False, run
+                queries in the background and immediately return to the prompt.
         """
         self.config = config
+        self.blocking = blocking
         self.orchestrator = None
         self.session_manager = ChatSessionManager(config.database)
+        self.pending_tasks: Dict[str, asyncio.Task[str]] = {}
+        self.task_results: Dict[str, str] = {}
+        self.task_counter = 0
     
     def _print_history_summary(self, history: List[Dict[str, str]]):
         """
@@ -212,6 +218,69 @@ class MADACLIInterface:
         """
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
+
+    async def _prompt_input(self) -> str:
+        """Read one line of terminal input without blocking the event loop."""
+        return await asyncio.to_thread(input, "\nYou: ")
+
+    async def _collect_response(self, user_input: str) -> str:
+        """Collect the full streamed response for one query."""
+        if self.orchestrator is None:
+            raise RuntimeError("Orchestrator not initialized.")
+
+        response_chunks = []
+        async for response_chunk in self.orchestrator.process_message(user_input):
+            response_chunks.append(response_chunk)
+        return "".join(response_chunks)
+
+    def submit_query(self, user_input: str) -> str:
+        """
+        Start a query in the background and return a task identifier.
+
+        Args:
+            user_input: Query text to send to the orchestrator.
+
+        Returns:
+            Background task identifier.
+        """
+        self.task_counter += 1
+        task_id = f"task-{self.task_counter}"
+        task = asyncio.create_task(self._collect_response(user_input))
+        self.pending_tasks[task_id] = task
+
+        def _done_callback(done_task: asyncio.Task[str], tracked_task_id: str = task_id) -> None:
+            try:
+                result = done_task.result()
+                self.task_results[tracked_task_id] = result
+                print(f"\n[{tracked_task_id}] Completed:")
+                print(result)
+                print("")
+            except asyncio.CancelledError:
+                self.task_results[tracked_task_id] = "Cancelled"
+                print(f"\n[{tracked_task_id}] Cancelled.\n")
+            except Exception as e:
+                self.task_results[tracked_task_id] = f"Error: {e}"
+                print(f"\n[{tracked_task_id}] Failed: {e}\n")
+            finally:
+                self.pending_tasks.pop(tracked_task_id, None)
+
+        task.add_done_callback(_done_callback)
+        return task_id
+
+    async def run_query_blocking(self, user_input: str) -> str:
+        """
+        Run one query to completion before returning to the prompt.
+
+        Args:
+            user_input: Query text to send to the orchestrator.
+
+        Returns:
+            Full assistant response.
+        """
+        response = await self._collect_response(user_input)
+        print(response)
+        print("")
+        return response
     
     async def run(self):
         """Run the interactive CLI session."""
@@ -258,28 +327,38 @@ class MADACLIInterface:
                     traceback.print_exc()
 
                 print("\nChat with the agents (type 'quit' to exit)")
+                print(f"Query mode: {'blocking' if self.blocking else 'background'}")
+                if not self.blocking:
+                    print("Type 'tasks' to list pending and completed background queries.")
                 print("-" * 50)
 
                 # Interactive chat loop
                 while True:
                     try:
-                        user_input = input("\nYou: ").strip()
+                        user_input = (await self._prompt_input()).strip()
 
                         if user_input.lower() in ['quit', 'exit', 'q']:
+                            if self.pending_tasks:
+                                print(f"\nExiting with {len(self.pending_tasks)} pending background task(s).")
                             print("\nGoodbye!")
                             break
 
                         if not user_input:
                             continue
 
+                        if not self.blocking and user_input.lower() == "tasks":
+                            print(f"\nPending tasks: {list(self.pending_tasks.keys())}")
+                            print(f"Completed tasks: {list(self.task_results.keys())}")
+                            continue
+
                         print("\nAgents:")
                         print("-" * 20)
 
-                        # Process message through orchestrator
-                        async for response_chunk in orchestrator.process_message(user_input):
-                            print(response_chunk, end="", flush=True)
-
-                        print("\n")
+                        if self.blocking:
+                            await self.run_query_blocking(user_input)
+                        else:
+                            task_id = self.submit_query(user_input)
+                            print(f"[{task_id}] Started in background.\n")
 
                     except KeyboardInterrupt:
                         print("\n\nGoodbye!")
@@ -303,19 +382,20 @@ class MADACLIInterface:
         # Note: Cleanup is handled automatically by the 'async with' context manager
 
 
-async def async_main(config_file: str):
+async def async_main(config_file: str, blocking: bool = False):
     """
     Async main entry point for CLI.
     
     Args:
         config_file: The path to the MADA configuration file.
+        blocking: If True, process one query at a time.
     """
     try:
         # Load configuration
         config = load_config_from_json(config_file)
         
         # Run CLI
-        cli = MADACLIInterface(config)
+        cli = MADACLIInterface(config, blocking=blocking)
         await cli.run()
         
     except FileNotFoundError:
@@ -336,13 +416,18 @@ async def async_main(config_file: str):
     "config_file",
     type=str,
 )
-def main(config_file: str) -> None:
+@click.option(
+    "--blocking",
+    is_flag=True,
+    help="Process one query at a time instead of running queries in the background.",
+)
+def main(config_file: str, blocking: bool) -> None:
     """
     Run MADA in CLI mode.
 
     CONFIG_FILE is the path to the MADA configuration file.
     """
-    asyncio.run(async_main(config_file))
+    asyncio.run(async_main(config_file, blocking=blocking))
 
 
 if __name__ == "__main__":

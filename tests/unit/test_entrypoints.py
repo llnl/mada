@@ -740,7 +740,7 @@ class TestMADACLICmd:
                 await async_main("config.json")
 
                 mock_load.assert_called_once_with("config.json")
-                mock_cli_class.assert_called_once_with(dummy_config)
+                mock_cli_class.assert_called_once_with(dummy_config, blocking=False)
                 mock_cli_instance.run.assert_awaited_once()
                 # Should not call sys.exit on success
                 mock_exit.assert_not_called()
@@ -802,7 +802,7 @@ class TestMADACLICmd:
                     return_value=orchestrator_mock,
                 ),
                 patch.object(MADACLIInterface, "startup_session_menu", return_value=True),
-                patch("mada.interfaces.cli.main.input", side_effect=["quit"]),
+                patch.object(MADACLIInterface, "_prompt_input", new=AsyncMock(side_effect=["quit"])),
                 patch("builtins.print") as mock_print,
             ):
                 cli = MADACLIInterface(config)
@@ -815,7 +815,7 @@ class TestMADACLICmd:
                 assert "Goodbye!" in printed_texts
 
         @pytest.mark.asyncio
-        async def test_cli_interface_run_processes_one_message(self, create_dummy_config: Callable):
+        async def test_cli_interface_run_processes_one_message_in_blocking_mode(self, create_dummy_config: Callable):
             """
             Test that the CLI interface processes one user message and
             correctly handles the response from the orchestrator.
@@ -839,13 +839,10 @@ class TestMADACLICmd:
                     return_value=orchestrator_mock,
                 ),
                 patch.object(MADACLIInterface, "startup_session_menu", return_value=True),
-                patch(
-                    "mada.interfaces.cli.main.input",
-                    side_effect=["hello", "quit"],
-                ),
+                patch.object(MADACLIInterface, "_prompt_input", new=AsyncMock(side_effect=["hello", "quit"])),
                 patch("builtins.print") as mock_print,
             ):
-                cli = MADACLIInterface(config)
+                cli = MADACLIInterface(config, blocking=True)
                 await cli.run()
 
                 orchestrator_mock.process_message.assert_called_once_with("hello")
@@ -853,3 +850,32 @@ class TestMADACLICmd:
                 printed_texts = "".join(str(call.args[0]) for call in mock_print.call_args_list)
                 assert "chunk1" in printed_texts
                 assert "chunk2" in printed_texts
+
+        @pytest.mark.asyncio
+        async def test_cli_interface_run_submits_background_query_by_default(self, create_dummy_config: Callable):
+            """
+            Test that the CLI submits queries in the background by default.
+            """
+            config = create_dummy_config()
+
+            orchestrator_mock = AsyncMock()
+            orchestrator_mock.__aenter__.return_value = orchestrator_mock
+            orchestrator_mock.__aexit__.return_value = False
+            orchestrator_mock.initialize_orchestrator.return_value = ("ok", [])
+
+            with (
+                patch(
+                    "mada.interfaces.cli.main.MADAOrchestrator",
+                    return_value=orchestrator_mock,
+                ),
+                patch.object(MADACLIInterface, "startup_session_menu", return_value=True),
+                patch.object(MADACLIInterface, "_prompt_input", new=AsyncMock(side_effect=["hello", "quit"])),
+                patch.object(MADACLIInterface, "submit_query", return_value="task-1") as mock_submit,
+                patch("builtins.print") as mock_print,
+            ):
+                cli = MADACLIInterface(config)
+                await cli.run()
+
+                mock_submit.assert_called_once_with("hello")
+                printed_texts = "".join(str(call.args[0]) for call in mock_print.call_args_list)
+                assert "Started in background" in printed_texts
