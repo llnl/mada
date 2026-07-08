@@ -27,6 +27,11 @@ from mada.core.config import AgentConfig, DatabaseConfig, ModelConfig, MCPServer
 from mada.core.coordinator import MCPAgentManager
 from mada.core.database import ChatSessionManager
 
+try:
+    BaseExceptionGroup
+except NameError:
+    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
+
 
 LOG = logging.getLogger(__name__)
 
@@ -54,7 +59,7 @@ class MADAOrchestrator(MCPAgentManager):
         database_config: Optional[DatabaseConfig] = None,
         session_manager: ChatSessionManager = None,
         bearer_token: Optional[str] = None,
-        timeout: int = 86400
+        timeout: int = 86400,
     ):
         """
         Initialize the MADA orchestrator.
@@ -137,14 +142,14 @@ class MADAOrchestrator(MCPAgentManager):
             try:
                 # Temporarily suppress agent_framework logger warnings about cancel scope
                 # errors during cleanup - these are expected when cleaning up failed tools
-                af_logger = logging.getLogger('agent_framework')
+                af_logger = logging.getLogger("agent_framework")
                 original_level = af_logger.level
                 af_logger.setLevel(logging.ERROR)
 
                 try:
                     # For MCPStreamableHTTPTool and MCPStdioTool, call __aexit__ to properly
                     # clean up async generators even though __aenter__ failed
-                    if hasattr(mcp_tool, '__aexit__'):
+                    if hasattr(mcp_tool, "__aexit__"):
                         await mcp_tool.__aexit__(None, None, None)
                 finally:
                     # Restore original logging level
@@ -165,7 +170,7 @@ class MADAOrchestrator(MCPAgentManager):
         server_url: str,
         error_msg: str,
         mcp_tool=None,
-        http_client=None
+        http_client=None,
     ):
         """
         Handle MCP connection errors with consistent cleanup and logging.
@@ -193,15 +198,15 @@ class MADAOrchestrator(MCPAgentManager):
         await self._cleanup_http_client(http_client, context=server_name)
 
         # Log the error
-        LOG.error(f"  Cannot connect to MCP server '{server_name}' at {server_url}: {error_msg}")
+        LOG.error(
+            f"  Cannot connect to MCP server '{server_name}' at {server_url}: {error_msg}"
+        )
 
         # Return failure info
-        return {'name': server_name, 'url': server_url, 'error': error_msg}
-        
+        return {"name": server_name, "url": server_url, "error": error_msg}
+
     async def connect_agent(
-        self,
-        agent_config: AgentConfig,
-        mcp_servers: Dict[str, MCPServerConfig]
+        self, agent_config: AgentConfig, mcp_servers: Dict[str, MCPServerConfig]
     ) -> Tuple[Agent, List, List[str], List[Dict[str, str]]]:
         """
         Connect to multiple MCP servers and create an associated chat agent.
@@ -224,20 +229,24 @@ class MADAOrchestrator(MCPAgentManager):
         # Connect to each MCP server that this agent should use
         for server_name in agent_config.mcp_servers:
             if server_name not in mcp_servers:
-                LOG.warning(f"MCP server '{server_name}' not found in configuration for agent '{agent_config.agent_name}'")
+                LOG.warning(
+                    f"MCP server '{server_name}' not found in configuration for agent '{agent_config.agent_name}'"
+                )
                 continue
 
             server_config = mcp_servers[server_name]
 
             # Create MCP tool
             http_client_to_cleanup = None  # Track HTTP client for cleanup on failure
-            
+
             if server_config.transport == "stdio":
-                server_path = server_config.command or getattr(agent_config, 'server_path', None)
+                server_path = server_config.command or getattr(
+                    agent_config, "server_path", None
+                )
                 if not server_path:
                     LOG.error(f"No command/server_path for stdio server {server_name}")
                     continue
-                is_python = server_path.endswith('.py')
+                is_python = server_path.endswith(".py")
                 command = server_config.python_executable if is_python else "node"
                 # -u for unbuffered output
                 args = ["-u", server_path] if is_python else [server_path]
@@ -264,7 +273,9 @@ class MADAOrchestrator(MCPAgentManager):
 
                 # MCPStreamableHTTPTool requires an http_client with custom headers, not a headers parameter
                 http_client = httpx.AsyncClient(headers=headers, timeout=180.0)
-                http_client_to_cleanup = http_client  # Store for cleanup if connection fails
+                http_client_to_cleanup = (
+                    http_client  # Store for cleanup if connection fails
+                )
 
                 mcp_tool = MCPStreamableHTTPTool(
                     name=server_name,
@@ -276,7 +287,9 @@ class MADAOrchestrator(MCPAgentManager):
                 continue
 
             # Start the MCP server connection
-            LOG.info(f"Attempting to connect to MCP server '{server_name}' at {server_config.url}...")
+            LOG.info(
+                f"Attempting to connect to MCP server '{server_name}' at {server_config.url}..."
+            )
 
             try:
                 mcp_tool = await self.exit_stack.enter_async_context(mcp_tool)
@@ -286,34 +299,59 @@ class MADAOrchestrator(MCPAgentManager):
             except asyncio.CancelledError:
                 # Connection was cancelled - properly close the tool to cleanup async generators
                 await self._cleanup_failed_tool(mcp_tool, http_client_to_cleanup)
-                failed_servers.append(await self._handle_mcp_connection_error(
-                    server_name, server_config.url, "Connection cancelled (server unavailable)",
-                    mcp_tool=None, http_client=None
-                ))
+                failed_servers.append(
+                    await self._handle_mcp_connection_error(
+                        server_name,
+                        server_config.url,
+                        "Connection cancelled (server unavailable)",
+                        mcp_tool=None,
+                        http_client=None,
+                    )
+                )
                 continue
             except (httpx.ConnectError, httpcore.ConnectError):
                 # Connection failed - properly close the tool to cleanup async generators
                 await self._cleanup_failed_tool(mcp_tool, http_client_to_cleanup)
-                failed_servers.append(await self._handle_mcp_connection_error(
-                    server_name, server_config.url, "Connection refused or server not available",
-                    mcp_tool=None, http_client=None
-                ))
+                failed_servers.append(
+                    await self._handle_mcp_connection_error(
+                        server_name,
+                        server_config.url,
+                        "Connection refused or server not available",
+                        mcp_tool=None,
+                        http_client=None,
+                    )
+                )
                 continue
-            except (httpx.TimeoutException, httpcore.ReadTimeout, httpcore.WriteTimeout, httpcore.PoolTimeout):
+            except (
+                httpx.TimeoutException,
+                httpcore.ReadTimeout,
+                httpcore.WriteTimeout,
+                httpcore.PoolTimeout,
+            ):
                 # Connection timed out - properly close the tool to cleanup async generators
                 await self._cleanup_failed_tool(mcp_tool, http_client_to_cleanup)
-                failed_servers.append(await self._handle_mcp_connection_error(
-                    server_name, server_config.url, "Server timeout",
-                    mcp_tool=None, http_client=None
-                ))
+                failed_servers.append(
+                    await self._handle_mcp_connection_error(
+                        server_name,
+                        server_config.url,
+                        "Server timeout",
+                        mcp_tool=None,
+                        http_client=None,
+                    )
+                )
                 continue
             except BaseExceptionGroup as e:
                 # Multiple errors - properly close the tool to cleanup async generators
                 await self._cleanup_failed_tool(mcp_tool, http_client_to_cleanup)
-                failed_servers.append(await self._handle_mcp_connection_error(
-                    server_name, server_config.url, f"Multiple connection errors ({len(e.exceptions)} errors)",
-                    mcp_tool=None, http_client=None
-                ))
+                failed_servers.append(
+                    await self._handle_mcp_connection_error(
+                        server_name,
+                        server_config.url,
+                        f"Multiple connection errors ({len(e.exceptions)} errors)",
+                        mcp_tool=None,
+                        http_client=None,
+                    )
+                )
                 continue
             except ToolException as e:
                 # Check for specific MCP protocol errors
@@ -324,18 +362,28 @@ class MADAOrchestrator(MCPAgentManager):
                     error_msg = "MCP session rejected (check authentication/token)"
                 else:
                     error_msg = f"MCP initialization failed: {error_detail[:100]}"
-                failed_servers.append(await self._handle_mcp_connection_error(
-                    server_name, server_config.url, error_msg,
-                    mcp_tool=None, http_client=None
-                ))
+                failed_servers.append(
+                    await self._handle_mcp_connection_error(
+                        server_name,
+                        server_config.url,
+                        error_msg,
+                        mcp_tool=None,
+                        http_client=None,
+                    )
+                )
                 continue
             except Exception as e:
                 # Generic error - properly close the tool to cleanup async generators
                 await self._cleanup_failed_tool(mcp_tool, http_client_to_cleanup)
-                failed_servers.append(await self._handle_mcp_connection_error(
-                    server_name, server_config.url, f"{type(e).__name__}: {str(e)[:100]}",
-                    mcp_tool=None, http_client=None
-                ))
+                failed_servers.append(
+                    await self._handle_mcp_connection_error(
+                        server_name,
+                        server_config.url,
+                        f"{type(e).__name__}: {str(e)[:100]}",
+                        mcp_tool=None,
+                        http_client=None,
+                    )
+                )
                 continue
 
         # Store agent description for later use in as_tool()
@@ -346,10 +394,12 @@ class MADAOrchestrator(MCPAgentManager):
             agent_config,
             tools=all_tools,
         )
-        LOG.info(f"Agent '{agent_config.agent_name}' created with {len(all_tools)} MCP tools")
+        LOG.info(
+            f"Agent '{agent_config.agent_name}' created with {len(all_tools)} MCP tools"
+        )
 
         return agent, all_tools, all_tool_names, failed_servers
-    
+
     def _create_planning_agent(self, agent_configs: List[AgentConfig]) -> Agent:
         """
         Create the planning agent that coordinates other agents.
@@ -372,7 +422,9 @@ class MADAOrchestrator(MCPAgentManager):
         # Convert each specialist agent to a tool using as_tool()
         agent_tools = []
         for agent in self.specialist_agents:
-            description = self._agent_descriptions.get(agent.name, f"Specialist agent: {agent.name}")
+            description = self._agent_descriptions.get(
+                agent.name, f"Specialist agent: {agent.name}"
+            )
             agent_tool = agent.as_tool(
                 name=agent.name,
                 description=description,
@@ -442,13 +494,15 @@ Guidelines:
         Returns:
             Multiline text describing each configured agent and its role.
         """
-        lines = [f"    {agent.agent_name}: {agent.description}" for agent in agent_configs]
+        lines = [
+            f"    {agent.agent_name}: {agent.description}" for agent in agent_configs
+        ]
         return "\n".join(lines)
-    
+
     async def initialize_orchestrator(
         self,
         agent_configs: List[AgentConfig],
-        mcp_servers: Dict[str, MCPServerConfig] = None
+        mcp_servers: Dict[str, MCPServerConfig] = None,
     ) -> Tuple[str, List[str]]:
         """
         Initialize the orchestrator with the given agent configurations.
@@ -466,7 +520,7 @@ Guidelines:
         self._mcp_tool_count = 0
         all_tools = []
         failed_servers = []  # Track failed server connections
-        failed_agents = []   # Track agents that failed to connect
+        failed_agents = []  # Track agents that failed to connect
 
         self.mcp_servers = mcp_servers or {}
 
@@ -480,29 +534,44 @@ Guidelines:
 
             if config.mcp_servers and self.mcp_servers:
                 try:
-                    agent, mcp_tools, tool_names, agent_failed_servers = await self.connect_agent(config, self.mcp_servers)
+                    (
+                        agent,
+                        mcp_tools,
+                        tool_names,
+                        agent_failed_servers,
+                    ) = await self.connect_agent(config, self.mcp_servers)
                     self.specialist_agents.append(agent)
                     self._mcp_tool_count += len(mcp_tools)
-                    all_tools.extend([f"{config.agent_name}: {tool}" for tool in tool_names])
+                    all_tools.extend(
+                        [f"{config.agent_name}: {tool}" for tool in tool_names]
+                    )
 
                     # Track any failed servers for this agent
                     if agent_failed_servers:
                         for fs in agent_failed_servers:
-                            failed_servers.append({
-                                'agent': config.agent_name,
-                                'server': fs['name'],
-                                'url': fs['url'],
-                                'error': fs['error']
-                            })
+                            failed_servers.append(
+                                {
+                                    "agent": config.agent_name,
+                                    "server": fs["name"],
+                                    "url": fs["url"],
+                                    "error": fs["error"],
+                                }
+                            )
 
                     if len(tool_names) > 0:
-                        LOG.info(f"Connected agent {config.agent_name} with {len(tool_names)} MCP tools")
+                        LOG.info(
+                            f"Connected agent {config.agent_name} with {len(tool_names)} MCP tools"
+                        )
                     else:
-                        LOG.warning(f"Agent {config.agent_name} connected but no MCP servers available")
+                        LOG.warning(
+                            f"Agent {config.agent_name} connected but no MCP servers available"
+                        )
                         if len(config.mcp_servers) > 0:
                             failed_agents.append(config.agent_name)
                 except BaseExceptionGroup as eg:
-                    LOG.error(f"Multiple errors connecting agent {config.agent_name} ({len(eg.exceptions)} errors)")
+                    LOG.error(
+                        f"Multiple errors connecting agent {config.agent_name} ({len(eg.exceptions)} errors)"
+                    )
                     failed_agents.append(config.agent_name)
                     continue
                 except Exception as e:
@@ -513,10 +582,14 @@ Guidelines:
             elif config.server_path:
                 # Legacy support for single server_path
                 try:
-                    is_python = config.server_path.endswith('.py')
+                    is_python = config.server_path.endswith(".py")
                     command = sys.executable if is_python else "node"
                     # Use -u for unbuffered Python output
-                    args = ["-u", config.server_path] if is_python else [config.server_path]
+                    args = (
+                        ["-u", config.server_path]
+                        if is_python
+                        else [config.server_path]
+                    )
                     mcp_tool = MCPStdioTool(
                         name=f"{config.agent_name}_mcp",
                         command=command,
@@ -536,9 +609,13 @@ Guidelines:
                     self.specialist_agents.append(agent)
                     self._mcp_tool_count += 1
                     all_tools.append(f"{config.agent_name}: {config.server_path}")
-                    LOG.info(f"Connected legacy agent {config.agent_name} with 1 MCP tool")
+                    LOG.info(
+                        f"Connected legacy agent {config.agent_name} with 1 MCP tool"
+                    )
                 except Exception as e:
-                    LOG.error(f"Failed to connect legacy agent {config.agent_name}: {e}")
+                    LOG.error(
+                        f"Failed to connect legacy agent {config.agent_name}: {e}"
+                    )
                     continue
             elif not config.mcp_servers:
                 LOG.info(f"Creating agent {config.agent_name} without MCP tools")
@@ -558,17 +635,23 @@ Guidelines:
 
         # Build status message
         status_parts = []
-        status_parts.append(f"Connection Successful: Orchestrator initialized with {self._mcp_tool_count} MCP Servers and {len(self.specialist_agents) + 1} agents")
+        status_parts.append(
+            f"Connection Successful: Orchestrator initialized with {self._mcp_tool_count} MCP Servers and {len(self.specialist_agents) + 1} agents"
+        )
 
         # Report any failed connections
         if failed_servers:
-            status_parts.append(f"\nWARNING: {len(failed_servers)} MCP server(s) failed to connect:")
+            status_parts.append(
+                f"\nWARNING: {len(failed_servers)} MCP server(s) failed to connect:"
+            )
             for fs in failed_servers:
                 status_parts.append(f"  • {fs['agent']}/{fs['server']} at {fs['url']}")
                 status_parts.append(f"    Error: {fs['error']}")
 
         if failed_agents:
-            status_parts.append(f"\nERROR: {len(failed_agents)} agent(s) failed to initialize: {', '.join(failed_agents)}")
+            status_parts.append(
+                f"\nERROR: {len(failed_agents)} agent(s) failed to initialize: {', '.join(failed_agents)}"
+            )
 
         status = "\n".join(status_parts)
         LOG.info(status)
@@ -822,7 +905,9 @@ Guidelines:
 
         try:
             response_started = False
-            stream = self.planning_agent.run(prompt, session=request_session, stream=True)
+            stream = self.planning_agent.run(
+                prompt, session=request_session, stream=True
+            )
             async for chunk in stream:
                 if chunk.text:
                     response_started = True
@@ -831,18 +916,23 @@ Guidelines:
                     for content in chunk.contents:
                         if hasattr(content, "to_dict"):
                             item = content.to_dict()
-                            if item.get("type") in ("function_call", "tool_call") and item.get("name"):
+                            if item.get("type") in (
+                                "function_call",
+                                "tool_call",
+                            ) and item.get("name"):
                                 yield f"\n[Calling: {item['name']}]\n"
 
             if not response_started:
-                LOG.warning("No text chunks received from planning agent for OpenAI API request")
+                LOG.warning(
+                    "No text chunks received from planning agent for OpenAI API request"
+                )
 
         except Exception as e:
             error_msg = f"Error processing message: {e}"
             LOG.error(error_msg)
             traceback.print_exc()
             yield error_msg
-    
+
     async def process_message(self, message: str) -> AsyncGenerator[str, None]:
         """
         Process a user message through the planning agent.
@@ -881,11 +971,14 @@ Guidelines:
                     response_started = True
                     aggregated_assistant_reply += chunk.text
                     yield chunk.text
-                elif hasattr(chunk, 'contents') and chunk.contents:
+                elif hasattr(chunk, "contents") and chunk.contents:
                     for content in chunk.contents:
-                        if hasattr(content, 'to_dict'):
+                        if hasattr(content, "to_dict"):
                             d = content.to_dict()
-                            if d.get('type') in ('function_call', 'tool_call') and d.get('name'):
+                            if d.get("type") in (
+                                "function_call",
+                                "tool_call",
+                            ) and d.get("name"):
                                 call_id = d.get("call_id")
                                 name = d.get("name")
 
@@ -907,7 +1000,12 @@ Guidelines:
         except Exception as e:
             # Check for authentication errors
             error_str = str(e)
-            if " 401" in error_str or error_str.startswith("401") or "Authentication" in error_str or "auth_error" in error_str:
+            if (
+                " 401" in error_str
+                or error_str.startswith("401")
+                or "Authentication" in error_str
+                or "auth_error" in error_str
+            ):
                 # Check if it's an unexpanded environment variable
                 if "${" in error_str and "}" in error_str:
                     error_msg = (
@@ -939,7 +1037,7 @@ Guidelines:
                 LOG.error(error_msg)
                 traceback.print_exc()
                 yield error_msg
-    
+
     async def cleanup(self) -> None:
         """
         Clean up all resources and connections.
@@ -961,17 +1059,21 @@ Guidelines:
             # Handle exception groups from anyio task groups during cleanup
             # This is expected when MCP servers failed to connect - their async generators
             # will raise errors during cleanup, which we can safely suppress
-            LOG.debug(f"Async cleanup errors suppressed ({len(eg.exceptions)} errors) - this is expected for failed MCP connections")
+            LOG.debug(
+                f"Async cleanup errors suppressed ({len(eg.exceptions)} errors) - this is expected for failed MCP connections"
+            )
         except RuntimeError as e:
             # Suppress "Attempted to exit cancel scope in different task" errors
             # These occur when async generators from failed MCP connections are cleaned up
             if "cancel scope" in str(e):
-                LOG.debug(f"Async generator cleanup error suppressed (expected for failed MCP connections): {e}")
+                LOG.debug(
+                    f"Async generator cleanup error suppressed (expected for failed MCP connections): {e}"
+                )
             else:
                 LOG.error(f"Runtime error during cleanup: {e}")
         except Exception as e:
             LOG.error(f"Error during cleanup: {e}")
-    
+
     async def __aenter__(self) -> "MADAOrchestrator":
         """
         Async context manager entry.
@@ -980,7 +1082,7 @@ Guidelines:
             The orchestrator instance itself.
         """
         return self
-    
+
     async def __aexit__(
         self,
         exc_type: Optional[Type[BaseException]],

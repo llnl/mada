@@ -49,6 +49,7 @@ class BaseModelConfig:
             Convert the configuration into keyword arguments for chat client
             construction.
     """
+
     provider: str
     model: str
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -81,7 +82,7 @@ class BaseModelConfig:
                 Raised if the subclass does not implement this method.
         """
         raise NotImplementedError
-    
+
 
 @dataclass(kw_only=True)
 class OpenAIModelConfig(BaseModelConfig):
@@ -116,6 +117,7 @@ class OpenAIModelConfig(BaseModelConfig):
             Convert the configuration into keyword arguments for an
             OpenAI-compatible chat client.
     """
+
     api_key: str  # Can be literal string, env var, or path to file containing API key
     base_url: str
 
@@ -152,7 +154,7 @@ class OpenAIModelConfig(BaseModelConfig):
                 "Base URL not found for OpenAI-compatible model config. "
                 "Please specify 'base_url'."
             )
-        
+
     def to_client_kwargs(self) -> Dict[str, Any]:
         """
         Convert the configuration into OpenAI-compatible chat client keyword
@@ -168,7 +170,7 @@ class OpenAIModelConfig(BaseModelConfig):
             "base_url": self.base_url,
             **self.extra,
         }
-    
+
 
 @dataclass(kw_only=True)
 class BedrockModelConfig(BaseModelConfig):
@@ -214,6 +216,7 @@ class BedrockModelConfig(BaseModelConfig):
             Convert the configuration into keyword arguments for a Bedrock chat
             client.
     """
+
     region: str
 
     # Pick whichever auth style your runtime actually uses
@@ -281,11 +284,13 @@ class BedrockModelConfig(BaseModelConfig):
                 "both 'aws_access_key_id' and 'aws_secret_access_key'"
             )
 
-        auth_method_count = sum([
-            has_bearer,
-            has_profile,
-            has_full_aws_creds,
-        ])
+        auth_method_count = sum(
+            [
+                has_bearer,
+                has_profile,
+                has_full_aws_creds,
+            ]
+        )
 
         if auth_method_count == 0:
             raise RuntimeError(
@@ -300,7 +305,7 @@ class BedrockModelConfig(BaseModelConfig):
                 "Specify exactly one of: 'bearer_token', 'aws_profile', or "
                 "both 'aws_access_key_id' and 'aws_secret_access_key'"
             )
-        
+
     def to_client_kwargs(self) -> Dict[str, Any]:
         """
         Convert the configuration into Bedrock chat client keyword arguments.
@@ -314,7 +319,7 @@ class BedrockModelConfig(BaseModelConfig):
             "region": self.region,
             **self.extra,
         }
-        
+
 
 ModelConfig = Union[OpenAIModelConfig, BedrockModelConfig]
 

@@ -272,8 +272,12 @@ class TestDeleteSession:
         session_id = "test_session"
         db.delete_session(session_id)
 
-        mock_cursor.execute.assert_any_call("DELETE FROM messages WHERE session_id = %s", (session_id,))
-        mock_cursor.execute.assert_any_call("DELETE FROM sessions WHERE session_id = %s", (session_id,))
+        mock_cursor.execute.assert_any_call(
+            "DELETE FROM messages WHERE session_id = %s", (session_id,)
+        )
+        mock_cursor.execute.assert_any_call(
+            "DELETE FROM sessions WHERE session_id = %s", (session_id,)
+        )
         mock_conn.commit.assert_called_once()
 
 
@@ -294,7 +298,9 @@ class TestFlushDatabase:
         mock_conn.commit.assert_called_once()
 
     @patch.object(PostgreSQLChatDatabase, "confirm_db_flush", return_value=False)
-    def test_flush_database_cancels_on_user_decline(self, mock_confirm_flush, postgresql_db):
+    def test_flush_database_cancels_on_user_decline(
+        self, mock_confirm_flush, postgresql_db
+    ):
         """Test that flush_database does not remove data if user declines."""
         db, mock_cursor, _ = postgresql_db
 

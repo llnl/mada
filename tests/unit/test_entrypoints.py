@@ -46,7 +46,9 @@ from mada.main import (
 
 try:
     from fastapi.testclient import TestClient
-except ImportError:  # pragma: no cover - exercised only in missing dependency environments
+except (
+    ImportError
+):  # pragma: no cover - exercised only in missing dependency environments
     TestClient = None
 
 
@@ -120,9 +122,13 @@ class TestMADAOrchestratorCmd:
             """
             # We patch the helper so we do not run Gradio.
             with patch("mada.main._run_gradio_from_args") as mock_run_gradio:
-                result = runner.invoke(main, ["gradio", "-p", "7860", "-s", "config.json"])
+                result = runner.invoke(
+                    main, ["gradio", "-p", "7860", "-s", "config.json"]
+                )
                 assert result.exit_code == 0
-                mock_run_gradio.assert_called_once_with(["-p", "7860", "-s", "config.json"])
+                mock_run_gradio.assert_called_once_with(
+                    ["-p", "7860", "-s", "config.json"]
+                )
 
         def test_main_dispatches_to_cli(self, runner):
             """
@@ -140,9 +146,13 @@ class TestMADAOrchestratorCmd:
             interface when the 'openai-api' mode is specified.
             """
             with patch("mada.main._run_openai_api_from_args") as mock_run_openai_api:
-                result = runner.invoke(main, ["openai-api", "--port", "8000", "config.json"])
+                result = runner.invoke(
+                    main, ["openai-api", "--port", "8000", "config.json"]
+                )
                 assert result.exit_code == 0
-                mock_run_openai_api.assert_called_once_with(["--port", "8000", "config.json"])
+                mock_run_openai_api.assert_called_once_with(
+                    ["--port", "8000", "config.json"]
+                )
 
     class TestRunGradioFromArgs:
         def test_run_gradio_from_args_calls_entrypoint(self):
@@ -187,7 +197,9 @@ class TestMADAOrchestratorCmd:
             Test that the helper function `_run_openai_api_from_args` calls the
             OpenAI API entry point with the correct arguments.
             """
-            with patch("mada.interfaces.openai_api.main.openai_api_entrypoint") as mock_entry:
+            with patch(
+                "mada.interfaces.openai_api.main.openai_api_entrypoint"
+            ) as mock_entry:
                 _run_openai_api_from_args(
                     [
                         "--host",
@@ -199,15 +211,21 @@ class TestMADAOrchestratorCmd:
                         "config.json",
                     ]
                 )
-                mock_entry.assert_called_once_with("127.0.0.1", 8000, "mada-api", None, None, "config.json")
+                mock_entry.assert_called_once_with(
+                    "127.0.0.1", 8000, "mada-api", None, None, "config.json"
+                )
 
         def test_run_openai_api_from_args_uses_defaults(self):
             """
             Test `_run_openai_api_from_args` when optional flags are not provided.
             """
-            with patch("mada.interfaces.openai_api.main.openai_api_entrypoint") as mock_entry:
+            with patch(
+                "mada.interfaces.openai_api.main.openai_api_entrypoint"
+            ) as mock_entry:
                 _run_openai_api_from_args(["config.json"])
-                mock_entry.assert_called_once_with("0.0.0.0", 8000, "mada-team", None, None, "config.json")
+                mock_entry.assert_called_once_with(
+                    "0.0.0.0", 8000, "mada-team", None, None, "config.json"
+                )
 
 
 @pytest.mark.unit
@@ -218,7 +236,9 @@ class TestMADAGradioCmd:
             Test that the Gradio main function calls the Gradio entry point
             with the correct arguments passed via the CLI.
             """
-            with patch("mada.interfaces.gradio.main.gradio_entrypoint") as mock_entrypoint:
+            with patch(
+                "mada.interfaces.gradio.main.gradio_entrypoint"
+            ) as mock_entrypoint:
                 result = runner.invoke(gradio_main, ["-p", "9999", "-s", "config.json"])
 
                 assert result.exit_code == 0
@@ -229,7 +249,9 @@ class TestMADAGradioCmd:
             Test that the Gradio main function works correctly when only
             the configuration file is provided.
             """
-            with patch("mada.interfaces.gradio.main.gradio_entrypoint") as mock_entrypoint:
+            with patch(
+                "mada.interfaces.gradio.main.gradio_entrypoint"
+            ) as mock_entrypoint:
                 result = runner.invoke(gradio_main, ["config.json"])
 
                 assert result.exit_code == 0
@@ -237,7 +259,9 @@ class TestMADAGradioCmd:
                 mock_entrypoint.assert_called_once_with(None, False, "config.json")
 
     class TestGradioEntrypoint:
-        def test_gradio_entrypoint_happy_path_uses_config_and_run_gradio(self, create_dummy_config: Callable):
+        def test_gradio_entrypoint_happy_path_uses_config_and_run_gradio(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the Gradio entry point correctly uses the configuration
             file and launches the Gradio interface without errors.
@@ -263,7 +287,9 @@ class TestMADAGradioCmd:
                 assert config.interface.port == 1234
                 assert config.interface.share is False
 
-        def test_gradio_entrypoint_applies_port_and_share_overrides(self, create_dummy_config: Callable):
+        def test_gradio_entrypoint_applies_port_and_share_overrides(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the Gradio entry point applies port and share overrides
             provided via the CLI.
@@ -288,7 +314,9 @@ class TestMADAGradioCmd:
                 mock_run.assert_called_once_with(config)
                 mock_exit.assert_not_called()
 
-        def test_gradio_entrypoint_exits_if_no_interface_config(self, create_dummy_config: Callable):
+        def test_gradio_entrypoint_exits_if_no_interface_config(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the Gradio entry point exits with an error if the
             configuration file does not contain interface settings.
@@ -344,8 +372,12 @@ class TestMADAGradioCmd:
             mock_loop = MagicMock()
 
             with (
-                patch("mada.interfaces.gradio.main.MCPGradioClientSession") as mock_client_cls,
-                patch("mada.interfaces.gradio.main.MADAMultiAgentGradioInterface") as mock_iface_cls,
+                patch(
+                    "mada.interfaces.gradio.main.MCPGradioClientSession"
+                ) as mock_client_cls,
+                patch(
+                    "mada.interfaces.gradio.main.MADAMultiAgentGradioInterface"
+                ) as mock_iface_cls,
                 patch(
                     "mada.interfaces.gradio.main.asyncio.new_event_loop",
                     return_value=mock_loop,
@@ -382,7 +414,9 @@ class TestMADAGradioCmd:
                     js=ANY,
                 )
 
-        def test_run_gradio_launches_interface_with_configured_port_and_share(self, create_dummy_config: Callable):
+        def test_run_gradio_launches_interface_with_configured_port_and_share(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the `run_gradio` function launches the Gradio interface
             with the port and share settings specified in the configuration.
@@ -393,8 +427,12 @@ class TestMADAGradioCmd:
             mock_blocks = MagicMock()
             with (
                 patch("mada.interfaces.gradio.main.MCPGradioClientSession"),
-                patch("mada.interfaces.gradio.main.MADAMultiAgentGradioInterface") as mock_iface_cls,
-                patch("mada.interfaces.gradio.main.asyncio.new_event_loop") as mock_new_loop,
+                patch(
+                    "mada.interfaces.gradio.main.MADAMultiAgentGradioInterface"
+                ) as mock_iface_cls,
+                patch(
+                    "mada.interfaces.gradio.main.asyncio.new_event_loop"
+                ) as mock_new_loop,
                 patch("mada.interfaces.gradio.main.asyncio.set_event_loop"),
             ):
                 mock_new_loop.return_value = MagicMock()
@@ -414,7 +452,9 @@ class TestMADAGradioCmd:
                 )
 
     class TestCreateGradioApp:
-        def test_create_gradio_app_builds_blocks_from_config(self, create_dummy_config: Callable):
+        def test_create_gradio_app_builds_blocks_from_config(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the `create_gradio_app` function builds a Gradio Blocks
             interface using the provided configuration file.
@@ -427,8 +467,12 @@ class TestMADAGradioCmd:
                     "mada.interfaces.gradio.main.load_config_from_json",
                     return_value=dummy_config,
                 ) as mock_load,
-                patch("mada.interfaces.gradio.main.MCPGradioClientSession") as mock_client_cls,
-                patch("mada.interfaces.gradio.main.MADAMultiAgentGradioInterface") as mock_iface_cls,
+                patch(
+                    "mada.interfaces.gradio.main.MCPGradioClientSession"
+                ) as mock_client_cls,
+                patch(
+                    "mada.interfaces.gradio.main.MADAMultiAgentGradioInterface"
+                ) as mock_iface_cls,
             ):
                 mock_iface_instance = mock_iface_cls.return_value
                 mock_iface_instance.create_interface.return_value = dummy_blocks
@@ -450,7 +494,9 @@ class TestMADAOpenAIApiCmd:
             Test that the OpenAI API main function calls the entry point with
             the correct CLI arguments.
             """
-            with patch("mada.interfaces.openai_api.main.openai_api_entrypoint") as mock_entrypoint:
+            with patch(
+                "mada.interfaces.openai_api.main.openai_api_entrypoint"
+            ) as mock_entrypoint:
                 result = runner.invoke(
                     openai_api_main,
                     [
@@ -465,21 +511,29 @@ class TestMADAOpenAIApiCmd:
                 )
 
                 assert result.exit_code == 0
-                mock_entrypoint.assert_called_once_with("127.0.0.1", 9000, "mada-api", None, None, "config.json")
+                mock_entrypoint.assert_called_once_with(
+                    "127.0.0.1", 9000, "mada-api", None, None, "config.json"
+                )
 
         def test_main_works_with_only_config_file(self, runner):
             """
             Test that the OpenAI API main function uses default values when only
             the configuration file is provided.
             """
-            with patch("mada.interfaces.openai_api.main.openai_api_entrypoint") as mock_entrypoint:
+            with patch(
+                "mada.interfaces.openai_api.main.openai_api_entrypoint"
+            ) as mock_entrypoint:
                 result = runner.invoke(openai_api_main, ["config.json"])
 
                 assert result.exit_code == 0
-                mock_entrypoint.assert_called_once_with("0.0.0.0", 8000, "mada", None, None, "config.json")
+                mock_entrypoint.assert_called_once_with(
+                    "0.0.0.0", 8000, "mada", None, None, "config.json"
+                )
 
     class TestOpenAIApiEntrypoint:
-        def test_openai_api_entrypoint_happy_path_uses_config_and_runs_server(self, create_dummy_config: Callable):
+        def test_openai_api_entrypoint_happy_path_uses_config_and_runs_server(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the OpenAI API entry point correctly loads the config and
             launches the API server.
@@ -520,7 +574,9 @@ class TestMADAOpenAIApiCmd:
             unexpected exception occurs.
             """
             with (
-                patch("mada.interfaces.openai_api.main.load_config_from_json") as mock_load,
+                patch(
+                    "mada.interfaces.openai_api.main.load_config_from_json"
+                ) as mock_load,
                 patch("mada.interfaces.openai_api.main.sys.exit") as mock_exit,
             ):
                 mock_load.side_effect = RuntimeError("Bad config")
@@ -536,9 +592,13 @@ class TestMADAOpenAIApiCmd:
 
                 mock_exit.assert_called_once_with(1)
 
-    @pytest.mark.skipif(TestClient is None, reason="fastapi test client is not installed")
+    @pytest.mark.skipif(
+        TestClient is None, reason="fastapi test client is not installed"
+    )
     class TestCreateOpenAIApiApp:
-        def test_models_endpoint_returns_exposed_model(self, create_dummy_config: Callable):
+        def test_models_endpoint_returns_exposed_model(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that `/v1/models` returns the configured exposed model name.
             """
@@ -552,7 +612,9 @@ class TestMADAOpenAIApiCmd:
                 assert response.status_code == 200
                 assert response.json()["data"][0]["id"] == "mada-api"
 
-        def test_models_endpoint_without_v1_returns_exposed_model(self, create_dummy_config: Callable):
+        def test_models_endpoint_without_v1_returns_exposed_model(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that `/models` returns the configured exposed model name.
             """
@@ -566,7 +628,9 @@ class TestMADAOpenAIApiCmd:
                 assert response.status_code == 200
                 assert response.json()["data"][0]["id"] == "mada-api"
 
-        def test_health_endpoint_reports_not_initialized_before_first_chat(self, create_dummy_config: Callable):
+        def test_health_endpoint_reports_not_initialized_before_first_chat(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that `/health` reports the orchestrator as uninitialized until a
             chat request triggers startup.
@@ -581,7 +645,9 @@ class TestMADAOpenAIApiCmd:
                 assert response.status_code == 200
                 assert response.json()["orchestrator_initialized"] == "false"
 
-        def test_chat_completions_returns_openai_shape(self, create_dummy_config: Callable):
+        def test_chat_completions_returns_openai_shape(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the non-streaming chat completion endpoint returns an
             OpenAI-compatible completion payload.
@@ -612,7 +678,9 @@ class TestMADAOpenAIApiCmd:
                 assert payload["object"] == "chat.completion"
                 assert payload["choices"][0]["message"]["content"] == "hello from mada"
 
-        def test_chat_completions_returns_503_when_orchestrator_startup_fails(self, create_dummy_config: Callable):
+        def test_chat_completions_returns_503_when_orchestrator_startup_fails(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that chat completion requests return a clean 503 when MCP-backed
             orchestrator startup fails.
@@ -630,7 +698,9 @@ class TestMADAOpenAIApiCmd:
                 mock_instance = mock_orchestrator.return_value
                 mock_instance.__aenter__ = AsyncMock(return_value=None)
                 mock_instance.__aexit__ = AsyncMock(return_value=None)
-                mock_instance.initialize_orchestrator = AsyncMock(side_effect=RuntimeError("random startup failure"))
+                mock_instance.initialize_orchestrator = AsyncMock(
+                    side_effect=RuntimeError("random startup failure")
+                )
 
                 app = create_openai_api_app(config, model_name="mada-api")
                 with TestClient(app) as client:
@@ -650,7 +720,9 @@ class TestMADAOpenAIApiCmd:
             )
             assert "random startup failure" in detail
 
-        def test_chat_completions_streams_sse_chunks(self, create_dummy_config: Callable):
+        def test_chat_completions_streams_sse_chunks(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the streaming chat completion endpoint emits OpenAI-style SSE
             events and terminates with `[DONE]`.
@@ -780,7 +852,9 @@ class TestMADACLICmd:
 
     class TestMADACLIInterface:
         @pytest.mark.asyncio
-        async def test_cli_interface_run_quit_immediately(self, create_dummy_config: Callable):
+        async def test_cli_interface_run_quit_immediately(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the CLI interface exits immediately when the user
             types 'quit' as the first input.
@@ -801,21 +875,33 @@ class TestMADACLICmd:
                     "mada.interfaces.cli.main.MADAOrchestrator",
                     return_value=orchestrator_mock,
                 ),
-                patch.object(MADACLIInterface, "startup_session_menu", return_value=True),
-                patch.object(MADACLIInterface, "_prompt_input", new=AsyncMock(side_effect=["quit"])),
+                patch.object(
+                    MADACLIInterface, "startup_session_menu", return_value=True
+                ),
+                patch.object(
+                    MADACLIInterface,
+                    "_prompt_input",
+                    new=AsyncMock(side_effect=["quit"]),
+                ),
                 patch("builtins.print") as mock_print,
             ):
                 cli = MADACLIInterface(config)
                 await cli.run()
 
-                orchestrator_mock.initialize_orchestrator.assert_awaited_once_with(config.agents, config.mcp_servers)
+                orchestrator_mock.initialize_orchestrator.assert_awaited_once_with(
+                    config.agents, config.mcp_servers
+                )
                 orchestrator_mock.process_message.assert_not_called()
 
-                printed_texts = "".join(str(call.args[0]) for call in mock_print.call_args_list)
+                printed_texts = "".join(
+                    str(call.args[0]) for call in mock_print.call_args_list
+                )
                 assert "Goodbye!" in printed_texts
 
         @pytest.mark.asyncio
-        async def test_cli_interface_run_processes_one_message_in_blocking_mode(self, create_dummy_config: Callable):
+        async def test_cli_interface_run_processes_one_message_in_blocking_mode(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the CLI interface processes one user message and
             correctly handles the response from the orchestrator.
@@ -825,21 +911,31 @@ class TestMADACLICmd:
             orchestrator_mock = MagicMock()
             orchestrator_mock.__aenter__ = AsyncMock(return_value=orchestrator_mock)
             orchestrator_mock.__aexit__ = AsyncMock(return_value=False)
-            orchestrator_mock.initialize_orchestrator = AsyncMock(return_value=("ok", []))
+            orchestrator_mock.initialize_orchestrator = AsyncMock(
+                return_value=("ok", [])
+            )
 
             async def fake_process_message(_msg):
                 yield "chunk1"
                 yield "chunk2"
 
-            orchestrator_mock.process_message = MagicMock(side_effect=fake_process_message)
+            orchestrator_mock.process_message = MagicMock(
+                side_effect=fake_process_message
+            )
 
             with (
                 patch(
                     "mada.interfaces.cli.main.MADAOrchestrator",
                     return_value=orchestrator_mock,
                 ),
-                patch.object(MADACLIInterface, "startup_session_menu", return_value=True),
-                patch.object(MADACLIInterface, "_prompt_input", new=AsyncMock(side_effect=["hello", "quit"])),
+                patch.object(
+                    MADACLIInterface, "startup_session_menu", return_value=True
+                ),
+                patch.object(
+                    MADACLIInterface,
+                    "_prompt_input",
+                    new=AsyncMock(side_effect=["hello", "quit"]),
+                ),
                 patch("builtins.print") as mock_print,
             ):
                 cli = MADACLIInterface(config, blocking=True)
@@ -847,12 +943,16 @@ class TestMADACLICmd:
 
                 orchestrator_mock.process_message.assert_called_once_with("hello")
 
-                printed_texts = "".join(str(call.args[0]) for call in mock_print.call_args_list)
+                printed_texts = "".join(
+                    str(call.args[0]) for call in mock_print.call_args_list
+                )
                 assert "chunk1" in printed_texts
                 assert "chunk2" in printed_texts
 
         @pytest.mark.asyncio
-        async def test_cli_interface_run_submits_background_query_by_default(self, create_dummy_config: Callable):
+        async def test_cli_interface_run_submits_background_query_by_default(
+            self, create_dummy_config: Callable
+        ):
             """
             Test that the CLI submits queries in the background by default.
             """
@@ -868,14 +968,24 @@ class TestMADACLICmd:
                     "mada.interfaces.cli.main.MADAOrchestrator",
                     return_value=orchestrator_mock,
                 ),
-                patch.object(MADACLIInterface, "startup_session_menu", return_value=True),
-                patch.object(MADACLIInterface, "_prompt_input", new=AsyncMock(side_effect=["hello", "quit"])),
-                patch.object(MADACLIInterface, "submit_query", return_value="task-1") as mock_submit,
+                patch.object(
+                    MADACLIInterface, "startup_session_menu", return_value=True
+                ),
+                patch.object(
+                    MADACLIInterface,
+                    "_prompt_input",
+                    new=AsyncMock(side_effect=["hello", "quit"]),
+                ),
+                patch.object(
+                    MADACLIInterface, "submit_query", return_value="task-1"
+                ) as mock_submit,
                 patch("builtins.print") as mock_print,
             ):
                 cli = MADACLIInterface(config)
                 await cli.run()
 
                 mock_submit.assert_called_once_with("hello")
-                printed_texts = "".join(str(call.args[0]) for call in mock_print.call_args_list)
+                printed_texts = "".join(
+                    str(call.args[0]) for call in mock_print.call_args_list
+                )
                 assert "Started in background" in printed_texts

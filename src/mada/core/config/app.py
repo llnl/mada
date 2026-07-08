@@ -42,6 +42,7 @@ class AppConfig:
         database (DatabaseConfig): Configuration for the database connection.
         interface (InterfaceConfig): Configuration for the Gradio interface layout and options.
     """
+
     model: ModelConfig
     agents: List[AgentConfig]
     database: DatabaseConfig
@@ -49,7 +50,7 @@ class AppConfig:
     interface: InterfaceConfig = None  # Optional, used only by the Gradio app
 
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> 'AppConfig':
+    def from_dict(cls, config_dict: Dict[str, Any]) -> "AppConfig":
         """
         Create an AppConfig instance from a dictionary.
 
@@ -70,14 +71,18 @@ class AppConfig:
         # Load model configuration
         model_settings = config_dict.get("model")
         if not model_settings:
-            raise ValueError("Please provide 'model' settings in the configuration for your app.")
+            raise ValueError(
+                "Please provide 'model' settings in the configuration for your app."
+            )
         model_cfg = load_model_config(model_settings)
         app_conf["model"] = model_cfg
 
         # Load agents
         agent_entries = config_dict.get("agents")
         if not agent_entries:
-            raise ValueError("No agents were provided. Please define at least one agent.")
+            raise ValueError(
+                "No agents were provided. Please define at least one agent."
+            )
         agent_cfgs = [AgentConfig.from_dict(agent) for agent in agent_entries]
         app_conf["agents"] = agent_cfgs
 
@@ -115,7 +120,7 @@ def load_config_from_json(path: str) -> AppConfig:
     Returns:
         AppConfig: The parsed application configuration object.
     """
-    with open(path, 'r') as f:
+    with open(path, "r") as f:
         config_dict = json.load(f)
-    
+
     return AppConfig.from_dict(config_dict)

@@ -42,7 +42,9 @@ class TestInitDB:
 
         db.init_db()
 
-        actual_sql_calls = [normalize_sql(call.args[0]) for call in mock_conn.execute.call_args_list]
+        actual_sql_calls = [
+            normalize_sql(call.args[0]) for call in mock_conn.execute.call_args_list
+        ]
 
         assert (
             normalize_sql("""
@@ -102,7 +104,10 @@ class TestAddMessage:
 
         assert mock_conn.execute.call_count == 3
 
-        actual_calls = [(normalize_sql(call.args[0]), call.args[1]) for call in mock_conn.execute.call_args_list]
+        actual_calls = [
+            (normalize_sql(call.args[0]), call.args[1])
+            for call in mock_conn.execute.call_args_list
+        ]
 
         expected_calls = [
             (
@@ -272,7 +277,10 @@ class TestDeleteSession:
         session_id = "test_session"
         db.delete_session(session_id)
 
-        actual_calls = [(normalize_sql(call.args[0]), call.args[1]) for call in mock_conn.execute.call_args_list]
+        actual_calls = [
+            (normalize_sql(call.args[0]), call.args[1])
+            for call in mock_conn.execute.call_args_list
+        ]
 
         assert (
             normalize_sql("DELETE FROM messages WHERE session_id = ?"),
@@ -295,13 +303,17 @@ class TestFlushDatabase:
 
         mock_confirm_flush.assert_called_once()
 
-        actual_sql_calls = [normalize_sql(call.args[0]) for call in mock_conn.execute.call_args_list]
+        actual_sql_calls = [
+            normalize_sql(call.args[0]) for call in mock_conn.execute.call_args_list
+        ]
 
         assert normalize_sql("DELETE FROM messages") in actual_sql_calls
         assert normalize_sql("DELETE FROM sessions") in actual_sql_calls
 
     @patch.object(SQLiteChatDatabase, "confirm_db_flush", return_value=False)
-    def test_flush_database_cancels_on_user_decline(self, mock_confirm_flush, sqlite_db):
+    def test_flush_database_cancels_on_user_decline(
+        self, mock_confirm_flush, sqlite_db
+    ):
         """Test that flush_database does not remove data if user declines."""
         db, mock_conn = sqlite_db
 

@@ -95,8 +95,12 @@ class TestLoadSession:
 
         assert len(loaded_messages) == 2, "Loaded messages count mismatch."
         assert loaded_messages[0]["role"] == "user", "First message role mismatch."
-        assert loaded_messages[0]["content"] == "Hello", "First message content mismatch."
-        assert loaded_messages[1]["role"] == "assistant", "Second message role mismatch."
+        assert loaded_messages[0]["content"] == "Hello", (
+            "First message content mismatch."
+        )
+        assert loaded_messages[1]["role"] == "assistant", (
+            "Second message role mismatch."
+        )
         assert loaded_messages[1]["content"] == "Hi", "Second message content mismatch."
 
     def test_load_session_returns_empty_list_if_not_found(self, sqlite_db):
@@ -123,8 +127,12 @@ class TestListSessions:
         sessions = sqlite_db.list_sessions()
 
         assert len(sessions) == 2, "Expected two sessions in the database."
-        assert sessions[0][0] == session_2, "Expected test_list_sessions_returns_all_sessions_2 to be listed first."
-        assert sessions[1][0] == session_1, "Expected test_list_sessions_returns_all_sessions_1 to be listed second."
+        assert sessions[0][0] == session_2, (
+            "Expected test_list_sessions_returns_all_sessions_2 to be listed first."
+        )
+        assert sessions[1][0] == session_1, (
+            "Expected test_list_sessions_returns_all_sessions_1 to be listed second."
+        )
 
     def test_list_sessions_returns_empty_list_if_no_sessions(self, sqlite_db):
         """Integration test for list_sessions method when no sessions exist."""
@@ -196,4 +204,6 @@ class TestFlushDatabase:
         # Verify nothing happened since the user declined the flush
         sessions = sqlite_db.list_sessions()
         assert len(sessions) == 1, "Expected the session to remain in the database."
-        assert sessions[0][0] == session, "Expected the session ID to match the saved session."
+        assert sessions[0][0] == session, (
+            "Expected the session ID to match the saved session."
+        )

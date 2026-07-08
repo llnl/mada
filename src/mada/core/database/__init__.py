@@ -18,4 +18,10 @@ from mada.core.database.sqlite import SQLiteChatDatabase
 from mada.core.database.db_factory import ChatDatabaseFactory
 from mada.core.database.session_manager import ChatSessionManager
 
-__all__ = ["BaseChatDatabase", "PostgreSQLChatDatabase", "SQLiteChatDatabase", "ChatDatabaseFactory", "ChatSessionManager"]
+__all__ = [
+    "BaseChatDatabase",
+    "PostgreSQLChatDatabase",
+    "SQLiteChatDatabase",
+    "ChatDatabaseFactory",
+    "ChatSessionManager",
+]

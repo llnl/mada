@@ -13,7 +13,9 @@ class TestSQLiteConfig:
         config = SQLiteConfig()
         assert config.path.parent.exists(), "'~/.mada/' directory should exist."
         assert "~" not in str(config.path)
-        assert str(config.path) == str(config.path.expanduser()), "SQLite path should be expanded correctly."
+        assert str(config.path) == str(config.path.expanduser()), (
+            "SQLite path should be expanded correctly."
+        )
 
 
 @pytest.mark.unit

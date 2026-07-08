@@ -55,11 +55,11 @@ class ChatSessionManager:
             their last updated time.
         delete_session: Deletes the current session from the database.
     """
-    
+
     def __init__(self, database_config: DatabaseConfig = None):
         """
         Constructor for the ChatSessionManager.
-        
+
         Args:
             database_config: The database configuration object to
                 use for connecting to the database. If no database
@@ -88,9 +88,9 @@ class ChatSessionManager:
         if database_config is None:
             database_config = SQLiteConfig()
         chat_db_factory = ChatDatabaseFactory()
-        chat_db  = chat_db_factory.create(database_config.type, database_config)
+        chat_db = chat_db_factory.create(database_config.type, database_config)
         return chat_db
-    
+
     def create_session_id(self) -> str:
         """
         Create a new chat session ID.
@@ -99,7 +99,7 @@ class ChatSessionManager:
             A new session ID.
         """
         return str(uuid.uuid4())
-    
+
     def create_new_session(self, session_id: str = None):
         """
         Save an empty session to the database.
@@ -110,7 +110,7 @@ class ChatSessionManager:
         if not session_id:
             session_id = self.current_session_id
         self.chat_db.create_session(session_id)
-    
+
     def select_session(self, session_id: str) -> List[Dict]:
         """
         Set the given session as the current session and return its history.
@@ -132,7 +132,7 @@ class ChatSessionManager:
             A list of messages for the given session.
         """
         return self.chat_db.load_session(self.current_session_id) or []
-    
+
     def add_message(self, role: str, message: str):
         """
         Add a message to the database.

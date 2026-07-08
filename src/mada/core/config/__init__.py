@@ -34,7 +34,12 @@ Modules:
 
 from mada.core.config.agents import AgentConfig
 from mada.core.config.app import AppConfig, load_config_from_json
-from mada.core.config.database import DatabaseConfig, PostgreSQLConfig, SQLiteConfig, load_database_config
+from mada.core.config.database import (
+    DatabaseConfig,
+    PostgreSQLConfig,
+    SQLiteConfig,
+    load_database_config,
+)
 from mada.core.config.interface import InterfaceConfig
 from mada.core.config.mcp_servers import MCPServerConfig
 from mada.core.config.models import (

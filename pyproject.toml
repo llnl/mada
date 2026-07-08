@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mada"
 description = "Multi-agent orchestration system for MADA workflows"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
@@ -47,6 +47,8 @@ tests = [
     "pytest",
     "pytest-asyncio",
     "testcontainers",
+    "pre-commit",
+    "ruff",
 ]
 
 # Documentation requirements

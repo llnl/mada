@@ -25,7 +25,9 @@ import click
 try:
     from fastapi import FastAPI, Header, HTTPException
     from fastapi.responses import JSONResponse, StreamingResponse
-except ImportError as exc:  # pragma: no cover - exercised only in missing dependency environments
+except (
+    ImportError
+) as exc:  # pragma: no cover - exercised only in missing dependency environments
     FastAPI = None
     Header = None
     HTTPException = None
@@ -37,7 +39,9 @@ else:
 
 try:
     import uvicorn
-except ImportError as exc:  # pragma: no cover - exercised only in missing dependency environments
+except (
+    ImportError
+) as exc:  # pragma: no cover - exercised only in missing dependency environments
     uvicorn = None
     UVICORN_IMPORT_ERROR = exc
 else:
@@ -183,7 +187,9 @@ class MADAOpenAIAPIService:
         )
         try:
             await orchestrator.__aenter__()
-            await orchestrator.initialize_orchestrator(self.config.agents, self.config.mcp_servers)
+            await orchestrator.initialize_orchestrator(
+                self.config.agents, self.config.mcp_servers
+            )
             self.orchestrator = orchestrator
         except BaseException as exc:
             await orchestrator.__aexit__(None, None, None)
@@ -223,7 +229,9 @@ class MADAOpenAIAPIService:
         await self.orchestrator.__aexit__(None, None, None)
         self.orchestrator = None
 
-    def validate_api_key(self, authorization: Optional[str], x_api_key: Optional[str]) -> None:
+    def validate_api_key(
+        self, authorization: Optional[str], x_api_key: Optional[str]
+    ) -> None:
         """
         Validate the caller-provided API key when one is configured.
 
@@ -273,7 +281,9 @@ class MADAOpenAIAPIService:
             chunks.append(chunk)
         return "".join(chunks)
 
-    async def stream_response(self, messages: list[dict[str, Any]]) -> AsyncGenerator[str, None]:
+    async def stream_response(
+        self, messages: list[dict[str, Any]]
+    ) -> AsyncGenerator[str, None]:
         """
         Yield OpenAI-compatible SSE events for a streaming response.
 
@@ -298,7 +308,9 @@ class MADAOpenAIAPIService:
             "object": "chat.completion.chunk",
             "created": created,
             "model": self.model_name,
-            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
         }
         yield f"data: {json.dumps(initial)}\n\n"
 
@@ -308,7 +320,9 @@ class MADAOpenAIAPIService:
                 "object": "chat.completion.chunk",
                 "created": created,
                 "model": self.model_name,
-                "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
+                "choices": [
+                    {"index": 0, "delta": {"content": chunk}, "finish_reason": None}
+                ],
             }
             yield f"data: {json.dumps(payload)}\n\n"
 
@@ -369,7 +383,9 @@ def create_openai_api_app(
     async def health() -> Dict[str, str]:
         return {
             "status": "ok",
-            "orchestrator_initialized": "true" if service.orchestrator is not None else "false",
+            "orchestrator_initialized": "true"
+            if service.orchestrator is not None
+            else "false",
         }
 
     async def get_models(
@@ -395,7 +411,9 @@ def create_openai_api_app(
         try:
             await service.ensure_started()
         except OrchestratorStartupError as exc:
-            configured_servers = ", ".join((service.config.mcp_servers or {}).keys()) or "none"
+            configured_servers = (
+                ", ".join((service.config.mcp_servers or {}).keys()) or "none"
+            )
             print(
                 "No MCP servers connected; returning 503 for /v1/chat/completions. "
                 f"Configured MCP servers: {configured_servers}",
@@ -406,14 +424,20 @@ def create_openai_api_app(
 
         requested_model = body.get("model")
         if requested_model and requested_model != service.model_name:
-            raise HTTPException(status_code=404, detail=f"Unknown model '{requested_model}'")
+            raise HTTPException(
+                status_code=404, detail=f"Unknown model '{requested_model}'"
+            )
 
         messages = body.get("messages")
         if not isinstance(messages, list) or not messages:
-            raise HTTPException(status_code=400, detail="'messages' must be a non-empty list")
+            raise HTTPException(
+                status_code=400, detail="'messages' must be a non-empty list"
+            )
 
         if body.get("stream", False):
-            return StreamingResponse(service.stream_response(messages), media_type="text/event-stream")
+            return StreamingResponse(
+                service.stream_response(messages), media_type="text/event-stream"
+            )
 
         content = await service.collect_response(messages)
         created = int(time.time())
@@ -422,11 +446,13 @@ def create_openai_api_app(
             "object": "chat.completion",
             "created": created,
             "model": service.model_name,
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }
+            ],
         }
         return JSONResponse(response)
 
@@ -512,8 +538,21 @@ def openai_api_entrypoint(
         "help_option_names": ["-h", "--help"],
     },
 )
-@click.option("--host", type=str, default="0.0.0.0", show_default=True, help="Host interface to bind.")
-@click.option("-p", "--port", type=int, default=8000, show_default=True, help="Port for the OpenAI-compatible API.")
+@click.option(
+    "--host",
+    type=str,
+    default="0.0.0.0",
+    show_default=True,
+    help="Host interface to bind.",
+)
+@click.option(
+    "-p",
+    "--port",
+    type=int,
+    default=8000,
+    show_default=True,
+    help="Port for the OpenAI-compatible API.",
+)
 @click.option(
     "--model-name",
     type=str,

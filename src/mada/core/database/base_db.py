@@ -53,7 +53,9 @@ class BaseChatDatabase(ABC):
         """
 
     @abstractmethod
-    def add_message(self, session_id: str, role: str, content: str, timestamp: datetime = None):
+    def add_message(
+        self, session_id: str, role: str, content: str, timestamp: datetime = None
+    ):
         """
         Add a single message to the messages table in the database.
 
@@ -111,9 +113,17 @@ class BaseChatDatabase(ABC):
             True if the user wants to flush the entire database. False otherwise.
         """
         valid_inputs = ["y", "n"]
-        user_input = input("Are you sure you want to flush the entire database? (y/n): ").strip().lower()
+        user_input = (
+            input("Are you sure you want to flush the entire database? (y/n): ")
+            .strip()
+            .lower()
+        )
         while user_input not in valid_inputs:
-            user_input = input("Invalid input. Use 'y' for 'yes' or 'n' for 'no': ").strip().lower()
+            user_input = (
+                input("Invalid input. Use 'y' for 'yes' or 'n' for 'no': ")
+                .strip()
+                .lower()
+            )
 
         if user_input == "y":
             return True

@@ -35,20 +35,22 @@ jobs:
       test-name: "docs"
       test-command: "mkdocs build --strict"
 
-  # lint:
-  #   uses: ./.github/workflows/test-job.yml
-  #   with:
-  #     python-version: 3.x
-  #     test-name: "linter"
-  #     test-command: "pre-commit run --all-files"
+  lint:
+    uses: ./.github/workflows/test-job.yml
+    with:
+      python-version: 3.x
+      test-name: "linter"
+      test-command: "pre-commit run --all-files"
 
   unit:
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     uses: ./.github/workflows/test-job.yml
     with:
+      runs-on: ${{ matrix.os }}
       python-version: ${{ matrix.python-version }}
       test-name: "unit"
       test-command: 'pytest -m unit --include-allocation-required tests/'
@@ -57,9 +59,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     uses: ./.github/workflows/test-job.yml
     with:
+      runs-on: ${{ matrix.os }}
       python-version: ${{ matrix.python-version }}
       test-name: "integration"
       test-command: 'pytest -m integration --include-allocation-required tests/'
@@ -68,9 +72,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     uses: ./.github/workflows/test-job.yml
     with:
+      runs-on: ${{ matrix.os }}
       python-version: ${{ matrix.python-version }}
       test-name: "e2e"
       test-command: 'pytest -m e2e --include-allocation-required tests/'

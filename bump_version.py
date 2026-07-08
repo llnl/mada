@@ -114,7 +114,9 @@ def prepend_changelog_section(path: Path, new_version: str) -> None:
             if line.startswith("### "):
                 if current_heading is not None:
                     body_text = "".join(current_lines).strip()
-                    if body_text and not all(is_blank_item(curr_line) for curr_line in current_lines):
+                    if body_text and not all(
+                        is_blank_item(curr_line) for curr_line in current_lines
+                    ):
                         sections.append(current_heading + body_text + "\n")
                 current_heading = line
                 current_lines = []
@@ -132,17 +134,24 @@ def prepend_changelog_section(path: Path, new_version: str) -> None:
         return new_header + "\n\n" + "\n".join(sections)
 
     if not path.exists():
-        path.write_text("# Changelog\n\n" + blank_unreleased + new_header + "\n", encoding="utf-8")
+        path.write_text(
+            "# Changelog\n\n" + blank_unreleased + new_header + "\n", encoding="utf-8"
+        )
         return
 
     existing = path.read_text(encoding="utf-8")
 
     if "## Unreleased" not in existing:
-        path.write_text(existing.rstrip() + "\n\n" + blank_unreleased + new_header + "\n", encoding="utf-8")
+        path.write_text(
+            existing.rstrip() + "\n\n" + blank_unreleased + new_header + "\n",
+            encoding="utf-8",
+        )
         return
 
     lines = existing.splitlines(keepends=True)
-    unreleased_idx = next(i for i, line in enumerate(lines) if line.startswith("## Unreleased"))
+    unreleased_idx = next(
+        i for i, line in enumerate(lines) if line.startswith("## Unreleased")
+    )
 
     next_section_idx = len(lines)
     for i in range(unreleased_idx + 1, len(lines)):

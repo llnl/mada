@@ -55,9 +55,13 @@ class ChatDatabaseFactory:
         Register built-in components.
         """
         self.register("sqlite", SQLiteChatDatabase)
-        self.register("postgresql", PostgreSQLChatDatabase, aliases=["postgres", "psql"])
+        self.register(
+            "postgresql", PostgreSQLChatDatabase, aliases=["postgres", "psql"]
+        )
 
-    def register(self, name: str, database_class: Any, aliases: List[str] = None) -> None:
+    def register(
+        self, name: str, database_class: Any, aliases: List[str] = None
+    ) -> None:
         """
         Register a new database implementation.
 
@@ -89,7 +93,9 @@ class ChatDatabaseFactory:
         """
         return list(self._registry.keys())
 
-    def _get_database_class(self, canonical_name: str, name_from_user: str) -> Dict[str, BaseChatDatabase]:
+    def _get_database_class(
+        self, canonical_name: str, name_from_user: str
+    ) -> Dict[str, BaseChatDatabase]:
         """
         Retrieve a registered database by its canonical name.
 
@@ -114,7 +120,8 @@ class ChatDatabaseFactory:
         if database_class is None:
             available = ", ".join(self.list_available())
             raise MADAUnsupportedDatabase(
-                f"Database '{name_from_user}' is not supported. " f"Available databases: {available}"
+                f"Database '{name_from_user}' is not supported. "
+                f"Available databases: {available}"
             )
 
         return database_class
@@ -148,4 +155,6 @@ class ChatDatabaseFactory:
             LOG.info(f"Created database '{canonical_name}'")
             return instance
         except Exception as e:
-            raise ValueError(f"Failed to create database '{canonical_name}': {e}") from e
+            raise ValueError(
+                f"Failed to create database '{canonical_name}': {e}"
+            ) from e

@@ -5,6 +5,7 @@
 Custom exceptions for MADA.
 """
 
+
 class MADAUnsupportedDatabase(Exception):
     """
     Used when trying to initialize a connection to an unsupported

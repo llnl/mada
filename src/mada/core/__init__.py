@@ -7,7 +7,6 @@ Core orchestration functionality.
 This module contains the fundamental components for orchestrating multi-agent workflows.
 """
 
-
 from mada.core.chat_clients import (
     BedrockAdapter,
     LivAIAdapter,

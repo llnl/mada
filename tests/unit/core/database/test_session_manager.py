@@ -88,7 +88,9 @@ class TestCreateSessionID:
 
     def test_create_session_id_returns_uuid_string(self, mock_factory):
         """Verify create_session_id returns the UUID string from uuid4."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="s1", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="s1", type="sqlite")
+        )
 
         with patch(
             "mada.core.database.session_manager.uuid.uuid4",
@@ -104,7 +106,9 @@ class TestCreateNewSession:
 
     def test_create_new_session_uses_provided_session_id(self, mock_factory):
         """Verify create_new_session creates a session with the supplied ID."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="current", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
 
         manager.create_new_session("new-session")
 
@@ -112,7 +116,9 @@ class TestCreateNewSession:
 
     def test_create_new_session_defaults_to_current_session(self, mock_factory):
         """Verify create_new_session falls back to the current session ID."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="current", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
 
         manager.create_new_session()
 
@@ -126,7 +132,9 @@ class TestSelectSession:
 
     def test_select_session_updates_current_and_loads_history(self, mock_factory):
         """Verify select_session switches the active session and loads history."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="current", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
         manager.chat_db.load_session.return_value = [{"role": "user", "content": "hi"}]
 
         history = manager.select_session("session-2")
@@ -143,14 +151,18 @@ class TestLoadHistory:
 
     def test_load_history_returns_empty_list_when_db_returns_none(self, mock_factory):
         """Verify load_history returns an empty list when the database returns None."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="current", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
         manager.chat_db.load_session.return_value = None
 
         assert manager.load_history() == []
 
     def test_load_history_returns_db_result(self, mock_factory):
         """Verify load_history returns the database-provided history."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="current", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
         expected = [{"role": "assistant", "content": "hello"}]
         manager.chat_db.load_session.return_value = expected
 
@@ -163,7 +175,9 @@ class TestAddMessage:
 
     def test_add_message_passes_current_session(self, mock_factory):
         """Verify add_message writes to the current session."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="current", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
 
         manager.add_message("user", "hello")
 
@@ -178,7 +192,9 @@ class TestListSessions:
 
     def test_list_sessions_delegates_to_db(self, mock_factory):
         """Verify list_sessions returns the database session list."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="current", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
         expected = [("s1", datetime.now(timezone.utc))]
         manager.chat_db.list_sessions.return_value = expected
 
@@ -192,7 +208,9 @@ class TestDeleteSession:
 
     def test_delete_session_uses_given_session_id(self, mock_factory):
         """Verify delete_session deletes the explicitly provided session."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="current", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
 
         manager.delete_session("to-delete")
 
@@ -200,7 +218,9 @@ class TestDeleteSession:
 
     def test_delete_session_defaults_to_current_session(self, mock_factory):
         """Verify delete_session falls back to the current session when omitted."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="current", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
 
         manager.delete_session()
 
@@ -214,7 +234,9 @@ class TestDeleteAllSessions:
 
     def test_delete_all_sessions_flushes_and_clears_current_session(self, mock_factory):
         """Verify delete_all_sessions flushes the database and clears state."""
-        manager = ChatSessionManager(database_config=MagicMock(session_id="current", type="sqlite"))
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
 
         manager.delete_all_sessions(confirm=False)
 

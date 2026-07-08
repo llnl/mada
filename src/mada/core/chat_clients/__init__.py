@@ -31,7 +31,10 @@ Modules:
 """
 
 from mada.core.chat_clients.bedrock_adapter import BedrockAdapter
-from mada.core.chat_clients.chat_client_factory import MADAChatClientFactory, chat_client_factory
+from mada.core.chat_clients.chat_client_factory import (
+    MADAChatClientFactory,
+    chat_client_factory,
+)
 from mada.core.chat_clients.livai_adapter import LivAIAdapter
 from mada.core.chat_clients.openai_adapter import OpenAIAdapter
 from mada.core.chat_clients.provider_adapter import ProviderAdapter

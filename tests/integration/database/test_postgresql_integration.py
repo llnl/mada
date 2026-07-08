@@ -201,7 +201,9 @@ class TestPostgreSQLChatDatabaseIntegration:
             """Integration test for delete_session method."""
             session_id = "test_delete_session_removes_data"
 
-            postgresql_db.add_message(session_id, "user", "Hello", datetime(2025, 12, 18, 17, 58, 43))
+            postgresql_db.add_message(
+                session_id, "user", "Hello", datetime(2025, 12, 18, 17, 58, 43)
+            )
             postgresql_db.delete_session(session_id)
 
             with postgresql_db._connect() as conn:
@@ -236,8 +238,12 @@ class TestPostgreSQLChatDatabaseIntegration:
             session_1 = "test_flush_database_removes_all_data_1"
             session_2 = "test_flush_database_removes_all_data_2"
 
-            postgresql_db.add_message(session_1, "user", "Hi", datetime(2025, 12, 18, 17, 58, 43))
-            postgresql_db.add_message(session_2, "assistant", "Hello", datetime(2025, 12, 18, 17, 59, 43))
+            postgresql_db.add_message(
+                session_1, "user", "Hi", datetime(2025, 12, 18, 17, 58, 43)
+            )
+            postgresql_db.add_message(
+                session_2, "assistant", "Hello", datetime(2025, 12, 18, 17, 59, 43)
+            )
 
             postgresql_db.flush_database()
 
@@ -246,11 +252,15 @@ class TestPostgreSQLChatDatabaseIntegration:
             mock_confirm.assert_called_once()
 
         @patch.object(PostgreSQLChatDatabase, "confirm_db_flush", return_value=False)
-        def test_flush_database_cancels_on_user_decline(self, mock_confirm, postgresql_db):
+        def test_flush_database_cancels_on_user_decline(
+            self, mock_confirm, postgresql_db
+        ):
             """Integration test that flush_database does not remove data if user declines."""
             session_id = "test_flush_database_cancels_on_user_decline"
 
-            postgresql_db.add_message(session_id, "user", "Hi", datetime(2025, 12, 18, 17, 58, 43))
+            postgresql_db.add_message(
+                session_id, "user", "Hi", datetime(2025, 12, 18, 17, 58, 43)
+            )
 
             postgresql_db.flush_database()
 

@@ -19,7 +19,9 @@ class TestCreate:
         Verify that a SQLite database instance can be created successfully.
         """
         factory = ChatDatabaseFactory()
-        sqlite_instance = factory.create("sqlite", SQLiteConfig(path=tmp_path / "test_basic_creation.db"))
+        sqlite_instance = factory.create(
+            "sqlite", SQLiteConfig(path=tmp_path / "test_basic_creation.db")
+        )
         assert isinstance(sqlite_instance, SQLiteChatDatabase)
 
     @pytest.mark.allocation_required

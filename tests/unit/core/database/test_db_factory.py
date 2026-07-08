@@ -55,7 +55,9 @@ class TestCreate:
         Test the creation of a database instance using an alias for a registered database type.
         """
         factory = ChatDatabaseFactory()
-        factory.register("dummy_db", dummy_valid_db_class, aliases=["dummy", "legacy_dummy"])
+        factory.register(
+            "dummy_db", dummy_valid_db_class, aliases=["dummy", "legacy_dummy"]
+        )
 
         dummy_instance1 = factory.create("dummy", DatabaseConfig)
         assert isinstance(dummy_instance1, dummy_valid_db_class)
@@ -103,7 +105,9 @@ class TestRegister:
         """
         factory = ChatDatabaseFactory()
 
-        factory.register("dummy_db", dummy_valid_db_class, aliases=["dummy", "legacy_dummy"])
+        factory.register(
+            "dummy_db", dummy_valid_db_class, aliases=["dummy", "legacy_dummy"]
+        )
 
         assert "dummy_db" in factory._registry
         assert "dummy" in factory._aliases

@@ -11,7 +11,10 @@ import pytest
 import logging
 
 from mada.core.config import (
-    OpenAIModelConfig, SQLiteConfig, AgentConfig, MCPServerConfig
+    OpenAIModelConfig,
+    SQLiteConfig,
+    AgentConfig,
+    MCPServerConfig,
 )
 from mada.core.orchestrator import MADAOrchestrator
 from mada.core.database import ChatSessionManager
@@ -24,7 +27,7 @@ def model_config():
         provider="openai",
         model="gpt-4",
         api_key="sk-test-fake-key-for-testing",  # Fake key for testing
-        base_url="https://api.openai.com/v1"
+        base_url="https://api.openai.com/v1",
     )
 
 
@@ -32,6 +35,7 @@ def model_config():
 def database_config():
     """Create a test database config using in-memory database."""
     import tempfile
+
     # Create a temporary file for the test database
     temp_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
     temp_db.close()
@@ -53,7 +57,7 @@ def failing_mcp_server():
     return MCPServerConfig(
         transport="streamable-http",
         url="http://localhost:9999/nonexistent",  # This port should be closed
-        description="Test MCP server that will fail to connect"
+        description="Test MCP server that will fail to connect",
     )
 
 
@@ -64,7 +68,7 @@ def agent_with_failing_mcp(failing_mcp_server):
         agent_name="TestAgent",
         description="Test agent with failing MCP server",
         instructions="You are a test agent.",
-        mcp_servers=["failing_server"]
+        mcp_servers=["failing_server"],
     )
 
 
@@ -75,7 +79,7 @@ async def test_failed_mcp_connection_does_not_block(
     session_manager,
     failing_mcp_server,
     agent_with_failing_mcp,
-    caplog
+    caplog,
 ):
     """
     Test that a failed MCP connection doesn't block the system.
@@ -89,14 +93,11 @@ async def test_failed_mcp_connection_does_not_block(
     mcp_servers = {"failing_server": failing_mcp_server}
 
     async with MADAOrchestrator(
-        model_config=model_config,
-        session_manager=session_manager
+        model_config=model_config, session_manager=session_manager
     ) as orchestrator:
-
         # Initialize orchestrator with failing MCP server
         status, tools = await orchestrator.initialize_orchestrator(
-            [agent_with_failing_mcp],
-            mcp_servers
+            [agent_with_failing_mcp], mcp_servers
         )
 
         # Verify that initialization completed (even with failed server)
@@ -104,7 +105,10 @@ async def test_failed_mcp_connection_does_not_block(
         assert "Connection Successful" in status or "WARNING" in status
 
         # Verify that the error was logged
-        assert any("Cannot connect to MCP server" in record.message for record in caplog.records)
+        assert any(
+            "Cannot connect to MCP server" in record.message
+            for record in caplog.records
+        )
 
         # Verify that no tools were registered (since the server failed)
         assert len(tools) == 0
@@ -123,10 +127,7 @@ async def test_failed_mcp_connection_does_not_block(
 
 
 @pytest.mark.asyncio
-async def test_multiple_failed_mcp_connections(
-    model_config,
-    session_manager
-):
+async def test_multiple_failed_mcp_connections(model_config, session_manager):
     """
     Test that multiple failed MCP connections don't block the system.
     """
@@ -136,12 +137,12 @@ async def test_multiple_failed_mcp_connections(
         "failing_server_1": MCPServerConfig(
             transport="streamable-http",
             url="http://localhost:9999/server1",
-            description="Test server 1"
+            description="Test server 1",
         ),
         "failing_server_2": MCPServerConfig(
             transport="streamable-http",
             url="http://localhost:9998/server2",
-            description="Test server 2"
+            description="Test server 2",
         ),
     }
 
@@ -149,17 +150,14 @@ async def test_multiple_failed_mcp_connections(
         agent_name="TestAgent",
         description="Test agent with multiple failing MCP servers",
         instructions="You are a test agent.",
-        mcp_servers=["failing_server_1", "failing_server_2"]
+        mcp_servers=["failing_server_1", "failing_server_2"],
     )
 
     async with MADAOrchestrator(
-        model_config=model_config,
-        session_manager=session_manager
+        model_config=model_config, session_manager=session_manager
     ) as orchestrator:
-
         status, tools = await orchestrator.initialize_orchestrator(
-            [agent_config],
-            mcp_servers
+            [agent_config], mcp_servers
         )
 
         # Verify initialization completed
@@ -178,8 +176,7 @@ async def test_multiple_failed_mcp_connections(
 
 @pytest.mark.asyncio
 async def test_mixed_successful_and_failed_mcp_connections(
-    model_config,
-    session_manager
+    model_config, session_manager
 ):
     """
     Test that when some MCP servers succeed and others fail,
@@ -192,7 +189,7 @@ async def test_mixed_successful_and_failed_mcp_connections(
         "failing_server": MCPServerConfig(
             transport="streamable-http",
             url="http://localhost:9999/fail",
-            description="Test failing server"
+            description="Test failing server",
         ),
     }
 
@@ -200,18 +197,15 @@ async def test_mixed_successful_and_failed_mcp_connections(
         agent_name="TestAgent",
         description="Test agent",
         instructions="You are a test agent.",
-        mcp_servers=["failing_server"]
+        mcp_servers=["failing_server"],
     )
 
     async with MADAOrchestrator(
-        model_config=model_config,
-        session_manager=session_manager
+        model_config=model_config, session_manager=session_manager
     ) as orchestrator:
-
         # This should not raise an exception or block
         status, tools = await orchestrator.initialize_orchestrator(
-            [agent_config],
-            mcp_servers
+            [agent_config], mcp_servers
         )
 
         assert status is not None
@@ -220,10 +214,7 @@ async def test_mixed_successful_and_failed_mcp_connections(
 
 
 @pytest.mark.asyncio
-async def test_no_async_generator_warnings_on_cleanup(
-    model_config,
-    session_manager
-):
+async def test_no_async_generator_warnings_on_cleanup(model_config, session_manager):
     """
     Test that failing MCP connections don't trigger async generator warnings during cleanup.
 
@@ -240,7 +231,7 @@ async def test_no_async_generator_warnings_on_cleanup(
             "failing_server": MCPServerConfig(
                 transport="streamable-http",
                 url="http://localhost:9999/test",
-                description="Test failing server"
+                description="Test failing server",
             )
         }
 
@@ -248,25 +239,25 @@ async def test_no_async_generator_warnings_on_cleanup(
             agent_name="TestAgent",
             description="Test agent",
             instructions="You are a test agent.",
-            mcp_servers=["failing_server"]
+            mcp_servers=["failing_server"],
         )
 
         async with MADAOrchestrator(
-            model_config=model_config,
-            session_manager=session_manager
+            model_config=model_config, session_manager=session_manager
         ) as orchestrator:
             status, tools = await orchestrator.initialize_orchestrator(
-                [agent_config],
-                mcp_servers
+                [agent_config], mcp_servers
             )
             assert status is not None
 
         # Check for async generator warnings
         async_warnings = [
-            warning for warning in w
+            warning
+            for warning in w
             if "async_generator" in str(warning.message).lower()
         ]
 
         # There should be no async generator warnings
-        assert len(async_warnings) == 0, \
+        assert len(async_warnings) == 0, (
             f"Found {len(async_warnings)} async generator warning(s): {[str(w.message) for w in async_warnings]}"
+        )

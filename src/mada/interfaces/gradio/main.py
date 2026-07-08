@@ -24,7 +24,11 @@ from mada.interfaces.gradio.mcp_client_wrapper import MCPGradioClientSession
 
 def _load_asset_text(filename: str) -> str:
     package = "mada.interfaces.gradio.assets"
-    return importlib.resources.files(package).joinpath(filename).read_text(encoding="utf-8")
+    return (
+        importlib.resources.files(package)
+        .joinpath(filename)
+        .read_text(encoding="utf-8")
+    )
 
 
 _GRADIO_CSS = _load_asset_text("gradio.css")
@@ -34,24 +38,24 @@ _GRADIO_JS = _load_asset_text("gradio.js")
 def setup_logging():
     """Configure logging for the Gradio interface."""
     # Get log level from environment variable, default to INFO
-    log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
+    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 
     # Configure root logger
     logging.basicConfig(
         level=getattr(logging, log_level, logging.INFO),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         stream=sys.stdout,
-        force=True  # Force reconfiguration
+        force=True,  # Force reconfiguration
     )
 
     # Set specific loggers
-    logging.getLogger('mada').setLevel(logging.INFO)
-    logging.getLogger('mada-gradio').setLevel(logging.INFO)
+    logging.getLogger("mada").setLevel(logging.INFO)
+    logging.getLogger("mada-gradio").setLevel(logging.INFO)
 
     # Reduce noise from other libraries
-    logging.getLogger('httpx').setLevel(logging.WARNING)
-    logging.getLogger('httpcore').setLevel(logging.WARNING)
-    logging.getLogger('gradio').setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("gradio").setLevel(logging.WARNING)
 
     print(f"Logging configured at {log_level} level")
 
@@ -73,18 +77,20 @@ def run_gradio(config: AppConfig):
         database_config=config.database,
         mcp_servers=config.mcp_servers,
     )
-    gradio_interface = MADAMultiAgentGradioInterface(config.interface, config.agents, client)
+    gradio_interface = MADAMultiAgentGradioInterface(
+        config.interface, config.agents, client
+    )
     interface = gradio_interface.create_interface()
     interface.queue(max_size=20)
-    
+
     # Get port and share settings from interface config if available
     port = 7860
     share = False
-    
+
     if config.interface:
-        port = getattr(config.interface, 'port', 7860)
-        share = getattr(config.interface, 'share', False)
-    
+        port = getattr(config.interface, "port", 7860)
+        share = getattr(config.interface, "share", False)
+
     interface.launch(
         server_name="0.0.0.0",
         server_port=port,
@@ -98,10 +104,10 @@ def run_gradio(config: AppConfig):
 def create_gradio_app(config_path: str) -> gr.Blocks:
     """
     Create a Gradio application from a configuration file.
-    
+
     Args:
         config_path: Path to the configuration file
-        
+
     Returns:
         Gradio Blocks interface
     """
@@ -112,7 +118,9 @@ def create_gradio_app(config_path: str) -> gr.Blocks:
         database_config=config.database,
         mcp_servers=config.mcp_servers,
     )
-    gradio_interface = MADAMultiAgentGradioInterface(config.interface, config.agents, client)
+    gradio_interface = MADAMultiAgentGradioInterface(
+        config.interface, config.agents, client
+    )
     return gradio_interface.create_interface()
 
 
@@ -138,7 +146,9 @@ def gradio_entrypoint(port: int | None, share: bool, config_file: str):
         config = load_config_from_json(config_file)
 
         if not config.interface:
-            print("No Gradio interface settings provided. Make sure your configuration file has an 'interface' section.")
+            print(
+                "No Gradio interface settings provided. Make sure your configuration file has an 'interface' section."
+            )
             sys.exit(2)
 
         if port is not None:
