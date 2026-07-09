@@ -59,7 +59,7 @@ class MCPGradioClientSession:
         self.session_manager = ChatSessionManager(database_config)
         self.session_bearer_token = None  # Store session bearer token
         self._last_task_status_markdown = ""
-        self._display_histories: Dict[str, List[Dict[str, str]]] = {}
+        self._display_history: List[Dict[str, str]] = []
         self._displayed_task_results: Set[str] = set()
 
     async def connect_servers(
@@ -184,6 +184,27 @@ class MCPGradioClientSession:
         """
         return self.session_manager.chat_db.load_session(session_id) or []
 
+    def _get_active_display_history(
+        self, history: List | None = None
+    ) -> List[Dict[str, str]]:
+        """
+        Return the in-memory history for the current active session.
+
+        Args:
+            history: Fallback history from the Gradio component state.
+
+        Returns:
+            A copy of the active display history.
+        """
+        if self._display_history:
+            return list(self._display_history)
+        if history is not None:
+            return list(history)
+        current_session_id = self.session_manager.current_session_id
+        if not current_session_id:
+            return []
+        return list(self._load_session_history(current_session_id))
+
     def update_session_choices(self) -> gr.update:
         """
         Update the list of chat sessions.
@@ -206,7 +227,7 @@ class MCPGradioClientSession:
         new_id = self.session_manager.create_session_id()
         self.session_manager.create_new_session(new_id)
         self.session_manager.select_session(new_id)
-        self._display_histories[new_id] = []
+        self._display_history = []
         updated_sessions = self.list_sessions()
         selected = self._find_session_label(new_id)
         return gr.update(
@@ -247,7 +268,7 @@ class MCPGradioClientSession:
         session_id = self._extract_id_from_label(session_label)
 
         history = self.session_manager.select_session(session_id)
-        self._display_histories[session_id] = list(history)
+        self._display_history = list(history)
 
         return history
 
@@ -266,15 +287,31 @@ class MCPGradioClientSession:
         if not session_label:
             # Return current state unchanged
             updated_sessions = self.list_sessions()
-            return gr.update(choices=updated_sessions, value=None), []
+            selected = self._find_session_label(self.session_manager.current_session_id)
+            return gr.update(
+                choices=updated_sessions, value=selected
+            ), self._get_active_display_history()
 
         session_id = self._extract_id_from_label(session_label)
+        was_current_session = session_id == self.session_manager.current_session_id
         self.session_manager.delete_session(session_id)
-        self._display_histories.pop(session_id, None)
         updated_sessions = self.list_sessions()
+        if not updated_sessions:
+            self.session_manager.current_session_id = None
+            self._display_history = []
+            return gr.update(choices=[], value=None), []
+
+        if was_current_session:
+            fallback_label = updated_sessions[0]
+            fallback_history = self.select_session(fallback_label)
+            return gr.update(
+                choices=updated_sessions, value=fallback_label
+            ), fallback_history
+
+        selected = self._find_session_label(self.session_manager.current_session_id)
         return gr.update(
-            choices=updated_sessions, value=None
-        ), []  # update sessions list, clear chat history
+            choices=updated_sessions, value=selected
+        ), self._get_active_display_history()
 
     def delete_all_sessions(self) -> Tuple[gr.update, List]:
         """
@@ -289,7 +326,7 @@ class MCPGradioClientSession:
             LOG.info("Attempting to delete all sessions")
             self.session_manager.delete_all_sessions(confirm=False)
             LOG.info("Successfully deleted all sessions")
-            self._display_histories.clear()
+            self._display_history = []
             self._displayed_task_results.clear()
             return gr.update(choices=[], value=None), []
         except Exception as e:
@@ -324,12 +361,7 @@ class MCPGradioClientSession:
             return
 
         try:
-            session_id = self.session_manager.current_session_id
-            display_history = list(
-                self._display_histories.get(
-                    session_id, history if history is not None else []
-                )
-            )
+            display_history = self._get_active_display_history(history)
             (
                 task_id,
                 task,
@@ -344,7 +376,7 @@ class MCPGradioClientSession:
 
                     display_history.append({"role": "user", "content": message})
                     display_history.append({"role": "assistant", "content": response})
-                    self._display_histories[session_id] = display_history
+                    self._display_history = display_history
                     yield response
                     return
 
@@ -361,7 +393,7 @@ class MCPGradioClientSession:
                         ),
                     }
                 )
-                self._display_histories[session_id] = display_history
+                self._display_history = display_history
                 yield (
                     f"[{task_id}] Started in background. "
                     "Use the Task Status panel below to monitor progress."
@@ -391,12 +423,7 @@ class MCPGradioClientSession:
         Returns:
             Updated chatbot history and textbox update.
         """
-        session_id = self.session_manager.current_session_id
-        display_history = list(
-            self._display_histories.get(
-                session_id, history if history is not None else []
-            )
-        )
+        display_history = self._get_active_display_history(history)
 
         if not message or not message.strip():
             return display_history, gr.skip()
@@ -405,11 +432,11 @@ class MCPGradioClientSession:
         async for response in self.process_message(message, history, agent_table):
             last_response = response
 
-        updated_history = list(self._display_histories.get(session_id, display_history))
+        updated_history = self._get_active_display_history(display_history)
         if last_response and updated_history == display_history:
             updated_history.append({"role": "user", "content": message})
             updated_history.append({"role": "assistant", "content": last_response})
-            self._display_histories[session_id] = updated_history
+            self._display_history = updated_history
 
         return updated_history, ""
 
@@ -435,12 +462,16 @@ class MCPGradioClientSession:
 
         return "\n".join(lines)
 
-    async def refresh_chat_and_task_status(self, session_label: str) -> Tuple[Any, str]:
+    async def refresh_chat_and_task_status(
+        self, _session_label: str
+    ) -> Tuple[Any, str]:
         """
         Refresh the chat transcript and task summary for background mode.
 
         Args:
-            session_label: Currently selected session label.
+            _session_label: Currently selected session label. The wrapper
+                uses the session manager's current selection as the only
+                active session.
         Returns:
             Tuple of chatbot history update and task-status markdown.
         """
@@ -451,11 +482,7 @@ class MCPGradioClientSession:
         else:
             self._last_task_status_markdown = task_status
 
-        session_id = ""
-        if session_label:
-            session_id = self._extract_id_from_label(session_label)
-        elif self.session_manager.current_session_id:
-            session_id = self.session_manager.current_session_id
+        session_id = self.session_manager.current_session_id
 
         if not session_id:
             return gr.skip(), task_status_output
@@ -464,20 +491,16 @@ class MCPGradioClientSession:
             return gr.skip(), task_status_output
 
         task_snapshot = await self.orchestrator.get_task_snapshot()
-        display_history = list(
-            self._display_histories.get(
-                session_id, self._load_session_history(session_id)
-            )
-        )
+        display_history = self._get_active_display_history()
         history_changed = False
 
         relevant_tasks = [
             (task_id, task_state)
             for task_id, task_state in task_snapshot.items()
-            if task_state.get("session_id") == session_id
+            if task_state.get("origin_session_id") == session_id
         ]
         if not relevant_tasks:
-            self._display_histories.setdefault(session_id, display_history)
+            self._display_history = display_history
             return gr.skip(), task_status_output
 
         for task_id, task_state in relevant_tasks:
@@ -493,10 +516,10 @@ class MCPGradioClientSession:
                 history_changed = True
 
         if not history_changed:
-            self._display_histories.setdefault(session_id, display_history)
+            self._display_history = display_history
             return gr.skip(), task_status_output
 
-        self._display_histories[session_id] = display_history
+        self._display_history = display_history
         return display_history, task_status_output
 
     async def cleanup(self):

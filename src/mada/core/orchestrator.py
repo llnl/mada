@@ -1104,7 +1104,9 @@ Guidelines:
                 "status": "pending",
                 "message": message,
                 "result": "",
-                "session_id": getattr(self.session_manager, "current_session_id", ""),
+                "origin_session_id": getattr(
+                    self.session_manager, "current_session_id", ""
+                ),
             }
 
             def _done_callback(
@@ -1180,7 +1182,12 @@ Guidelines:
 
             task_state = self._task_results.setdefault(
                 task_id,
-                {"status": "pending", "message": "", "result": "", "session_id": ""},
+                {
+                    "status": "pending",
+                    "message": "",
+                    "result": "",
+                    "origin_session_id": "",
+                },
             )
             try:
                 task_state["result"] = done_task.result()
