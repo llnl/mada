@@ -94,14 +94,33 @@ class MADAMultiAgentGradioInterface:
         """
         return gr.Accordion("MCP Server Connection", open=True)
 
-    def _chat_placeholder(self) -> str:
+    def create_chat_interface(self, agent_table: gr.Dataframe) -> gr.ChatInterface:
         """
-        Return the configured chat input placeholder text.
+        Create the chat interface component.
+
+        Args:
+            agent_table: The agent configuration table to include as input
+
+        Returns:
+            The configured Gradio chat interface component
         """
         placeholder = "Describe your workflow or ask for help..."
         if self.interface_config and hasattr(self.interface_config, "chat_placeholder"):
             placeholder = self.interface_config.chat_placeholder
-        return placeholder
+
+        chatbot = gr.Chatbot(
+            label="Chat",
+            height=480,
+            elem_id="mada-chatbot",
+        )
+
+        return gr.ChatInterface(
+            fn=self.client.process_message,
+            chatbot=chatbot,
+            textbox=gr.Textbox(label="Your Message", placeholder=placeholder),
+            additional_inputs=self.get_additional_chat_inputs(agent_table),
+            fill_height=True,
+        )
 
     def create_interface(self) -> gr.Blocks:
         """
@@ -203,38 +222,10 @@ class MADAMultiAgentGradioInterface:
                     )
                     task_refresh = gr.Timer(value=0.5)
 
-                    chatbot = gr.Chatbot(
-                        label="Chat",
-                        height=480,
-                        elem_id="mada-chatbot",
-                    )
-                    with gr.Row():
-                        chat_input = gr.Textbox(
-                            label="Your Message",
-                            placeholder=self._chat_placeholder(),
-                            scale=6,
-                        )
-                        send_button = gr.Button("Send", variant="primary", scale=1)
+                    # Chat interface
+                    chat_interface = self.create_chat_interface(agent_table)
 
-            submit_inputs = [
-                chat_input,
-                chatbot,
-                *self.get_additional_chat_inputs(agent_table),
-            ]
-            submit_outputs = [chatbot, chat_input]
-
-            chat_input.submit(
-                fn=self.client.submit_chat_message,
-                inputs=submit_inputs,
-                outputs=submit_outputs,
-                show_progress="hidden",
-            )
-            send_button.click(
-                fn=self.client.submit_chat_message,
-                inputs=submit_inputs,
-                outputs=submit_outputs,
-                show_progress="hidden",
-            )
+            chatbot = chat_interface.chatbot
 
             task_refresh.tick(
                 fn=self.client.refresh_chat_and_task_status,
@@ -255,19 +246,24 @@ class MADAMultiAgentGradioInterface:
             new_chat_btn.click(
                 fn=self.client.create_new_session,
                 inputs=None,
-                outputs=[session_list, chatbot],  # set choices, value, history
+                outputs=[
+                    session_list,
+                    chat_interface.chatbot,
+                ],  # set choices, value, history
             )
 
             # Selecting a session -> load history into chatbot
             session_list.change(
-                fn=self.client.select_session, inputs=session_list, outputs=chatbot
+                fn=self.client.select_session,
+                inputs=session_list,
+                outputs=chat_interface.chatbot,
             )
 
             # Deleting a session
             delete_chat_btn.click(
                 fn=self.client.delete_session,
                 inputs=session_list,
-                outputs=[session_list, chatbot],
+                outputs=[session_list, chat_interface.chatbot],
             )
 
             # Show confirmation panel when "Delete ALL chats" is clicked
@@ -281,7 +277,7 @@ class MADAMultiAgentGradioInterface:
             confirm_delete_all_btn.click(
                 fn=self.client.delete_all_sessions,
                 inputs=None,
-                outputs=[session_list, chatbot],
+                outputs=[session_list, chat_interface.chatbot],
             ).then(
                 # Hide confirmation panel after deletion
                 fn=lambda: gr.update(visible=False),
