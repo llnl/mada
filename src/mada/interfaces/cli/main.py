@@ -31,6 +31,7 @@ class MADACLIInterface:
     Uses the core MADAOrchestrator for all orchestration logic,
     providing a clean separation between UI and core functionality.
     """
+
     def __init__(self, config: AppConfig, blocking: bool = False):
         """
         Initialize the CLI with configuration.
@@ -242,10 +243,6 @@ class MADACLIInterface:
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
 
-    async def _prompt_input(self) -> str:
-        """Read one line of terminal input without blocking the event loop."""
-        return await asyncio.to_thread(input, "\nYou: ")
-
     async def _collect_response(self, user_input: str) -> str:
         """Collect the full streamed response for one query."""
         if self.orchestrator is None:
@@ -256,22 +253,27 @@ class MADACLIInterface:
             response_chunks.append(response_chunk)
         return "".join(response_chunks)
 
-    def submit_query(self, user_input: str) -> str:
+    async def run_query(self, user_input: str) -> None:
         """
-        Start a query in the background and return a task identifier.
+        Run a query either in blocking or background mode.
 
         Args:
             user_input: Query text to send to the orchestrator.
-
-        Returns:
-            Background task identifier.
         """
+        if self.blocking:
+            response = await self._collect_response(user_input)
+            print(response)
+            print("")
+            return
+
         self.task_counter += 1
         task_id = f"task-{self.task_counter}"
         task = asyncio.create_task(self._collect_response(user_input))
         self.pending_tasks[task_id] = task
 
-        def _done_callback(done_task: asyncio.Task[str], tracked_task_id: str = task_id) -> None:
+        def _done_callback(
+            done_task: asyncio.Task[str], tracked_task_id: str = task_id
+        ) -> None:
             try:
                 result = done_task.result()
                 self.task_results[tracked_task_id] = result
@@ -288,22 +290,7 @@ class MADACLIInterface:
                 self.pending_tasks.pop(tracked_task_id, None)
 
         task.add_done_callback(_done_callback)
-        return task_id
-
-    async def run_query_blocking(self, user_input: str) -> str:
-        """
-        Run one query to completion before returning to the prompt.
-
-        Args:
-            user_input: Query text to send to the orchestrator.
-
-        Returns:
-            Full assistant response.
-        """
-        response = await self._collect_response(user_input)
-        print(response)
-        print("")
-        return response
+        print(f"[{task_id}] Started in background.\n")
 
     async def run(self):
         """Run the interactive CLI session."""
@@ -359,13 +346,15 @@ class MADACLIInterface:
                 print("\nChat with the agents (type 'quit' to exit)")
                 print(f"Query mode: {'blocking' if self.blocking else 'background'}")
                 if not self.blocking:
-                    print("Type 'tasks' to list pending and completed background queries.")
+                    print(
+                        "Type 'tasks' to list pending and completed background queries."
+                    )
                 print("-" * 50)
 
                 # Interactive chat loop
                 while True:
                     try:
-                        user_input = (await self._prompt_input()).strip()
+                        user_input = (await asyncio.to_thread(input, "\nYou: ")).strip()
 
                         if user_input.lower() in ["quit", "exit", "q"]:
                             if self.pending_tasks:
@@ -386,11 +375,7 @@ class MADACLIInterface:
                         print("\nAgents:")
                         print("-" * 20)
 
-                        if self.blocking:
-                            await self.run_query_blocking(user_input)
-                        else:
-                            task_id = self.submit_query(user_input)
-                            print(f"[{task_id}] Started in background.\n")
+                        await self.run_query(user_input)
 
                     except KeyboardInterrupt:
                         print("\n\nGoodbye!")

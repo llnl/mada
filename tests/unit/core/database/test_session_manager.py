@@ -168,6 +168,7 @@ class TestLoadHistory:
 
         assert manager.load_history() == expected
 
+
 class TestAddMessage:
     """
     Tests for the `add_message` method of `ChatSessionManager`.
@@ -182,7 +183,6 @@ class TestAddMessage:
         manager.add_message("user", "hello")
 
         manager.chat_db.add_message.assert_called_once_with("current", "user", "hello")
-
 
 
 class TestListSessions:

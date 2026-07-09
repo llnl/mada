@@ -878,9 +878,8 @@ class TestMADACLICmd:
                 patch.object(
                     MADACLIInterface, "startup_session_menu", return_value=True
                 ),
-                patch.object(
-                    MADACLIInterface,
-                    "_prompt_input",
+                patch(
+                    "mada.interfaces.cli.main.asyncio.to_thread",
                     new=AsyncMock(side_effect=["quit"]),
                 ),
                 patch("builtins.print") as mock_print,
@@ -931,9 +930,8 @@ class TestMADACLICmd:
                 patch.object(
                     MADACLIInterface, "startup_session_menu", return_value=True
                 ),
-                patch.object(
-                    MADACLIInterface,
-                    "_prompt_input",
+                patch(
+                    "mada.interfaces.cli.main.asyncio.to_thread",
                     new=AsyncMock(side_effect=["hello", "quit"]),
                 ),
                 patch("builtins.print") as mock_print,
@@ -950,11 +948,11 @@ class TestMADACLICmd:
                 assert "chunk2" in printed_texts
 
         @pytest.mark.asyncio
-        async def test_cli_interface_run_submits_background_query_by_default(
+        async def test_cli_interface_run_uses_background_query_mode_by_default(
             self, create_dummy_config: Callable
         ):
             """
-            Test that the CLI submits queries in the background by default.
+            Test that the CLI routes queries through background mode by default.
             """
             config = create_dummy_config()
 
@@ -971,21 +969,20 @@ class TestMADACLICmd:
                 patch.object(
                     MADACLIInterface, "startup_session_menu", return_value=True
                 ),
-                patch.object(
-                    MADACLIInterface,
-                    "_prompt_input",
+                patch(
+                    "mada.interfaces.cli.main.asyncio.to_thread",
                     new=AsyncMock(side_effect=["hello", "quit"]),
                 ),
                 patch.object(
-                    MADACLIInterface, "submit_query", return_value="task-1"
-                ) as mock_submit,
+                    MADACLIInterface, "run_query", new=AsyncMock()
+                ) as mock_run_query,
                 patch("builtins.print") as mock_print,
             ):
                 cli = MADACLIInterface(config)
                 await cli.run()
 
-                mock_submit.assert_called_once_with("hello")
+                mock_run_query.assert_awaited_once_with("hello")
                 printed_texts = "".join(
                     str(call.args[0]) for call in mock_print.call_args_list
                 )
-                assert "Started in background" in printed_texts
+                assert "Query mode: background" in printed_texts
