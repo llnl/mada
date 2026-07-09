@@ -246,10 +246,7 @@ class MADAMultiAgentGradioInterface:
             new_chat_btn.click(
                 fn=self.client.create_new_session,
                 inputs=None,
-                outputs=[
-                    session_list,
-                    chat_interface.chatbot,
-                ],  # set choices, value, history
+                outputs=[session_list, chatbot],  # set choices, value, history
             )
 
             # Selecting a session -> load history into chatbot
