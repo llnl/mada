@@ -15,7 +15,7 @@ import logging
 import sys
 import traceback
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Tuple, Type, AsyncGenerator
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, Type, Union
 from contextlib import AsyncExitStack
 import httpx
 import httpcore
@@ -83,6 +83,11 @@ class MADAOrchestrator(MCPAgentManager):
         self._next_turn_id = 1
         self._next_turn_commit_id = 1
         self._completed_turns: Dict[int, Dict[str, Any]] = {}
+        self._task_lock = asyncio.Lock()
+        self._next_background_task_id = 1
+        self._pending_tasks: Dict[str, asyncio.Task[str]] = {}
+        self._task_results: Dict[str, Dict[str, str]] = {}
+        self._hidden_task_ids: Set[str] = set()
         self._agent_descriptions = {}
         self._mcp_tool_count = 0
         # Initialize the database
@@ -1038,6 +1043,189 @@ Guidelines:
                 traceback.print_exc()
                 yield error_msg
 
+    async def collect_message_response(self, message: str) -> str:
+        """
+        Collect a streamed assistant response into a single string.
+
+        Args:
+            message: User input message.
+
+        Returns:
+            Full assistant response, including any emitted tool-call notices.
+        """
+        response_chunks = []
+        async for response_chunk in self.process_message(message):
+            response_chunks.append(response_chunk)
+        return "".join(response_chunks)
+
+    async def submit_message(
+        self, message: str, blocking: bool = True
+    ) -> Union[str, asyncio.Task[str]]:
+        """
+        Submit a user message in either blocking or background mode.
+
+        This provides a small shared convenience layer for interfaces that want
+        either the fully collected response or an immediately scheduled task that
+        will produce that response.
+
+        Args:
+            message: User input message.
+            blocking: If True, await and return the full response string. If
+                False, return an `asyncio.Task` that will resolve to that string.
+
+        Returns:
+            The full response string in blocking mode, or a task producing that
+            string in background mode.
+        """
+        if blocking:
+            return await self.collect_message_response(message)
+        return asyncio.create_task(self.collect_message_response(message))
+
+    async def _register_background_task(
+        self, message: str, task: asyncio.Task[str]
+    ) -> str:
+        """
+        Register a background task with the shared task tracker.
+
+        Args:
+            message: User input message associated with the task.
+            task: Scheduled task producing the final response string.
+
+        Returns:
+            Stable task identifier for tracking the background run.
+        """
+        async with self._task_lock:
+            task_id = f"task-{self._next_background_task_id}"
+            self._next_background_task_id += 1
+
+            self._hidden_task_ids.discard(task_id)
+            self._pending_tasks[task_id] = task
+            self._task_results[task_id] = {
+                "status": "pending",
+                "message": message,
+                "result": "",
+                "session_id": getattr(self.session_manager, "current_session_id", ""),
+            }
+
+            def _done_callback(
+                done_task: asyncio.Task[str], tracked_task_id: str = task_id
+            ) -> None:
+                asyncio.create_task(
+                    self._finalize_background_task(tracked_task_id, done_task)
+                )
+
+            task.add_done_callback(_done_callback)
+            return task_id
+
+    async def start_background_message(
+        self, message: str
+    ) -> Tuple[str, asyncio.Task[str]]:
+        """
+        Start processing a user message in the background.
+
+        Args:
+            message: User input message.
+
+        Returns:
+            Stable task identifier plus the scheduled task handle.
+        """
+        task = asyncio.create_task(self.collect_message_response(message))
+        task_id = await self._register_background_task(message, task)
+        return task_id, task
+
+    async def start_observed_background_message(
+        self, message: str
+    ) -> Tuple[str, asyncio.Task[str], asyncio.Queue[Optional[str]]]:
+        """
+        Start a tracked background task and expose its streamed chunks.
+
+        Args:
+            message: User input message.
+
+        Returns:
+            Task identifier, scheduled task handle, and a queue containing
+            streamed chunks followed by a `None` sentinel when complete.
+        """
+        chunk_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+
+        async def _runner() -> str:
+            response_chunks = []
+            try:
+                async for response_chunk in self.process_message(message):
+                    response_chunks.append(response_chunk)
+                    await chunk_queue.put(response_chunk)
+                return "".join(response_chunks)
+            finally:
+                await chunk_queue.put(None)
+
+        task = asyncio.create_task(_runner())
+        task_id = await self._register_background_task(message, task)
+        return task_id, task, chunk_queue
+
+    async def _finalize_background_task(
+        self, task_id: str, done_task: asyncio.Task[str]
+    ) -> None:
+        """
+        Record the terminal state of a background task.
+
+        Args:
+            task_id: Task identifier returned to the interface.
+            done_task: Completed asyncio task.
+        """
+        async with self._task_lock:
+            if task_id in self._hidden_task_ids:
+                self._pending_tasks.pop(task_id, None)
+                self._task_results.pop(task_id, None)
+                return
+
+            task_state = self._task_results.setdefault(
+                task_id,
+                {"status": "pending", "message": "", "result": "", "session_id": ""},
+            )
+            try:
+                task_state["result"] = done_task.result()
+                task_state["status"] = "completed"
+            except asyncio.CancelledError:
+                task_state["result"] = "Cancelled"
+                task_state["status"] = "cancelled"
+            except Exception as exc:
+                task_state["result"] = f"Error: {exc}"
+                task_state["status"] = "failed"
+            finally:
+                self._pending_tasks.pop(task_id, None)
+
+    async def hide_background_task(self, task_id: str) -> None:
+        """
+        Remove a tracked background task from task-status views.
+
+        Args:
+            task_id: Task identifier to hide.
+        """
+        async with self._task_lock:
+            self._hidden_task_ids.add(task_id)
+            self._pending_tasks.pop(task_id, None)
+            self._task_results.pop(task_id, None)
+
+    async def get_task_snapshot(self) -> Dict[str, Dict[str, str]]:
+        """
+        Return a snapshot of background task state.
+
+        Returns:
+            Mapping of task ID to task metadata.
+        """
+        async with self._task_lock:
+            return copy.deepcopy(self._task_results)
+
+    async def count_pending_tasks(self) -> int:
+        """
+        Return the current number of in-flight background tasks.
+
+        Returns:
+            Count of pending background tasks.
+        """
+        async with self._task_lock:
+            return len(self._pending_tasks)
+
     async def cleanup(self) -> None:
         """
         Clean up all resources and connections.
@@ -1053,6 +1241,10 @@ Guidelines:
             self._completed_turns.clear()
             self._next_turn_id = 1
             self._next_turn_commit_id = 1
+            self._pending_tasks.clear()
+            self._task_results.clear()
+            self._hidden_task_ids.clear()
+            self._next_background_task_id = 1
             self._agent_descriptions.clear()
             LOG.info("Orchestrator cleanup completed")
         except BaseExceptionGroup as eg:

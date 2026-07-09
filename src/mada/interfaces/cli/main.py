@@ -45,9 +45,6 @@ class MADACLIInterface:
         self.blocking = blocking
         self.orchestrator = None
         self.session_manager = ChatSessionManager(config.database)
-        self.pending_tasks: Dict[str, asyncio.Task[str]] = {}
-        self.task_results: Dict[str, str] = {}
-        self.task_counter = 0
 
     def _print_history_summary(self, history: List[Dict[str, str]]):
         """
@@ -243,16 +240,6 @@ class MADACLIInterface:
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
 
-    async def _collect_response(self, user_input: str) -> str:
-        """Collect the full streamed response for one query."""
-        if self.orchestrator is None:
-            raise RuntimeError("Orchestrator not initialized.")
-
-        response_chunks = []
-        async for response_chunk in self.orchestrator.process_message(user_input):
-            response_chunks.append(response_chunk)
-        return "".join(response_chunks)
-
     async def run_query(self, user_input: str) -> None:
         """
         Run a query either in blocking or background mode.
@@ -261,33 +248,25 @@ class MADACLIInterface:
             user_input: Query text to send to the orchestrator.
         """
         if self.blocking:
-            response = await self._collect_response(user_input)
+            response = await self.orchestrator.submit_message(user_input, blocking=True)
             print(response)
             print("")
             return
 
-        self.task_counter += 1
-        task_id = f"task-{self.task_counter}"
-        task = asyncio.create_task(self._collect_response(user_input))
-        self.pending_tasks[task_id] = task
+        task_id, task = await self.orchestrator.start_background_message(user_input)
 
         def _done_callback(
             done_task: asyncio.Task[str], tracked_task_id: str = task_id
         ) -> None:
             try:
                 result = done_task.result()
-                self.task_results[tracked_task_id] = result
                 print(f"\n[{tracked_task_id}] Completed:")
                 print(result)
                 print("")
             except asyncio.CancelledError:
-                self.task_results[tracked_task_id] = "Cancelled"
                 print(f"\n[{tracked_task_id}] Cancelled.\n")
             except Exception as e:
-                self.task_results[tracked_task_id] = f"Error: {e}"
                 print(f"\n[{tracked_task_id}] Failed: {e}\n")
-            finally:
-                self.pending_tasks.pop(tracked_task_id, None)
 
         task.add_done_callback(_done_callback)
         print(f"[{task_id}] Started in background.\n")
@@ -357,9 +336,10 @@ class MADACLIInterface:
                         user_input = (await asyncio.to_thread(input, "\nYou: ")).strip()
 
                         if user_input.lower() in ["quit", "exit", "q"]:
-                            if self.pending_tasks:
+                            pending_count = await orchestrator.count_pending_tasks()
+                            if pending_count:
                                 print(
-                                    f"\nExiting with {len(self.pending_tasks)} pending background task(s)."
+                                    f"\nExiting with {pending_count} pending background task(s)."
                                 )
                             print("\nGoodbye!")
                             break
@@ -368,8 +348,19 @@ class MADACLIInterface:
                             continue
 
                         if not self.blocking and user_input.lower() == "tasks":
-                            print(f"\nPending tasks: {list(self.pending_tasks.keys())}")
-                            print(f"Completed tasks: {list(self.task_results.keys())}")
+                            task_snapshot = await orchestrator.get_task_snapshot()
+                            pending = [
+                                task_id
+                                for task_id, task in task_snapshot.items()
+                                if task.get("status") == "pending"
+                            ]
+                            completed = [
+                                task_id
+                                for task_id, task in task_snapshot.items()
+                                if task.get("status") != "pending"
+                            ]
+                            print(f"\nPending tasks: {pending}")
+                            print(f"Completed tasks: {completed}")
                             continue
 
                         print("\nAgents:")

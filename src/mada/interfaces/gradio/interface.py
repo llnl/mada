@@ -94,33 +94,14 @@ class MADAMultiAgentGradioInterface:
         """
         return gr.Accordion("MCP Server Connection", open=True)
 
-    def create_chat_interface(self, agent_table: gr.Dataframe) -> gr.ChatInterface:
+    def _chat_placeholder(self) -> str:
         """
-        Create the chat interface component.
-
-        Args:
-            agent_table: The agent configuration table to include as input
-
-        Returns:
-            The configured Gradio chat interface component
+        Return the configured chat input placeholder text.
         """
         placeholder = "Describe your workflow or ask for help..."
         if self.interface_config and hasattr(self.interface_config, "chat_placeholder"):
             placeholder = self.interface_config.chat_placeholder
-
-        chatbot = gr.Chatbot(
-            label="Chat",
-            height=480,
-            elem_id="mada-chatbot",
-        )
-
-        return gr.ChatInterface(
-            fn=self.client.process_message,
-            chatbot=chatbot,
-            textbox=gr.Textbox(label="Your Message", placeholder=placeholder),
-            additional_inputs=self.get_additional_chat_inputs(agent_table),
-            fill_height=True,
-        )
+        return placeholder
 
     def create_interface(self) -> gr.Blocks:
         """
@@ -217,10 +198,51 @@ class MADAMultiAgentGradioInterface:
                     # Custom components (subclasses can add their own)
                     self.create_custom_components(demo)
 
-                    # Chat interface
-                    chat_interface = self.create_chat_interface(agent_table)
+                    task_status = gr.Markdown(
+                        "### Task Status\nNo background tasks yet."
+                    )
+                    task_refresh = gr.Timer(value=0.5)
 
-            chatbot = chat_interface.chatbot
+                    chatbot = gr.Chatbot(
+                        label="Chat",
+                        height=480,
+                        elem_id="mada-chatbot",
+                    )
+                    with gr.Row():
+                        chat_input = gr.Textbox(
+                            label="Your Message",
+                            placeholder=self._chat_placeholder(),
+                            scale=6,
+                        )
+                        send_button = gr.Button("Send", variant="primary", scale=1)
+
+            submit_inputs = [
+                chat_input,
+                chatbot,
+                *self.get_additional_chat_inputs(agent_table),
+            ]
+            submit_outputs = [chatbot, chat_input]
+
+            chat_input.submit(
+                fn=self.client.submit_chat_message,
+                inputs=submit_inputs,
+                outputs=submit_outputs,
+                show_progress="hidden",
+            )
+            send_button.click(
+                fn=self.client.submit_chat_message,
+                inputs=submit_inputs,
+                outputs=submit_outputs,
+                show_progress="hidden",
+            )
+
+            task_refresh.tick(
+                fn=self.client.refresh_chat_and_task_status,
+                inputs=[session_list],
+                outputs=[chatbot, task_status],
+                show_progress="hidden",
+                concurrency_limit=1,
+            )
 
             # Update session list after connect, to be sure DB exists
             connect_button.click(

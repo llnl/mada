@@ -10,7 +10,7 @@ for the Gradio interface, adapted to work with MADA's architecture.
 
 import logging
 import traceback
-from typing import AsyncGenerator, Dict, List, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Set, Tuple
 
 import gradio as gr
 
@@ -58,6 +58,9 @@ class MCPGradioClientSession:
         self.mcp_servers = mcp_servers or {}
         self.session_manager = ChatSessionManager(database_config)
         self.session_bearer_token = None  # Store session bearer token
+        self._last_task_status_markdown = ""
+        self._display_histories: Dict[str, List[Dict[str, str]]] = {}
+        self._displayed_task_results: Set[str] = set()
 
     async def connect_servers(
         self, agent_table: gr.Dataframe, request: gr.Request
@@ -140,6 +143,24 @@ class MCPGradioClientSession:
             for sid, ts in sessions
         ]
 
+    def _find_session_label(self, session_id: str) -> str | None:
+        """
+        Return the rendered label for a given session id, if present.
+
+        Args:
+            session_id: Session identifier to look up.
+
+        Returns:
+            Matching rendered label or `None` if the session is not listed.
+        """
+        if not session_id:
+            return None
+
+        for label in self.list_sessions():
+            if self._extract_id_from_label(label) == session_id:
+                return label
+        return None
+
     def get_session_choices(self) -> List[str]:
         """
         List all chat sessions.
@@ -151,6 +172,18 @@ class MCPGradioClientSession:
         """
         return self.list_sessions()
 
+    def _load_session_history(self, session_id: str) -> List[Dict[str, str]]:
+        """
+        Load the persisted history for a session.
+
+        Args:
+            session_id: Session identifier to load.
+
+        Returns:
+            Persisted chat history for the session.
+        """
+        return self.session_manager.chat_db.load_session(session_id) or []
+
     def update_session_choices(self) -> gr.update:
         """
         Update the list of chat sessions.
@@ -158,7 +191,9 @@ class MCPGradioClientSession:
         Returns:
             A gradio update object with new chat session choices.
         """
-        return gr.update(choices=self.list_sessions(), value=None)
+        choices = self.list_sessions()
+        selected = self._find_session_label(self.session_manager.current_session_id)
+        return gr.update(choices=choices, value=selected)
 
     def create_new_session(self) -> Tuple[gr.update, List]:
         """
@@ -171,9 +206,11 @@ class MCPGradioClientSession:
         new_id = self.session_manager.create_session_id()
         self.session_manager.create_new_session(new_id)
         self.session_manager.select_session(new_id)
+        self._display_histories[new_id] = []
         updated_sessions = self.list_sessions()
+        selected = self._find_session_label(new_id)
         return gr.update(
-            choices=updated_sessions, value=None
+            choices=updated_sessions, value=selected
         ), []  # update sessions list, empty chat history
 
     def _extract_id_from_label(self, session_label: str) -> str:
@@ -210,6 +247,7 @@ class MCPGradioClientSession:
         session_id = self._extract_id_from_label(session_label)
 
         history = self.session_manager.select_session(session_id)
+        self._display_histories[session_id] = list(history)
 
         return history
 
@@ -232,6 +270,7 @@ class MCPGradioClientSession:
 
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
+        self._display_histories.pop(session_id, None)
         updated_sessions = self.list_sessions()
         return gr.update(
             choices=updated_sessions, value=None
@@ -250,6 +289,8 @@ class MCPGradioClientSession:
             LOG.info("Attempting to delete all sessions")
             self.session_manager.delete_all_sessions(confirm=False)
             LOG.info("Successfully deleted all sessions")
+            self._display_histories.clear()
+            self._displayed_task_results.clear()
             return gr.update(choices=[], value=None), []
         except Exception as e:
             LOG.error(f"Failed to delete all sessions: {e}")
@@ -283,18 +324,180 @@ class MCPGradioClientSession:
             return
 
         try:
-            # Process message through orchestrator
-            full_response = ""
-            async for chunk in self.orchestrator.process_message(message):
-                full_response += chunk
+            session_id = self.session_manager.current_session_id
+            display_history = list(
+                self._display_histories.get(
+                    session_id, history if history is not None else []
+                )
+            )
+            (
+                task_id,
+                task,
+                chunk_queue,
+            ) = await self.orchestrator.start_observed_background_message(message)
 
-            yield full_response
+            while True:
+                chunk = await chunk_queue.get()
+                if chunk is None:
+                    response = await task
+                    await self.orchestrator.hide_background_task(task_id)
+
+                    display_history.append({"role": "user", "content": message})
+                    display_history.append({"role": "assistant", "content": response})
+                    self._display_histories[session_id] = display_history
+                    yield response
+                    return
+
+                if "[Calling:" not in chunk:
+                    continue
+
+                display_history.append({"role": "user", "content": message})
+                display_history.append(
+                    {
+                        "role": "assistant",
+                        "content": (
+                            f"[{task_id}] Started in background. "
+                            "Use the Task Status panel below to monitor progress."
+                        ),
+                    }
+                )
+                self._display_histories[session_id] = display_history
+                yield (
+                    f"[{task_id}] Started in background. "
+                    "Use the Task Status panel below to monitor progress."
+                )
+                return
 
         except Exception as e:
             error_msg = f"Error processing message: {e}"
             LOG.error(error_msg)
             traceback.print_exc()
             yield error_msg
+
+    async def submit_chat_message(
+        self,
+        message: str,
+        history: List,
+        agent_table: gr.Dataframe,
+    ) -> Tuple[List[Dict[str, str]], Any]:
+        """
+        Submit one chat message and return the updated chatbot state.
+
+        Args:
+            message: User input message.
+            history: Current chatbot history.
+            agent_table: Agent configuration table.
+
+        Returns:
+            Updated chatbot history and textbox update.
+        """
+        session_id = self.session_manager.current_session_id
+        display_history = list(
+            self._display_histories.get(
+                session_id, history if history is not None else []
+            )
+        )
+
+        if not message or not message.strip():
+            return display_history, gr.skip()
+
+        last_response = ""
+        async for response in self.process_message(message, history, agent_table):
+            last_response = response
+
+        updated_history = list(self._display_histories.get(session_id, display_history))
+        if last_response and updated_history == display_history:
+            updated_history.append({"role": "user", "content": message})
+            updated_history.append({"role": "assistant", "content": last_response})
+            self._display_histories[session_id] = updated_history
+
+        return updated_history, ""
+
+    async def get_task_status_markdown(self) -> str:
+        """
+        Render background task state for the Gradio task panel.
+
+        Returns:
+            Markdown summary of background task status.
+        """
+        if not self.orchestrator:
+            return "### Task Status\nNo orchestrator connected."
+
+        task_snapshot = await self.orchestrator.get_task_snapshot()
+        if not task_snapshot:
+            return "### Task Status\nNo background tasks yet."
+
+        lines = ["### Task Status"]
+        for task_id, task_state in reversed(list(task_snapshot.items())):
+            status = task_state.get("status", "unknown")
+            message = task_state.get("message", "").strip() or "(empty)"
+            lines.append(f"- `{task_id}` [{status}] `{message[:80]}`")
+
+        return "\n".join(lines)
+
+    async def refresh_chat_and_task_status(self, session_label: str) -> Tuple[Any, str]:
+        """
+        Refresh the chat transcript and task summary for background mode.
+
+        Args:
+            session_label: Currently selected session label.
+        Returns:
+            Tuple of chatbot history update and task-status markdown.
+        """
+        task_status = await self.get_task_status_markdown()
+        task_status_output: Any = task_status
+        if task_status == self._last_task_status_markdown:
+            task_status_output = gr.skip()
+        else:
+            self._last_task_status_markdown = task_status
+
+        session_id = ""
+        if session_label:
+            session_id = self._extract_id_from_label(session_label)
+        elif self.session_manager.current_session_id:
+            session_id = self.session_manager.current_session_id
+
+        if not session_id:
+            return gr.skip(), task_status_output
+
+        if not self.orchestrator:
+            return gr.skip(), task_status_output
+
+        task_snapshot = await self.orchestrator.get_task_snapshot()
+        display_history = list(
+            self._display_histories.get(
+                session_id, self._load_session_history(session_id)
+            )
+        )
+        history_changed = False
+
+        relevant_tasks = [
+            (task_id, task_state)
+            for task_id, task_state in task_snapshot.items()
+            if task_state.get("session_id") == session_id
+        ]
+        if not relevant_tasks:
+            self._display_histories.setdefault(session_id, display_history)
+            return gr.skip(), task_status_output
+
+        for task_id, task_state in relevant_tasks:
+            if task_state.get("status") == "pending":
+                continue
+            if task_id in self._displayed_task_results:
+                continue
+
+            result = task_state.get("result", "").strip()
+            if result:
+                display_history.append({"role": "assistant", "content": result})
+                self._displayed_task_results.add(task_id)
+                history_changed = True
+
+        if not history_changed:
+            self._display_histories.setdefault(session_id, display_history)
+            return gr.skip(), task_status_output
+
+        self._display_histories[session_id] = display_history
+        return display_history, task_status_output
 
     async def cleanup(self):
         """Clean up resources."""

@@ -913,14 +913,7 @@ class TestMADACLICmd:
             orchestrator_mock.initialize_orchestrator = AsyncMock(
                 return_value=("ok", [])
             )
-
-            async def fake_process_message(_msg):
-                yield "chunk1"
-                yield "chunk2"
-
-            orchestrator_mock.process_message = MagicMock(
-                side_effect=fake_process_message
-            )
+            orchestrator_mock.submit_message = AsyncMock(return_value="chunk1chunk2")
 
             with (
                 patch(
@@ -939,7 +932,9 @@ class TestMADACLICmd:
                 cli = MADACLIInterface(config, blocking=True)
                 await cli.run()
 
-                orchestrator_mock.process_message.assert_called_once_with("hello")
+                orchestrator_mock.submit_message.assert_awaited_once_with(
+                    "hello", blocking=True
+                )
 
                 printed_texts = "".join(
                     str(call.args[0]) for call in mock_print.call_args_list
