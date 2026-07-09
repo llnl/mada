@@ -742,147 +742,6 @@ Guidelines:
             f"{conversation}"
         )
 
-    def _capture_history_lengths(self, session: AgentSession) -> Dict[str, int]:
-        """
-        Record the number of stored history messages per provider in a session.
-
-        Args:
-            session: Session snapshot to inspect.
-
-        Returns:
-            Mapping of provider state key to stored message count.
-        """
-        history_lengths: Dict[str, int] = {}
-        for provider_name, provider_state in session.state.items():
-            if not isinstance(provider_state, dict):
-                continue
-            messages = provider_state.get("messages")
-            if isinstance(messages, list):
-                history_lengths[provider_name] = len(messages)
-        return history_lengths
-
-    async def _reserve_turn(self) -> int:
-        """
-        Reserve the next conversational turn identifier.
-
-        Returns:
-            Monotonic turn identifier in user-submission order.
-        """
-        async with self._session_lock:
-            turn_id = self._next_turn_id
-            self._next_turn_id += 1
-        return turn_id
-
-    async def _clone_shared_session(self) -> Tuple[AgentSession, Dict[str, int]]:
-        """
-        Snapshot the active planning-agent session for isolated async execution.
-
-        Returns:
-            The cloned session and baseline history lengths.
-        """
-        async with self._session_lock:
-            if self.session is None:
-                raise RuntimeError("Orchestrator session not initialized.")
-            session_snapshot = AgentSession.from_dict(self.session.to_dict())
-            history_lengths = self._capture_history_lengths(session_snapshot)
-        return session_snapshot, history_lengths
-
-    def _merge_session_delta(
-        self,
-        target_session: AgentSession,
-        source_session: AgentSession,
-        history_lengths: Dict[str, int],
-    ) -> None:
-        """
-        Merge newly stored history from an isolated session back into the shared session.
-
-        Args:
-            target_session: Shared session to update.
-            source_session: Completed isolated session.
-            history_lengths: Baseline history lengths captured before the run.
-        """
-        for provider_name, source_state in source_session.state.items():
-            if not isinstance(source_state, dict):
-                if provider_name not in target_session.state:
-                    target_session.state[provider_name] = copy.deepcopy(source_state)
-                continue
-
-            target_state = target_session.state.setdefault(provider_name, {})
-            if not isinstance(target_state, dict):
-                target_session.state[provider_name] = copy.deepcopy(source_state)
-                continue
-
-            source_messages = source_state.get("messages")
-            if isinstance(source_messages, list):
-                start_index = history_lengths.get(provider_name, 0)
-                delta_messages = source_messages[start_index:]
-                if delta_messages:
-                    target_messages = target_state.setdefault("messages", [])
-                    if not isinstance(target_messages, list):
-                        target_messages = []
-                        target_state["messages"] = target_messages
-                    target_messages.extend(copy.deepcopy(delta_messages))
-
-            for key, value in source_state.items():
-                if key == "messages":
-                    continue
-                target_state.setdefault(key, copy.deepcopy(value))
-
-        if source_session.service_session_id and not target_session.service_session_id:
-            target_session.service_session_id = source_session.service_session_id
-
-    async def _flush_completed_turns(self) -> None:
-        """
-        Commit any completed turns whose predecessors have already been applied.
-        """
-        while True:
-            completed_turn = self._completed_turns.pop(self._next_turn_commit_id, None)
-            if completed_turn is None:
-                return
-
-            if self.session is None:
-                raise RuntimeError("Orchestrator session not initialized.")
-
-            self._merge_session_delta(
-                self.session,
-                completed_turn["completed_session"],
-                completed_turn["history_lengths"],
-            )
-            self.session_manager.add_message("user", completed_turn["message"])
-
-            assistant_reply = completed_turn["assistant_reply"]
-            if assistant_reply.strip():
-                self.session_manager.add_message("assistant", assistant_reply)
-
-            self._next_turn_commit_id += 1
-
-    async def _commit_isolated_turn(
-        self,
-        turn_id: int,
-        message: str,
-        assistant_reply: str,
-        completed_session: AgentSession,
-        history_lengths: Dict[str, int],
-    ) -> None:
-        """
-        Persist an isolated turn back into the shared session and chat database.
-
-        Args:
-            turn_id: Reserved turn identifier for commit ordering.
-            message: User message for the turn.
-            assistant_reply: Plain-text assistant reply aggregated during streaming.
-            completed_session: The isolated session after the run completed.
-            history_lengths: Baseline history lengths captured before the run.
-        """
-        async with self._session_lock:
-            self._completed_turns[turn_id] = {
-                "message": message,
-                "assistant_reply": assistant_reply,
-                "completed_session": completed_session,
-                "history_lengths": history_lengths,
-            }
-            await self._flush_completed_turns()
-
     async def process_openai_messages(
         self,
         messages: List[Dict[str, Any]],
@@ -966,8 +825,19 @@ Guidelines:
         history_lengths: Dict[str, int]
 
         try:
-            turn_id = await self._reserve_turn()
-            run_session, history_lengths = await self._clone_shared_session()
+            async with self._session_lock:
+                turn_id = self._next_turn_id
+                self._next_turn_id += 1
+                if self.session is None:
+                    raise RuntimeError("Orchestrator session not initialized.")
+                run_session = AgentSession.from_dict(self.session.to_dict())
+                history_lengths = {}
+                for provider_name, provider_state in run_session.state.items():
+                    if not isinstance(provider_state, dict):
+                        continue
+                    messages = provider_state.get("messages")
+                    if isinstance(messages, list):
+                        history_lengths[provider_name] = len(messages)
 
             response_started = False
             stream = self.planning_agent.run(message, session=run_session, stream=True)
@@ -994,13 +864,72 @@ Guidelines:
             if not response_started:
                 LOG.warning("No text chunks received from planning agent")
 
-            await self._commit_isolated_turn(
-                turn_id=turn_id,
-                message=message,
-                assistant_reply=aggregated_assistant_reply,
-                completed_session=run_session,
-                history_lengths=history_lengths,
-            )
+            async with self._session_lock:
+                self._completed_turns[turn_id] = {
+                    "message": message,
+                    "assistant_reply": aggregated_assistant_reply,
+                    "completed_session": run_session,
+                    "history_lengths": history_lengths,
+                }
+
+                while True:
+                    completed_turn = self._completed_turns.pop(
+                        self._next_turn_commit_id, None
+                    )
+                    if completed_turn is None:
+                        break
+
+                    if self.session is None:
+                        raise RuntimeError("Orchestrator session not initialized.")
+                    completed_session = completed_turn["completed_session"]
+                    history_lengths = completed_turn["history_lengths"]
+                    for provider_name, source_state in completed_session.state.items():
+                        if not isinstance(source_state, dict):
+                            if provider_name not in self.session.state:
+                                self.session.state[provider_name] = copy.deepcopy(
+                                    source_state
+                                )
+                            continue
+
+                        target_state = self.session.state.setdefault(provider_name, {})
+                        if not isinstance(target_state, dict):
+                            self.session.state[provider_name] = copy.deepcopy(
+                                source_state
+                            )
+                            continue
+
+                        source_messages = source_state.get("messages")
+                        if isinstance(source_messages, list):
+                            start_index = history_lengths.get(provider_name, 0)
+                            delta_messages = source_messages[start_index:]
+                            if delta_messages:
+                                target_messages = target_state.setdefault(
+                                    "messages", []
+                                )
+                                if not isinstance(target_messages, list):
+                                    target_messages = []
+                                    target_state["messages"] = target_messages
+                                target_messages.extend(copy.deepcopy(delta_messages))
+
+                        for key, value in source_state.items():
+                            if key == "messages":
+                                continue
+                            target_state.setdefault(key, copy.deepcopy(value))
+
+                    if (
+                        completed_session.service_session_id
+                        and not self.session.service_session_id
+                    ):
+                        self.session.service_session_id = (
+                            completed_session.service_session_id
+                        )
+                    self.session_manager.add_message("user", completed_turn["message"])
+
+                    assistant_reply = completed_turn["assistant_reply"]
+                    if assistant_reply.strip():
+                        self.session_manager.add_message("assistant", assistant_reply)
+
+                    self._next_turn_commit_id += 1
 
         except Exception as e:
             # Check for authentication errors
@@ -1112,9 +1041,35 @@ Guidelines:
             def _done_callback(
                 done_task: asyncio.Task[str], tracked_task_id: str = task_id
             ) -> None:
-                asyncio.create_task(
-                    self._finalize_background_task(tracked_task_id, done_task)
-                )
+                async def _finalize() -> None:
+                    async with self._task_lock:
+                        if tracked_task_id in self._hidden_task_ids:
+                            self._pending_tasks.pop(tracked_task_id, None)
+                            self._task_results.pop(tracked_task_id, None)
+                            return
+
+                        task_state = self._task_results.setdefault(
+                            tracked_task_id,
+                            {
+                                "status": "pending",
+                                "message": "",
+                                "result": "",
+                                "origin_session_id": "",
+                            },
+                        )
+                        try:
+                            task_state["result"] = done_task.result()
+                            task_state["status"] = "completed"
+                        except asyncio.CancelledError:
+                            task_state["result"] = "Cancelled"
+                            task_state["status"] = "cancelled"
+                        except Exception as exc:
+                            task_state["result"] = f"Error: {exc}"
+                            task_state["status"] = "failed"
+                        finally:
+                            self._pending_tasks.pop(tracked_task_id, None)
+
+                asyncio.create_task(_finalize())
 
             task.add_done_callback(_done_callback)
             return task_id
@@ -1163,43 +1118,6 @@ Guidelines:
         task = asyncio.create_task(_runner())
         task_id = await self._register_background_task(message, task)
         return task_id, task, chunk_queue
-
-    async def _finalize_background_task(
-        self, task_id: str, done_task: asyncio.Task[str]
-    ) -> None:
-        """
-        Record the terminal state of a background task.
-
-        Args:
-            task_id: Task identifier returned to the interface.
-            done_task: Completed asyncio task.
-        """
-        async with self._task_lock:
-            if task_id in self._hidden_task_ids:
-                self._pending_tasks.pop(task_id, None)
-                self._task_results.pop(task_id, None)
-                return
-
-            task_state = self._task_results.setdefault(
-                task_id,
-                {
-                    "status": "pending",
-                    "message": "",
-                    "result": "",
-                    "origin_session_id": "",
-                },
-            )
-            try:
-                task_state["result"] = done_task.result()
-                task_state["status"] = "completed"
-            except asyncio.CancelledError:
-                task_state["result"] = "Cancelled"
-                task_state["status"] = "cancelled"
-            except Exception as exc:
-                task_state["result"] = f"Error: {exc}"
-                task_state["status"] = "failed"
-            finally:
-                self._pending_tasks.pop(task_id, None)
 
     async def hide_background_task(self, task_id: str) -> None:
         """
