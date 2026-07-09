@@ -253,14 +253,14 @@ class MADAMultiAgentGradioInterface:
             session_list.change(
                 fn=self.client.select_session,
                 inputs=session_list,
-                outputs=chat_interface.chatbot,
+                outputs=chatbot,
             )
 
             # Deleting a session
             delete_chat_btn.click(
                 fn=self.client.delete_session,
                 inputs=session_list,
-                outputs=[session_list, chat_interface.chatbot],
+                outputs=[session_list, chatbot],
             )
 
             # Show confirmation panel when "Delete ALL chats" is clicked
