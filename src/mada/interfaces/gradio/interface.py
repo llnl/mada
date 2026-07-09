@@ -274,7 +274,7 @@ class MADAMultiAgentGradioInterface:
             confirm_delete_all_btn.click(
                 fn=self.client.delete_all_sessions,
                 inputs=None,
-                outputs=[session_list, chat_interface.chatbot],
+                outputs=[session_list, chatbot],
             ).then(
                 # Hide confirmation panel after deletion
                 fn=lambda: gr.update(visible=False),
