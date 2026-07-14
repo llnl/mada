@@ -14,6 +14,10 @@ All fields, besides `extra`, can be either a literal value or an environment var
 | `base_url`        | The base URL of the OpenAI API endpoint.             | Yes       |
 | `extra`           | Additional settings (e.g., temperature, max_tokens). | No        |
 
+MADA uses the system trust store for TLS verification when connecting to
+OpenAI-compatible endpoints. If your environment requires a custom CA bundle,
+set `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` before starting MADA.
+
 ## Example
 
 ```json
