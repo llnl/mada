@@ -25,6 +25,7 @@ from agent_framework.exceptions import ToolException
 from mada.core.config import AgentConfig, DatabaseConfig, ModelConfig, MCPServerConfig
 from mada.core.coordinator import MCPAgentManager
 from mada.core.database import ChatSessionManager
+from mada.core.tls import resolve_httpx_verify_value
 
 try:
     BaseExceptionGroup
@@ -267,7 +268,7 @@ class MADAOrchestrator(MCPAgentManager):
                     headers["X-Token"] = self.bearer_token
 
                 # MCPStreamableHTTPTool requires an http_client with custom headers, not a headers parameter
-                http_client = httpx.AsyncClient(headers=headers, timeout=180.0)
+                http_client = httpx.AsyncClient(headers=headers, timeout=180.0, verify=resolve_httpx_verify_value())
                 http_client_to_cleanup = (
                     http_client  # Store for cleanup if connection fails
                 )
