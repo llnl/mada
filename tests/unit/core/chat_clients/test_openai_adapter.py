@@ -19,9 +19,13 @@ def test_openai_adapter_injects_async_client(monkeypatch):
         def __init__(self, **kwargs):
             captured["client_kwargs"] = kwargs
 
+    def fake_resolve_httpx_verify_value(*, verify=True):
+        captured["resolve_verify_arg"] = verify
+        return verify
+
     monkeypatch.setattr(
         "mada.core.chat_clients.openai_adapter.resolve_httpx_verify_value",
-        lambda: "/tmp/test-ca.pem",
+        fake_resolve_httpx_verify_value,
     )
     monkeypatch.setattr(
         "mada.core.chat_clients.openai_adapter.DefaultAsyncHttpxClient",
@@ -37,6 +41,7 @@ def test_openai_adapter_injects_async_client(monkeypatch):
         model="gpt-4.1-mini",
         api_key="sk-test",
         base_url="https://example.invalid/v1",
+        verify=False,
         extra={
             "org_id": "test-org",
             "default_headers": {"X-Test": "1"},
@@ -46,7 +51,8 @@ def test_openai_adapter_injects_async_client(monkeypatch):
     OpenAIAdapter().pre_create(model_config)
 
     assert isinstance(model_config.extra["async_client"], DummyAsyncOpenAI)
-    assert captured["verify"] == "/tmp/test-ca.pem"
+    assert captured["resolve_verify_arg"] is False
+    assert captured["verify"] is False
     assert captured["client_kwargs"]["api_key"] == "sk-test"
     assert captured["client_kwargs"]["base_url"] == "https://example.invalid/v1"
     assert captured["client_kwargs"]["organization"] == "test-org"

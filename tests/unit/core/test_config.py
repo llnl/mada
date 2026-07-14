@@ -3,7 +3,7 @@
 
 import pytest
 
-from mada.core.config import PostgreSQLConfig, SQLiteConfig
+from mada.core.config import AppConfig, PostgreSQLConfig, SQLiteConfig
 
 
 @pytest.mark.unit
@@ -71,3 +71,39 @@ class TestPostgreSQLConfig:
         assert config.get_connection_string() == expected_connection_string, (
             "PostgreSQL connection string should expand environment variables correctly."
         )
+
+
+@pytest.mark.unit
+def test_app_config_loads_verify_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("MADA_CA_BUNDLE", "/tmp/mada-ca.pem")
+
+    config = AppConfig.from_dict(
+        {
+            "model": {
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "api_key": "sk-test",
+                "base_url": "https://example.invalid/v1",
+                "verify": False,
+            },
+            "agents": [
+                {
+                    "agent_name": "TestAgent",
+                    "description": "Test agent",
+                    "instructions": "You are a test agent.",
+                    "mcp_servers": ["test_server"],
+                }
+            ],
+            "database": {"type": "sqlite", "path": str(tmp_path / "mada.db")},
+            "mcp_servers": {
+                "test_server": {
+                    "transport": "streamable-http",
+                    "url": "https://mcp.example.invalid/mcp",
+                    "verify": "${MADA_CA_BUNDLE}",
+                }
+            },
+        }
+    )
+
+    assert config.model.verify is False
+    assert config.mcp_servers["test_server"].verify == "/tmp/mada-ca.pem"
