@@ -58,7 +58,7 @@ class OpenAIAdapter(ProviderAdapter):
             "api_key": model_config.api_key,
             "base_url": model_config.base_url,
             "http_client": DefaultAsyncHttpxClient(
-                verify=resolve_httpx_verify_value(),
+                verify=resolve_httpx_verify_value(verify=model_config.verify),
             ),
         }
 

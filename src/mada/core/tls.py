@@ -18,18 +18,21 @@ import truststore
 LOG = logging.getLogger(__name__)
 
 
-def resolve_httpx_verify_value(*, verify: bool = True) -> bool | ssl.SSLContext | str:
+def resolve_httpx_verify_value(
+    *, verify: bool | ssl.SSLContext | str = True
+) -> bool | ssl.SSLContext | str:
     """
     Return the verify value to pass to ``httpx`` clients.
 
+    Explicit ``verify`` values other than ``True`` are returned unchanged.
     Resolution order for ``verify=True`` is:
 
     1. ``SSL_CERT_FILE``
     2. ``REQUESTS_CA_BUNDLE``
     3. System trust store via ``truststore``
     """
-    if verify is False:
-        return False
+    if verify is not True:
+        return verify
 
     for env_var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
         cert_path = os.getenv(env_var)
