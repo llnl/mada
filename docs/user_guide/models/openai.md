@@ -12,11 +12,11 @@ All fields, besides `extra`, can be either a literal value or an environment var
 | `model`           | The name of the OpenAI model to use (e.g., "gpt-4"). | Yes       |
 | `api_key`         | The API key for authentication. In addition to being either a literal value or an environment variable, this can also be a file path. | Yes       |
 | `base_url`        | The base URL of the OpenAI API endpoint.             | Yes       |
+| `verify`          | TLS verification setting. Use `true` for env/system trust resolution, `false` to disable verification, or a CA bundle path. | No |
 | `extra`           | Additional settings (e.g., temperature, max_tokens). | No        |
 
-MADA uses the system trust store for TLS verification when connecting to
-OpenAI-compatible endpoints. If your environment requires a custom CA bundle,
-set `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` before starting MADA.
+When `verify` is `true`, MADA resolves TLS verification from `SSL_CERT_FILE`,
+then `REQUESTS_CA_BUNDLE`, then the system trust store.
 
 ## Example
 
@@ -26,6 +26,7 @@ set `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` before starting MADA.
     "model": "gpt-4",
     "api_key": "${API_KEY}",
     "base_url": "https://api.openai.com/v1",
+    "verify": true,
     "extra": {
         "temperature": 0.7,
         "max_tokens": 2048
