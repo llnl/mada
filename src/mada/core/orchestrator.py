@@ -1090,47 +1090,6 @@ Guidelines:
         task_id = await self._register_background_task(message, task)
         return task_id, task
 
-    async def start_observed_background_message(
-        self, message: str
-    ) -> Tuple[str, asyncio.Task[str], asyncio.Queue[Optional[str]]]:
-        """
-        Start a tracked background task and expose its streamed chunks.
-
-        Args:
-            message: User input message.
-
-        Returns:
-            Task identifier, scheduled task handle, and a queue containing
-            streamed chunks followed by a `None` sentinel when complete.
-        """
-        chunk_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
-
-        async def _runner() -> str:
-            response_chunks = []
-            try:
-                async for response_chunk in self.process_message(message):
-                    response_chunks.append(response_chunk)
-                    await chunk_queue.put(response_chunk)
-                return "".join(response_chunks)
-            finally:
-                await chunk_queue.put(None)
-
-        task = asyncio.create_task(_runner())
-        task_id = await self._register_background_task(message, task)
-        return task_id, task, chunk_queue
-
-    async def hide_background_task(self, task_id: str) -> None:
-        """
-        Remove a tracked background task from task-status views.
-
-        Args:
-            task_id: Task identifier to hide.
-        """
-        async with self._task_lock:
-            self._hidden_task_ids.add(task_id)
-            self._pending_tasks.pop(task_id, None)
-            self._task_results.pop(task_id, None)
-
     async def get_task_snapshot(self) -> Dict[str, Dict[str, str]]:
         """
         Return a snapshot of background task state.
