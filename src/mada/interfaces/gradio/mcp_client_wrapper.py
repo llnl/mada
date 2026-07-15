@@ -42,6 +42,7 @@ class MCPGradioClientSession:
         agents: List[AgentConfig],
         database_config: DatabaseConfig,
         mcp_servers: MCPServerConfig = None,
+        blocking: bool = False,
     ):
         """
         Initialize the MCP client session.
@@ -49,10 +50,13 @@ class MCPGradioClientSession:
         Args:
             model_config: Model configuration for MADA
             agents: List of agent configurations
+            blocking: If True, wait for responses inline. If False, submit
+                queries as background tasks.
         """
         self.model_config = model_config
         self.agents = agents
         self.database_config = database_config
+        self.blocking = blocking
         self.orchestrator = None
         self.initialized = False
         self.mcp_servers = mcp_servers or {}
