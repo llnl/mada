@@ -10,7 +10,7 @@ for the Gradio interface, adapted to work with MADA's architecture.
 
 import logging
 import traceback
-from typing import Any, AsyncGenerator, Dict, List, Tuple
+from typing import AsyncGenerator, Dict, List, Tuple
 
 import gradio as gr
 
@@ -314,37 +314,14 @@ class MCPGradioClientSession:
 
         return "\n".join(lines)
 
-    async def refresh_chat_and_task_status(self, session_label: str) -> Tuple[Any, str]:
+    async def refresh_chat_and_task_status(self) -> Tuple[List[Dict[str, str]], str]:
         """
         Refresh chat history and background task status for the Gradio UI.
-
-        Args:
-            session_label: Selected chat session label from the sidebar.
 
         Returns:
             Current chat history and task status markdown.
         """
-        selected_session_id = (
-            self._extract_id_from_label(session_label)
-            if session_label
-            else self.session_manager.current_session_id
-        )
-
-        task_snapshot = (
-            await self.orchestrator.get_task_snapshot() if self.orchestrator else {}
-        )
-        has_pending_task = any(
-            task_state.get("status") == "pending"
-            and task_state.get("origin_session_id") == selected_session_id
-            for task_state in task_snapshot.values()
-        )
-        if has_pending_task:
-            history = gr.skip()
-        elif session_label:
-            history = self.select_session(session_label)
-        else:
-            history = self.session_manager.load_history()
-
+        history = self.session_manager.load_history()
         task_status = await self.get_task_status_markdown()
         return history, task_status
 

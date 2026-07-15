@@ -229,7 +229,7 @@ class MADAMultiAgentGradioInterface:
 
             task_refresh.tick(
                 fn=self.client.refresh_chat_and_task_status,
-                inputs=[session_list],
+                inputs=None,
                 outputs=[chatbot, task_status],
                 show_progress="hidden",
                 concurrency_limit=1,
