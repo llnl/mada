@@ -1152,18 +1152,21 @@ Guidelines:
         """
         await self.cleanup()
 
-    async def run_query(self, user_input: str, blocking: bool) -> None:
+    async def run_query(self, user_input: str, blocking: bool) -> str:
         """
         Run a query either in blocking or background mode.
 
         Args:
             user_input: Query text to send to the orchestrator.
+
+        Returns:
+            Text that the caller should display immediately.
         """
         if blocking:
             response = await self.collect_message_response(user_input)
             print(response)
             print("")
-            return
+            return response
 
         task_id, task = await self.start_background_message(user_input)
 
@@ -1181,4 +1184,6 @@ Guidelines:
                 print(f"\n[{tracked_task_id}] Failed: {e}\n")
 
         task.add_done_callback(_done_callback)
-        print(f"[{task_id}] Started in background.\n")
+        message = f"[{task_id}] Started in background."
+        print(f"{message}\n")
+        return message
