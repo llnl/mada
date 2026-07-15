@@ -897,21 +897,6 @@ Guidelines:
                 traceback.print_exc()
                 yield error_msg
 
-    async def collect_message_response(self, message: str) -> str:
-        """
-        Collect a streamed assistant response into a single string.
-
-        Args:
-            message: User input message.
-
-        Returns:
-            Full assistant response, including any emitted tool-call notices.
-        """
-        response_chunks = []
-        async for response_chunk in self.process_message(message):
-            response_chunks.append(response_chunk)
-        return "".join(response_chunks)
-
     async def get_task_snapshot(self) -> Dict[str, Dict[str, str]]:
         """
         Return a snapshot of background task state.
