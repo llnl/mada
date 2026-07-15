@@ -10,7 +10,7 @@ for the Gradio interface, adapted to work with MADA's architecture.
 
 import logging
 import traceback
-from typing import AsyncGenerator, Dict, List, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Tuple
 
 import gradio as gr
 
@@ -62,6 +62,7 @@ class MCPGradioClientSession:
         self.mcp_servers = mcp_servers or {}
         self.session_manager = ChatSessionManager(database_config)
         self.session_bearer_token = None  # Store session bearer token
+        self._displayed_task_ids = set()
 
     async def connect_servers(
         self, agent_table: gr.Dataframe, request: gr.Request
@@ -318,16 +319,50 @@ class MCPGradioClientSession:
 
         return "\n".join(lines)
 
-    async def refresh_chat_and_task_status(self) -> Tuple[List[Dict[str, str]], str]:
+    async def refresh_chat_and_task_status(
+        self, history: List[Any]
+    ) -> Tuple[List[Any], str]:
         """
         Refresh chat history and background task status for the Gradio UI.
+
+        Args:
+            history: Current Gradio chat history.
 
         Returns:
             Current chat history and task status markdown.
         """
-        history = self.session_manager.load_history()
+        task_snapshot = (
+            await self.orchestrator.get_task_snapshot() if self.orchestrator else {}
+        )
+        history = self._update_chat_history_from_tasks(history or [], task_snapshot)
         task_status = await self.get_task_status_markdown()
         return history, task_status
+
+    def _update_chat_history_from_tasks(
+        self, history: List[Any], task_snapshot: Dict[str, Dict[str, str]]
+    ) -> List[Any]:
+        """
+        Append completed background task responses to the current chat history.
+        """
+        updated_history = list(history)
+        for task_id, task_state in task_snapshot.items():
+            status = task_state.get("status", "unknown")
+            if status == "pending":
+                continue
+            if task_id in self._displayed_task_ids:
+                continue
+
+            result = task_state.get("result", "")
+            if not result:
+                result = f"[{task_id}] {status}"
+
+            if any(isinstance(item, dict) for item in updated_history):
+                updated_history.append({"role": "assistant", "content": result})
+            else:
+                updated_history.append((None, result))
+            self._displayed_task_ids.add(task_id)
+
+        return updated_history
 
     async def cleanup(self):
         """Clean up resources."""
@@ -340,4 +375,5 @@ class MCPGradioClientSession:
                 )
             except Exception as e:
                 LOG.error(f"Error during cleanup: {e}")
+        self._displayed_task_ids.clear()
         self.initialized = False
