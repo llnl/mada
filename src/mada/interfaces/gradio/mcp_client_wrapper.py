@@ -175,7 +175,6 @@ class MCPGradioClientSession:
         self.session_manager.create_new_session(new_id)
         self.session_manager.select_session(new_id)
         updated_sessions = self.list_sessions()
-        self._display_history = []
         return gr.update(
             choices=updated_sessions, value=None
         ), []  # update sessions list, empty chat history
@@ -233,25 +232,14 @@ class MCPGradioClientSession:
         if not session_label:
             # Return current state unchanged
             updated_sessions = self.list_sessions()
-            return gr.update(choices=updated_sessions), list(self._display_history)
+            return gr.update(choices=updated_sessions, value=None), []
 
         session_id = self._extract_id_from_label(session_label)
-        was_current_session = session_id == self.session_manager.current_session_id
         self.session_manager.delete_session(session_id)
         updated_sessions = self.list_sessions()
-        if not updated_sessions:
-            self.session_manager.current_session_id = None
-            self._display_history = []
-            return gr.update(choices=[], value=None), []
-
-        if was_current_session:
-            fallback_label = updated_sessions[0]
-            fallback_history = self.select_session(fallback_label)
-            return gr.update(
-                choices=updated_sessions, value=fallback_label
-            ), fallback_history
-
-        return gr.update(choices=updated_sessions), list(self._display_history)
+        return gr.update(
+            choices=updated_sessions, value=None
+        ), []  # update sessions list, clear chat history
 
     def delete_all_sessions(self) -> Tuple[gr.update, List]:
         """
@@ -301,46 +289,7 @@ class MCPGradioClientSession:
             return
 
         try:
-            display_history = list(self._display_history)
-            if not display_history and history is not None:
-                display_history = list(history)
-            (
-                task_id,
-                task,
-                chunk_queue,
-            ) = await self.orchestrator.start_observed_background_message(message)
-
-            while True:
-                chunk = await chunk_queue.get()
-                if chunk is None:
-                    response = await task
-                    await self.orchestrator.hide_background_task(task_id)
-
-                    display_history.append({"role": "user", "content": message})
-                    display_history.append({"role": "assistant", "content": response})
-                    self._display_history = display_history
-                    yield response
-                    return
-
-                if "[Calling:" not in chunk:
-                    continue
-
-                display_history.append({"role": "user", "content": message})
-                display_history.append(
-                    {
-                        "role": "assistant",
-                        "content": (
-                            f"[{task_id}] Started in background. "
-                            "Use the Task Status panel below to monitor progress."
-                        ),
-                    }
-                )
-                self._display_history = display_history
-                yield (
-                    f"[{task_id}] Started in background. "
-                    "Use the Task Status panel below to monitor progress."
-                )
-                return
+            await self.orchestrator.run_query(message, self.blocking)
 
         except Exception as e:
             error_msg = f"Error processing message: {e}"
