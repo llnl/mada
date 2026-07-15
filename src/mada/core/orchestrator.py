@@ -15,7 +15,7 @@ import logging
 import sys
 import traceback
 from types import TracebackType
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, Type
 from contextlib import AsyncExitStack
 import httpx
 import httpcore
@@ -987,29 +987,6 @@ Guidelines:
             response_chunks.append(response_chunk)
         return "".join(response_chunks)
 
-    async def submit_message(
-        self, message: str, blocking: bool = True
-    ) -> Union[str, asyncio.Task[str]]:
-        """
-        Submit a user message in either blocking or background mode.
-
-        This provides a small shared convenience layer for interfaces that want
-        either the fully collected response or an immediately scheduled task that
-        will produce that response.
-
-        Args:
-            message: User input message.
-            blocking: If True, await and return the full response string. If
-                False, return an `asyncio.Task` that will resolve to that string.
-
-        Returns:
-            The full response string in blocking mode, or a task producing that
-            string in background mode.
-        """
-        if blocking:
-            return await self.collect_message_response(message)
-        return asyncio.create_task(self.collect_message_response(message))
-
     async def _register_background_task(
         self, message: str, task: asyncio.Task[str]
     ) -> str:
@@ -1183,7 +1160,7 @@ Guidelines:
             user_input: Query text to send to the orchestrator.
         """
         if blocking:
-            response = await self.submit_message(user_input, blocking=True)
+            response = await self.collect_message_response(user_input)
             print(response)
             print("")
             return
