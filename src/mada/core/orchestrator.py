@@ -839,8 +839,31 @@ Guidelines:
                     if isinstance(messages, list):
                         history_lengths[provider_name] = len(messages)
 
+            async with self._task_lock:
+                completed_task_context = [
+                    (
+                        f"{task_id} ({task_state.get('message', '')}):\n"
+                        f"{task_state.get('result', '')}"
+                    )
+                    for task_id, task_state in self._task_results.items()
+                    if task_state.get("status") == "completed"
+                    and task_state.get("result")
+                ]
+
+            prompt_message = message
+            if completed_task_context:
+                prompt_message = (
+                    "Recent completed background task results are available below. "
+                    "Use them when the user's request refers to a previous task, "
+                    "tool call, returned payload, or generated output.\n\n"
+                    + "\n\n".join(completed_task_context[-5:])
+                    + f"\n\nUser request:\n{message}"
+                )
+
             response_started = False
-            stream = self.planning_agent.run(message, session=run_session, stream=True)
+            stream = self.planning_agent.run(
+                prompt_message, session=run_session, stream=True
+            )
             async for chunk in stream:
                 if chunk.text:
                     response_started = True
@@ -914,12 +937,9 @@ Guidelines:
                         for key, value in source_state.items():
                             if key == "messages":
                                 continue
-                            target_state.setdefault(key, copy.deepcopy(value))
+                            target_state[key] = copy.deepcopy(value)
 
-                    if (
-                        completed_session.service_session_id
-                        and not self.session.service_session_id
-                    ):
+                    if completed_session.service_session_id:
                         self.session.service_session_id = (
                             completed_session.service_session_id
                         )
@@ -986,86 +1006,6 @@ Guidelines:
         async for response_chunk in self.process_message(message):
             response_chunks.append(response_chunk)
         return "".join(response_chunks)
-
-    async def _register_background_task(
-        self, message: str, task: asyncio.Task[str]
-    ) -> str:
-        """
-        Register a background task with the shared task tracker.
-
-        Args:
-            message: User input message associated with the task.
-            task: Scheduled task producing the final response string.
-
-        Returns:
-            Stable task identifier for tracking the background run.
-        """
-        async with self._task_lock:
-            task_id = f"task-{self._next_background_task_id}"
-            self._next_background_task_id += 1
-
-            self._hidden_task_ids.discard(task_id)
-            self._pending_tasks[task_id] = task
-            self._task_results[task_id] = {
-                "status": "pending",
-                "message": message,
-                "result": "",
-                "origin_session_id": getattr(
-                    self.session_manager, "current_session_id", ""
-                ),
-            }
-
-            def _done_callback(
-                done_task: asyncio.Task[str], tracked_task_id: str = task_id
-            ) -> None:
-                async def _finalize() -> None:
-                    async with self._task_lock:
-                        if tracked_task_id in self._hidden_task_ids:
-                            self._pending_tasks.pop(tracked_task_id, None)
-                            self._task_results.pop(tracked_task_id, None)
-                            return
-
-                        task_state = self._task_results.setdefault(
-                            tracked_task_id,
-                            {
-                                "status": "pending",
-                                "message": "",
-                                "result": "",
-                                "origin_session_id": "",
-                            },
-                        )
-                        try:
-                            task_state["result"] = done_task.result()
-                            task_state["status"] = "completed"
-                        except asyncio.CancelledError:
-                            task_state["result"] = "Cancelled"
-                            task_state["status"] = "cancelled"
-                        except Exception as exc:
-                            task_state["result"] = f"Error: {exc}"
-                            task_state["status"] = "failed"
-                        finally:
-                            self._pending_tasks.pop(tracked_task_id, None)
-
-                asyncio.create_task(_finalize())
-
-            task.add_done_callback(_done_callback)
-            return task_id
-
-    async def start_background_message(
-        self, message: str
-    ) -> Tuple[str, asyncio.Task[str]]:
-        """
-        Start processing a user message in the background.
-
-        Args:
-            message: User input message.
-
-        Returns:
-            Stable task identifier plus the scheduled task handle.
-        """
-        task = asyncio.create_task(self.collect_message_response(message))
-        task_id = await self._register_background_task(message, task)
-        return task_id, task
 
     async def get_task_snapshot(self) -> Dict[str, Dict[str, str]]:
         """
@@ -1168,20 +1108,57 @@ Guidelines:
             print("")
             return response
 
-        task_id, task = await self.start_background_message(user_input)
+        task = asyncio.create_task(self.collect_message_response(user_input))
+        async with self._task_lock:
+            task_id = f"task-{self._next_background_task_id}"
+            self._next_background_task_id += 1
 
-        def _done_callback(
-            done_task: asyncio.Task[str], tracked_task_id: str = task_id
-        ) -> None:
-            try:
-                result = done_task.result()
-                print(f"\n[{tracked_task_id}] Completed:")
-                print(result)
-                print("")
-            except asyncio.CancelledError:
-                print(f"\n[{tracked_task_id}] Cancelled.\n")
-            except Exception as e:
-                print(f"\n[{tracked_task_id}] Failed: {e}\n")
+            self._hidden_task_ids.discard(task_id)
+            self._pending_tasks[task_id] = task
+            self._task_results[task_id] = {
+                "status": "pending",
+                "message": user_input,
+                "result": "",
+                "origin_session_id": getattr(
+                    self.session_manager, "current_session_id", ""
+                ),
+            }
+
+        def _done_callback(done_task: asyncio.Task[str]) -> None:
+            async def _finalize() -> None:
+                async with self._task_lock:
+                    if task_id in self._hidden_task_ids:
+                        self._pending_tasks.pop(task_id, None)
+                        self._task_results.pop(task_id, None)
+                        return
+
+                    task_state = self._task_results.setdefault(
+                        task_id,
+                        {
+                            "status": "pending",
+                            "message": "",
+                            "result": "",
+                            "origin_session_id": "",
+                        },
+                    )
+                    try:
+                        task_state["result"] = done_task.result()
+                        task_state["status"] = "completed"
+                        print(f"\n[{task_id}] Completed:")
+                        print(task_state["result"])
+                        print("")
+                    except asyncio.CancelledError:
+                        task_state["result"] = "Cancelled"
+                        task_state["status"] = "cancelled"
+                        print(f"\n[{task_id}] Cancelled.\n")
+                    except Exception as e:
+                        task_state["result"] = f"Error: {e}"
+                        task_state["status"] = "failed"
+                        print(f"\n[{task_id}] Failed: {e}\n")
+                    finally:
+                        self._pending_tasks.pop(task_id, None)
+
+            asyncio.create_task(_finalize())
 
         task.add_done_callback(_done_callback)
         message = f"[{task_id}] Started in background."
