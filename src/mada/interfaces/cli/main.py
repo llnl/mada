@@ -333,7 +333,7 @@ class MADACLIInterface:
                 # Interactive chat loop
                 while True:
                     try:
-                        user_input = (await asyncio.to_thread(input, "\nYou: ")).strip()
+                        user_input = input("\nYou: ").strip()
 
                         if user_input.lower() in ["quit", "exit", "q"]:
                             pending_count = await orchestrator.count_pending_tasks()
@@ -366,7 +366,7 @@ class MADACLIInterface:
                         print("\nAgents:")
                         print("-" * 20)
 
-                        await self.run_query(user_input)
+                        await self.orchestrator.run_query(user_input, self.blocking)
 
                     except KeyboardInterrupt:
                         print("\n\nGoodbye!")

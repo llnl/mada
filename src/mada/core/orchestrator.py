@@ -1215,3 +1215,34 @@ Guidelines:
             exc_tb: Traceback associated with the exception, if any.
         """
         await self.cleanup()
+
+    async def run_query(self, user_input: str, blocking: bool) -> None:
+        """
+        Run a query either in blocking or background mode.
+
+        Args:
+            user_input: Query text to send to the orchestrator.
+        """
+        if blocking:
+            response = await self.submit_message(user_input, blocking=True)
+            print(response)
+            print("")
+            return
+
+        task_id, task = await self.start_background_message(user_input)
+
+        def _done_callback(
+            done_task: asyncio.Task[str], tracked_task_id: str = task_id
+        ) -> None:
+            try:
+                result = done_task.result()
+                print(f"\n[{tracked_task_id}] Completed:")
+                print(result)
+                print("")
+            except asyncio.CancelledError:
+                print(f"\n[{tracked_task_id}] Cancelled.\n")
+            except Exception as e:
+                print(f"\n[{tracked_task_id}] Failed: {e}\n")
+
+        task.add_done_callback(_done_callback)
+        print(f"[{task_id}] Started in background.\n")

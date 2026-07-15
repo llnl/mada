@@ -10,7 +10,7 @@ for the Gradio interface, adapted to work with MADA's architecture.
 
 import logging
 import traceback
-from typing import Any, AsyncGenerator, Dict, List, Set, Tuple
+from typing import AsyncGenerator, Dict, List, Set, Tuple
 
 import gradio as gr
 
@@ -161,7 +161,7 @@ class MCPGradioClientSession:
         Returns:
             A gradio update object with new chat session choices.
         """
-        return gr.update(choices=self.list_sessions())
+        return gr.update(choices=self.list_sessions(), value=None)
 
     def create_new_session(self) -> Tuple[gr.update, List]:
         """
@@ -175,14 +175,9 @@ class MCPGradioClientSession:
         self.session_manager.create_new_session(new_id)
         self.session_manager.select_session(new_id)
         updated_sessions = self.list_sessions()
-        selected_label = next(
-            label
-            for label in updated_sessions
-            if self._extract_id_from_label(label) == new_id
-        )
         self._display_history = []
         return gr.update(
-            choices=updated_sessions, value=selected_label
+            choices=updated_sessions, value=None
         ), []  # update sessions list, empty chat history
 
     def _extract_id_from_label(self, session_label: str) -> str:
@@ -353,44 +348,6 @@ class MCPGradioClientSession:
             traceback.print_exc()
             yield error_msg
 
-    async def submit_chat_message(
-        self,
-        message: str,
-        history: List,
-        agent_table: gr.Dataframe,
-    ) -> Tuple[List[Dict[str, str]], Any]:
-        """
-        Submit one chat message and return the updated chatbot state.
-
-        Args:
-            message: User input message.
-            history: Current chatbot history.
-            agent_table: Agent configuration table.
-
-        Returns:
-            Updated chatbot history and textbox update.
-        """
-        display_history = list(self._display_history)
-        if not display_history and history is not None:
-            display_history = list(history)
-
-        if not message or not message.strip():
-            return display_history, gr.skip()
-
-        last_response = ""
-        async for response in self.process_message(message, history, agent_table):
-            last_response = response
-
-        updated_history = list(self._display_history)
-        if not updated_history:
-            updated_history = list(display_history)
-        if last_response and updated_history == display_history:
-            updated_history.append({"role": "user", "content": message})
-            updated_history.append({"role": "assistant", "content": last_response})
-            self._display_history = updated_history
-
-        return updated_history, ""
-
     async def get_task_status_markdown(self) -> str:
         """
         Render background task state for the Gradio task panel.
@@ -412,66 +369,6 @@ class MCPGradioClientSession:
             lines.append(f"- `{task_id}` [{status}] `{message[:80]}`")
 
         return "\n".join(lines)
-
-    async def refresh_chat_and_task_status(
-        self, _session_label: str
-    ) -> Tuple[Any, str]:
-        """
-        Refresh the chat transcript and task summary for background mode.
-
-        Args:
-            _session_label: Currently selected session label. The wrapper
-                uses the session manager's current selection as the only
-                active session.
-        Returns:
-            Tuple of chatbot history update and task-status markdown.
-        """
-        task_status = await self.get_task_status_markdown()
-        task_status_output: Any = task_status
-        if task_status == self._last_task_status_markdown:
-            task_status_output = gr.skip()
-        else:
-            self._last_task_status_markdown = task_status
-
-        session_id = self.session_manager.current_session_id
-
-        if not session_id:
-            return gr.skip(), task_status_output
-
-        if not self.orchestrator:
-            return gr.skip(), task_status_output
-
-        task_snapshot = await self.orchestrator.get_task_snapshot()
-        display_history = list(self._display_history)
-        history_changed = False
-
-        relevant_tasks = [
-            (task_id, task_state)
-            for task_id, task_state in task_snapshot.items()
-            if task_state.get("origin_session_id") == session_id
-        ]
-        if not relevant_tasks:
-            self._display_history = display_history
-            return gr.skip(), task_status_output
-
-        for task_id, task_state in relevant_tasks:
-            if task_state.get("status") == "pending":
-                continue
-            if task_id in self._displayed_task_results:
-                continue
-
-            result = task_state.get("result", "").strip()
-            if result:
-                display_history.append({"role": "assistant", "content": result})
-                self._displayed_task_results.add(task_id)
-                history_changed = True
-
-        if not history_changed:
-            self._display_history = display_history
-            return gr.skip(), task_status_output
-
-        self._display_history = display_history
-        return display_history, task_status_output
 
     async def cleanup(self):
         """Clean up resources."""
