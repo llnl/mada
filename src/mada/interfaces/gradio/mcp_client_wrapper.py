@@ -10,7 +10,7 @@ for the Gradio interface, adapted to work with MADA's architecture.
 
 import logging
 import traceback
-from typing import AsyncGenerator, Dict, List, Set, Tuple
+from typing import AsyncGenerator, Dict, List, Tuple
 
 import gradio as gr
 
@@ -58,9 +58,6 @@ class MCPGradioClientSession:
         self.mcp_servers = mcp_servers or {}
         self.session_manager = ChatSessionManager(database_config)
         self.session_bearer_token = None  # Store session bearer token
-        self._last_task_status_markdown = ""
-        self._display_history: List[Dict[str, str]] = []
-        self._displayed_task_results: Set[str] = set()
 
     async def connect_servers(
         self, agent_table: gr.Dataframe, request: gr.Request
@@ -213,7 +210,6 @@ class MCPGradioClientSession:
         session_id = self._extract_id_from_label(session_label)
 
         history = self.session_manager.select_session(session_id)
-        self._display_history = list(history)
 
         return history
 
@@ -254,8 +250,6 @@ class MCPGradioClientSession:
             LOG.info("Attempting to delete all sessions")
             self.session_manager.delete_all_sessions(confirm=False)
             LOG.info("Successfully deleted all sessions")
-            self._display_history = []
-            self._displayed_task_results.clear()
             return gr.update(choices=[], value=None), []
         except Exception as e:
             LOG.error(f"Failed to delete all sessions: {e}")
