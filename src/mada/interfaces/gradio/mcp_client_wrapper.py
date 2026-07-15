@@ -334,16 +334,6 @@ class MCPGradioClientSession:
         task_snapshot = (
             await self.orchestrator.get_task_snapshot() if self.orchestrator else {}
         )
-        history = self._update_chat_history_from_tasks(history or [], task_snapshot)
-        task_status = await self.get_task_status_markdown()
-        return history, task_status
-
-    def _update_chat_history_from_tasks(
-        self, history: List[Any], task_snapshot: Dict[str, Dict[str, str]]
-    ) -> List[Any]:
-        """
-        Append completed background task responses to the current chat history.
-        """
         updated_history = list(history)
         for task_id, task_state in task_snapshot.items():
             status = task_state.get("status", "unknown")
@@ -362,7 +352,8 @@ class MCPGradioClientSession:
                 updated_history.append((None, result))
             self._displayed_task_ids.add(task_id)
 
-        return updated_history
+        task_status = await self.get_task_status_markdown()
+        return updated_history, task_status
 
     async def cleanup(self):
         """Clean up resources."""
