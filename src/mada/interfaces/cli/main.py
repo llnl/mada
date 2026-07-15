@@ -302,7 +302,7 @@ class MADACLIInterface:
                 # Interactive chat loop
                 while True:
                     try:
-                        user_input = input("\nYou: ").strip()
+                        user_input = (await asyncio.to_thread(input, "\nYou: ")).strip()
 
                         if user_input.lower() in ["quit", "exit", "q"]:
                             pending_count = await orchestrator.count_pending_tasks()
