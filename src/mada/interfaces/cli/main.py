@@ -240,37 +240,6 @@ class MADACLIInterface:
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
 
-    async def run_query(self, user_input: str) -> None:
-        """
-        Run a query either in blocking or background mode.
-
-        Args:
-            user_input: Query text to send to the orchestrator.
-        """
-        if self.blocking:
-            response = await self.orchestrator.submit_message(user_input, blocking=True)
-            print(response)
-            print("")
-            return
-
-        task_id, task = await self.orchestrator.start_background_message(user_input)
-
-        def _done_callback(
-            done_task: asyncio.Task[str], tracked_task_id: str = task_id
-        ) -> None:
-            try:
-                result = done_task.result()
-                print(f"\n[{tracked_task_id}] Completed:")
-                print(result)
-                print("")
-            except asyncio.CancelledError:
-                print(f"\n[{tracked_task_id}] Cancelled.\n")
-            except Exception as e:
-                print(f"\n[{tracked_task_id}] Failed: {e}\n")
-
-        task.add_done_callback(_done_callback)
-        print(f"[{task_id}] Started in background.\n")
-
     async def run(self):
         """Run the interactive CLI session."""
         print("MADA Multi-Agent Orchestrator")
