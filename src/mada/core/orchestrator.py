@@ -820,50 +820,14 @@ Guidelines:
 
         aggregated_assistant_reply = ""
         tool_calls = []
-        turn_id: int
-        run_session: AgentSession
-        history_lengths: Dict[str, int]
 
         try:
-            async with self._session_lock:
-                turn_id = self._next_turn_id
-                self._next_turn_id += 1
-                if self.session is None:
-                    raise RuntimeError("Orchestrator session not initialized.")
-                run_session = AgentSession.from_dict(self.session.to_dict())
-                history_lengths = {}
-                for provider_name, provider_state in run_session.state.items():
-                    if not isinstance(provider_state, dict):
-                        continue
-                    messages = provider_state.get("messages")
-                    if isinstance(messages, list):
-                        history_lengths[provider_name] = len(messages)
+            # Store the user message in the database
+            self.session_manager.add_message("user", message)
 
-            async with self._task_lock:
-                completed_task_context = [
-                    (
-                        f"{task_id} ({task_state.get('message', '')}):\n"
-                        f"{task_state.get('result', '')}"
-                    )
-                    for task_id, task_state in self._task_results.items()
-                    if task_state.get("status") == "completed"
-                    and task_state.get("result")
-                ]
-
-            prompt_message = message
-            if completed_task_context:
-                prompt_message = (
-                    "Recent completed background task results are available below. "
-                    "Use them when the user's request refers to a previous task, "
-                    "tool call, returned payload, or generated output.\n\n"
-                    + "\n\n".join(completed_task_context[-5:])
-                    + f"\n\nUser request:\n{message}"
-                )
-
+            # Stream responses from the planning agent with conversation context
             response_started = False
-            stream = self.planning_agent.run(
-                prompt_message, session=run_session, stream=True
-            )
+            stream = self.planning_agent.run(message, session=self.session, stream=True)
             async for chunk in stream:
                 if chunk.text:
                     response_started = True
@@ -887,69 +851,10 @@ Guidelines:
             if not response_started:
                 LOG.warning("No text chunks received from planning agent")
 
-            async with self._session_lock:
-                self._completed_turns[turn_id] = {
-                    "message": message,
-                    "assistant_reply": aggregated_assistant_reply,
-                    "completed_session": run_session,
-                    "history_lengths": history_lengths,
-                }
-
-                while True:
-                    completed_turn = self._completed_turns.pop(
-                        self._next_turn_commit_id, None
-                    )
-                    if completed_turn is None:
-                        break
-
-                    if self.session is None:
-                        raise RuntimeError("Orchestrator session not initialized.")
-                    completed_session = completed_turn["completed_session"]
-                    history_lengths = completed_turn["history_lengths"]
-                    for provider_name, source_state in completed_session.state.items():
-                        if not isinstance(source_state, dict):
-                            if provider_name not in self.session.state:
-                                self.session.state[provider_name] = copy.deepcopy(
-                                    source_state
-                                )
-                            continue
-
-                        target_state = self.session.state.setdefault(provider_name, {})
-                        if not isinstance(target_state, dict):
-                            self.session.state[provider_name] = copy.deepcopy(
-                                source_state
-                            )
-                            continue
-
-                        source_messages = source_state.get("messages")
-                        if isinstance(source_messages, list):
-                            start_index = history_lengths.get(provider_name, 0)
-                            delta_messages = source_messages[start_index:]
-                            if delta_messages:
-                                target_messages = target_state.setdefault(
-                                    "messages", []
-                                )
-                                if not isinstance(target_messages, list):
-                                    target_messages = []
-                                    target_state["messages"] = target_messages
-                                target_messages.extend(copy.deepcopy(delta_messages))
-
-                        for key, value in source_state.items():
-                            if key == "messages":
-                                continue
-                            target_state[key] = copy.deepcopy(value)
-
-                    if completed_session.service_session_id:
-                        self.session.service_session_id = (
-                            completed_session.service_session_id
-                        )
-                    self.session_manager.add_message("user", completed_turn["message"])
-
-                    assistant_reply = completed_turn["assistant_reply"]
-                    if assistant_reply.strip():
-                        self.session_manager.add_message("assistant", assistant_reply)
-
-                    self._next_turn_commit_id += 1
+            if aggregated_assistant_reply.strip():
+                self.session_manager.add_message(
+                    "assistant", aggregated_assistant_reply
+                )
 
         except Exception as e:
             # Check for authentication errors
@@ -1102,27 +1007,120 @@ Guidelines:
         Returns:
             Text that the caller should display immediately.
         """
+
+        async def _collect_background_response() -> str:
+            async with self._session_lock:
+                if self.session is None:
+                    raise RuntimeError("Orchestrator session not initialized.")
+
+                run_session = AgentSession.from_dict(self.session.to_dict())
+                history_lengths = {}
+                for provider_name, provider_state in run_session.state.items():
+                    if not isinstance(provider_state, dict):
+                        continue
+                    messages = provider_state.get("messages")
+                    if isinstance(messages, list):
+                        history_lengths[provider_name] = len(messages)
+
+            response_chunks = []
+            aggregated_assistant_reply = ""
+            tool_calls = []
+
+            try:
+                response_started = False
+                stream = self.planning_agent.run(
+                    user_input, session=run_session, stream=True
+                )
+                async for chunk in stream:
+                    if chunk.text:
+                        response_started = True
+                        aggregated_assistant_reply += chunk.text
+                        response_chunks.append(chunk.text)
+                    elif hasattr(chunk, "contents") and chunk.contents:
+                        for content in chunk.contents:
+                            if hasattr(content, "to_dict"):
+                                d = content.to_dict()
+                                if d.get("type") in (
+                                    "function_call",
+                                    "tool_call",
+                                ) and d.get("name"):
+                                    call_id = d.get("call_id")
+                                    name = d.get("name")
+
+                                    if call_id and call_id not in tool_calls:
+                                        tool_calls.append(call_id)
+                                        response_chunks.append(f"\n[Calling: {name}]\n")
+
+                if not response_started:
+                    LOG.warning("No text chunks received from planning agent")
+
+                async with self._session_lock:
+                    if self.session is None:
+                        raise RuntimeError("Orchestrator session not initialized.")
+
+                    for provider_name, source_state in run_session.state.items():
+                        if not isinstance(source_state, dict):
+                            if provider_name not in self.session.state:
+                                self.session.state[provider_name] = copy.deepcopy(
+                                    source_state
+                                )
+                            continue
+
+                        target_state = self.session.state.setdefault(provider_name, {})
+                        if not isinstance(target_state, dict):
+                            self.session.state[provider_name] = copy.deepcopy(
+                                source_state
+                            )
+                            continue
+
+                        source_messages = source_state.get("messages")
+                        if isinstance(source_messages, list):
+                            start_index = history_lengths.get(provider_name, 0)
+                            delta_messages = source_messages[start_index:]
+                            if delta_messages:
+                                target_messages = target_state.setdefault(
+                                    "messages", []
+                                )
+                                if not isinstance(target_messages, list):
+                                    target_messages = []
+                                    target_state["messages"] = target_messages
+                                target_messages.extend(copy.deepcopy(delta_messages))
+
+                        for key, value in source_state.items():
+                            if key == "messages":
+                                continue
+                            target_state[key] = copy.deepcopy(value)
+
+                    if run_session.service_session_id:
+                        self.session.service_session_id = run_session.service_session_id
+
+                    self.session_manager.add_message("user", user_input)
+                    if aggregated_assistant_reply.strip():
+                        self.session_manager.add_message(
+                            "assistant", aggregated_assistant_reply
+                        )
+
+                return "".join(response_chunks)
+            except Exception as e:
+                error_msg = f"Error processing message: {e}"
+                LOG.error(error_msg)
+                traceback.print_exc()
+                return error_msg
+
         if blocking:
-            response = await self.collect_message_response(user_input)
+            response = await _collect_background_response()
             print(response)
             print("")
             return response
 
-        task = asyncio.create_task(self.collect_message_response(user_input))
         async with self._task_lock:
             task_id = f"task-{self._next_background_task_id}"
             self._next_background_task_id += 1
 
+            task = asyncio.create_task(_collect_background_response())
             self._hidden_task_ids.discard(task_id)
             self._pending_tasks[task_id] = task
-            self._task_results[task_id] = {
-                "status": "pending",
-                "message": user_input,
-                "result": "",
-                "origin_session_id": getattr(
-                    self.session_manager, "current_session_id", ""
-                ),
-            }
+            self._task_results[task_id] = {"status": "pending"}
 
         def _done_callback(done_task: asyncio.Task[str]) -> None:
             async def _finalize() -> None:
@@ -1134,25 +1132,18 @@ Guidelines:
 
                     task_state = self._task_results.setdefault(
                         task_id,
-                        {
-                            "status": "pending",
-                            "message": "",
-                            "result": "",
-                            "origin_session_id": "",
-                        },
+                        {"status": "pending"},
                     )
                     try:
-                        task_state["result"] = done_task.result()
+                        result = done_task.result()
                         task_state["status"] = "completed"
                         print(f"\n[{task_id}] Completed:")
-                        print(task_state["result"])
+                        print(result)
                         print("")
                     except asyncio.CancelledError:
-                        task_state["result"] = "Cancelled"
                         task_state["status"] = "cancelled"
                         print(f"\n[{task_id}] Cancelled.\n")
                     except Exception as e:
-                        task_state["result"] = f"Error: {e}"
                         task_state["status"] = "failed"
                         print(f"\n[{task_id}] Failed: {e}\n")
                     finally:

@@ -314,8 +314,7 @@ class MCPGradioClientSession:
         lines = ["### Task Status"]
         for task_id, task_state in reversed(list(task_snapshot.items())):
             status = task_state.get("status", "unknown")
-            message = task_state.get("message", "").strip() or "(empty)"
-            lines.append(f"- `{task_id}` [{status}] `{message[:80]}`")
+            lines.append(f"- `{task_id}` [{status}]")
 
         return "\n".join(lines)
 
@@ -331,29 +330,8 @@ class MCPGradioClientSession:
         Returns:
             Current chat history and task status markdown.
         """
-        task_snapshot = (
-            await self.orchestrator.get_task_snapshot() if self.orchestrator else {}
-        )
-        updated_history = list(history)
-        for task_id, task_state in task_snapshot.items():
-            status = task_state.get("status", "unknown")
-            if status == "pending":
-                continue
-            if task_id in self._displayed_task_ids:
-                continue
-
-            result = task_state.get("result", "")
-            if not result:
-                result = f"[{task_id}] {status}"
-
-            if any(isinstance(item, dict) for item in updated_history):
-                updated_history.append({"role": "assistant", "content": result})
-            else:
-                updated_history.append((None, result))
-            self._displayed_task_ids.add(task_id)
-
         task_status = await self.get_task_status_markdown()
-        return updated_history, task_status
+        return list(history), task_status
 
     async def cleanup(self):
         """Clean up resources."""
