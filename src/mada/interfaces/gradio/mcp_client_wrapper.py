@@ -314,16 +314,19 @@ class MCPGradioClientSession:
 
         return "\n".join(lines)
 
-    async def refresh_chat_and_task_status(
-        self, history: List[Any]
-    ) -> Tuple[List[Any], str]:
+    async def refresh_chat_and_task_status(self, history: List[Any]) -> Tuple[Any, str]:
         """
         Refresh chat history and background task status for the Gradio UI.
         """
         task_status = await self.get_task_status_markdown()
-        if self.orchestrator and await self.orchestrator.count_pending_tasks() == 0:
-            return self.session_manager.load_history(), task_status
-        return list(history), task_status
+        if not self.orchestrator or await self.orchestrator.count_pending_tasks() > 0:
+            return gr.skip(), task_status
+
+        persisted_history = self.session_manager.load_history()
+        if persisted_history == list(history):
+            return gr.skip(), task_status
+
+        return persisted_history, task_status
 
     async def cleanup(self):
         """Clean up resources."""

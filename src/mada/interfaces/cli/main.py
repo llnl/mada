@@ -292,19 +292,14 @@ class MADACLIInterface:
                 print("\nChat with the agents (type 'quit' to exit)")
                 print("-" * 50)
 
-                prompt_session = PromptSession() if PromptSession else None
+                prompt_session = PromptSession()
 
                 # Interactive chat loop
                 while True:
                     try:
-                        if prompt_session and patch_stdout:
-                            with patch_stdout():
-                                user_input = (
-                                    await prompt_session.prompt_async("\nYou: ")
-                                ).strip()
-                        else:
+                        with patch_stdout():
                             user_input = (
-                                await asyncio.to_thread(input, "\nYou: ")
+                                await prompt_session.prompt_async("\nYou: ")
                             ).strip()
 
                         if user_input.lower() in ["quit", "exit", "q"]:
