@@ -796,48 +796,42 @@ Guidelines:
             traceback.print_exc()
             yield error_msg
 
-    async def _fetch_background_tool_result(self, task_id: str) -> Dict[str, Any]:
+    def _start_background_tool_poll_from_reply_if_needed(self, reply_text: str) -> None:
         """
-        Ask connected MCP servers for a background tool result.
-
-        `mada-tools` exposes this through a server tool named
-        `get_background_task_result`. We try each connected server because the
-        task descriptor returned by the original tool does not always include
-        the server name.
+        Parse assistant reply text and start polling for a running background tool.
         """
-        for mcp_tool in self._mcp_tools_by_server.values():
-            for fn in getattr(mcp_tool, "_functions", []):
-                if getattr(fn, "name", None) != "get_background_task_result":
-                    continue
-
+        reply_text = reply_text.strip()
+        try:
+            descriptor = json.loads(reply_text)
+        except json.JSONDecodeError:
+            descriptor = None
+            start = reply_text.find("{")
+            end = reply_text.rfind("}")
+            if start != -1 and end > start:
                 try:
-                    result = await fn.invoke(task_id=task_id)
-                except TypeError:
-                    result = await fn.invoke({"task_id": task_id})
+                    descriptor = json.loads(reply_text[start : end + 1])
+                except json.JSONDecodeError:
+                    descriptor = None
 
-                if isinstance(result, list) and result:
-                    result = result[0]
-                if hasattr(result, "text"):
-                    result = result.text
-                if isinstance(result, bytes):
-                    result = result.decode("utf-8", errors="replace")
+        if not isinstance(descriptor, dict) or not descriptor.get("task_id"):
+            return
 
-                try:
-                    payload = json.loads(result) if isinstance(result, str) else result
-                except (TypeError, json.JSONDecodeError):
-                    payload = {
-                        "task_id": task_id,
-                        "status": "failed",
-                        "error": str(result),
-                    }
+        task_id = descriptor["task_id"]
+        status = descriptor.get("status", "running")
+        tool_name = descriptor.get("tool_name", "background_tool")
+        if status != "running" or task_id in self._background_tool_poll_tasks:
+            return
 
-                if isinstance(payload, dict) and payload.get("status") != "not_found":
-                    return payload
-
-        return {
-            "task_id": task_id,
-            "status": "not_found",
-            "message": "Background task not found on connected MCP servers.",
+        session_id = self.session_manager.current_session_id
+        poll_task = asyncio.create_task(
+            self._poll_background_tool(task_id, tool_name, session_id)
+        )
+        self._background_tool_poll_tasks[task_id] = poll_task
+        self._pending_tasks[task_id] = poll_task
+        self._task_results[task_id] = {
+            "status": "running",
+            "type": "mcp_tool",
+            "tool_name": tool_name,
         }
 
     async def _poll_background_tool(
@@ -850,7 +844,48 @@ Guidelines:
         Poll a server-side MCP background tool until it finishes, then persist it.
         """
         while True:
-            result = await self._fetch_background_tool_result(task_id)
+            result = {
+                "task_id": task_id,
+                "status": "not_found",
+                "message": "Background task not found on connected MCP servers.",
+            }
+            for mcp_tool in self._mcp_tools_by_server.values():
+                for fn in getattr(mcp_tool, "_functions", []):
+                    if getattr(fn, "name", None) != "get_background_task_result":
+                        continue
+
+                    try:
+                        payload = await fn.invoke(task_id=task_id)
+                    except TypeError:
+                        payload = await fn.invoke({"task_id": task_id})
+
+                    if isinstance(payload, list) and payload:
+                        payload = payload[0]
+                    if hasattr(payload, "text"):
+                        payload = payload.text
+                    if isinstance(payload, bytes):
+                        payload = payload.decode("utf-8", errors="replace")
+
+                    try:
+                        payload = (
+                            json.loads(payload) if isinstance(payload, str) else payload
+                        )
+                    except (TypeError, json.JSONDecodeError):
+                        payload = {
+                            "task_id": task_id,
+                            "status": "failed",
+                            "error": str(payload),
+                        }
+
+                    if (
+                        isinstance(payload, dict)
+                        and payload.get("status") != "not_found"
+                    ):
+                        result = payload
+                        break
+                if result.get("status") != "not_found":
+                    break
+
             status = result.get("status", "unknown")
 
             async with self._task_lock:
@@ -969,38 +1004,9 @@ Guidelines:
                         "assistant", aggregated_assistant_reply
                     )
 
-                reply_text = aggregated_assistant_reply.strip()
-                try:
-                    descriptor = json.loads(reply_text)
-                except json.JSONDecodeError:
-                    descriptor = None
-                    start = reply_text.find("{")
-                    end = reply_text.rfind("}")
-                    if start != -1 and end > start:
-                        try:
-                            descriptor = json.loads(reply_text[start : end + 1])
-                        except json.JSONDecodeError:
-                            descriptor = None
-
-                if isinstance(descriptor, dict) and descriptor.get("task_id"):
-                    task_id = descriptor["task_id"]
-                    status = descriptor.get("status", "running")
-                    tool_name = descriptor.get("tool_name", "background_tool")
-                    if (
-                        status == "running"
-                        and task_id not in self._background_tool_poll_tasks
-                    ):
-                        session_id = self.session_manager.current_session_id
-                        poll_task = asyncio.create_task(
-                            self._poll_background_tool(task_id, tool_name, session_id)
-                        )
-                        self._background_tool_poll_tasks[task_id] = poll_task
-                        self._pending_tasks[task_id] = poll_task
-                        self._task_results[task_id] = {
-                            "status": "running",
-                            "type": "mcp_tool",
-                            "tool_name": tool_name,
-                        }
+                self._start_background_tool_poll_from_reply_if_needed(
+                    aggregated_assistant_reply
+                )
                 return
 
             async with self._session_lock:
@@ -1058,40 +1064,9 @@ Guidelines:
                             "assistant", completed["assistant_reply"]
                         )
 
-                    reply_text = completed["assistant_reply"].strip()
-                    try:
-                        descriptor = json.loads(reply_text)
-                    except json.JSONDecodeError:
-                        descriptor = None
-                        start = reply_text.find("{")
-                        end = reply_text.rfind("}")
-                        if start != -1 and end > start:
-                            try:
-                                descriptor = json.loads(reply_text[start : end + 1])
-                            except json.JSONDecodeError:
-                                descriptor = None
-
-                    if isinstance(descriptor, dict) and descriptor.get("task_id"):
-                        task_id = descriptor["task_id"]
-                        status = descriptor.get("status", "running")
-                        tool_name = descriptor.get("tool_name", "background_tool")
-                        if (
-                            status == "running"
-                            and task_id not in self._background_tool_poll_tasks
-                        ):
-                            session_id = self.session_manager.current_session_id
-                            poll_task = asyncio.create_task(
-                                self._poll_background_tool(
-                                    task_id, tool_name, session_id
-                                )
-                            )
-                            self._background_tool_poll_tasks[task_id] = poll_task
-                            self._pending_tasks[task_id] = poll_task
-                            self._task_results[task_id] = {
-                                "status": "running",
-                                "type": "mcp_tool",
-                                "tool_name": tool_name,
-                            }
+                    self._start_background_tool_poll_from_reply_if_needed(
+                        completed["assistant_reply"]
+                    )
 
                     self._next_turn_commit_id += 1
 
@@ -1136,13 +1111,31 @@ Guidelines:
                 traceback.print_exc()
                 yield error_msg
 
-    async def collect_message_response(self, message: str) -> str:
+    async def collect_message_response(
+        self,
+        message: str,
+        isolated_session: bool = False,
+        first_tool_call: Optional[asyncio.Event] = None,
+        first_tool_state: Optional[Dict[str, str]] = None,
+    ) -> str:
         """
         Collect a streamed assistant response into a single string.
         """
         response_chunks = []
-        async for response_chunk in self.process_message(message):
+        async for response_chunk in self.process_message(
+            message,
+            isolated_session=isolated_session,
+        ):
             response_chunks.append(response_chunk)
+            if (
+                first_tool_call
+                and first_tool_state is not None
+                and response_chunk.startswith("\n[Calling:")
+            ):
+                first_tool_state["name"] = (
+                    response_chunk.strip()[len("[Calling:") :].rstrip("]").strip()
+                )
+                first_tool_call.set()
         return "".join(response_chunks)
 
     async def run_query(self, user_input: str, blocking: bool = True) -> str:
@@ -1163,24 +1156,16 @@ Guidelines:
             )
 
         first_tool_call = asyncio.Event()
-        first_tool_name = None
+        first_tool_state = {}
 
-        async def _collect_response() -> str:
-            nonlocal first_tool_name
-            response_chunks = []
-            async for response_chunk in self.process_message(
+        task = asyncio.create_task(
+            self.collect_message_response(
                 user_input,
                 isolated_session=use_isolated_session,
-            ):
-                response_chunks.append(response_chunk)
-                if response_chunk.startswith("\n[Calling:"):
-                    first_tool_name = (
-                        response_chunk.strip()[len("[Calling:") :].rstrip("]").strip()
-                    )
-                    first_tool_call.set()
-            return "".join(response_chunks)
-
-        task = asyncio.create_task(_collect_response())
+                first_tool_call=first_tool_call,
+                first_tool_state=first_tool_state,
+            )
+        )
         tool_waiter = asyncio.create_task(first_tool_call.wait())
         done, _ = await asyncio.wait(
             {task, tool_waiter},
@@ -1201,7 +1186,7 @@ Guidelines:
             self._task_results[task_id] = {
                 "status": "pending",
                 "type": "agent",
-                "tool_name": first_tool_name or "tool call",
+                "tool_name": first_tool_state.get("name", "tool call"),
             }
 
         def _done_callback(done_task: asyncio.Task[str]) -> None:
