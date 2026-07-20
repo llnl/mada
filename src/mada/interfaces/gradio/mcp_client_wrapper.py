@@ -284,6 +284,9 @@ class MCPGradioClientSession:
             response = await self.orchestrator.run_query(
                 message, blocking=self.blocking
             )
+            if response.startswith("[task-") and "Started in background." in response:
+                self.session_manager.add_message("user", message)
+                self.session_manager.add_message("assistant", response)
             yield response
 
         except Exception as e:

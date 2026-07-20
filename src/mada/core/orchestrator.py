@@ -834,6 +834,32 @@ Guidelines:
             "tool_name": tool_name,
         }
 
+    def _user_message_already_started_background_task(self, message: str) -> bool:
+        """
+        Return whether the DB already contains this user turn with a task ack.
+        """
+        try:
+            history = self.session_manager.load_history()
+        except Exception:
+            return False
+
+        if not isinstance(history, list):
+            return False
+
+        for index, entry in enumerate(history[:-1]):
+            next_entry = history[index + 1]
+            if not isinstance(entry, dict) or not isinstance(next_entry, dict):
+                continue
+            if entry.get("role") != "user" or entry.get("content") != message:
+                continue
+            if next_entry.get("role") != "assistant":
+                continue
+            content = next_entry.get("content", "")
+            if isinstance(content, str) and content.startswith("[task-"):
+                return "Started in background." in content
+
+        return False
+
     async def _poll_background_tool(
         self,
         task_id: str,
@@ -998,7 +1024,8 @@ Guidelines:
                 LOG.warning("No text chunks received from planning agent")
 
             if isolated_session:
-                self.session_manager.add_message("user", message)
+                if not self._user_message_already_started_background_task(message):
+                    self.session_manager.add_message("user", message)
                 if aggregated_assistant_reply.strip():
                     self.session_manager.add_message(
                         "assistant", aggregated_assistant_reply
@@ -1058,7 +1085,10 @@ Guidelines:
                             completed_session.service_session_id
                         )
 
-                    self.session_manager.add_message("user", completed["message"])
+                    if not self._user_message_already_started_background_task(
+                        completed["message"]
+                    ):
+                        self.session_manager.add_message("user", completed["message"])
                     if completed["assistant_reply"].strip():
                         self.session_manager.add_message(
                             "assistant", completed["assistant_reply"]
