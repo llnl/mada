@@ -11,6 +11,7 @@ using the Planning Agent + Agent-as-Tool pattern.
 
 import asyncio
 import copy
+import json
 import logging
 import sys
 import traceback
@@ -26,11 +27,6 @@ from agent_framework.exceptions import ToolException
 from mada.core.config import AgentConfig, DatabaseConfig, ModelConfig, MCPServerConfig
 from mada.core.coordinator import MCPAgentManager
 from mada.core.database import ChatSessionManager
-
-try:
-    BaseExceptionGroup
-except NameError:
-    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
 
 
 LOG = logging.getLogger(__name__)
@@ -85,9 +81,11 @@ class MADAOrchestrator(MCPAgentManager):
         self._completed_turns: Dict[int, Dict[str, Any]] = {}
         self._task_lock = asyncio.Lock()
         self._next_background_task_id = 1
-        self._pending_tasks: Dict[str, asyncio.Task[str]] = {}
+        self._pending_tasks: Dict[str, asyncio.Task[Any]] = {}
         self._task_results: Dict[str, Dict[str, str]] = {}
         self._hidden_task_ids: Set[str] = set()
+        self._background_tool_poll_tasks: Dict[str, asyncio.Task[None]] = {}
+        self._mcp_tools_by_server: Dict[str, Any] = {}
         self._agent_descriptions = {}
         self._mcp_tool_count = 0
         # Initialize the database
@@ -300,6 +298,7 @@ class MADAOrchestrator(MCPAgentManager):
                 mcp_tool = await self.exit_stack.enter_async_context(mcp_tool)
                 all_tools.append(mcp_tool)
                 all_tool_names.append(server_name)
+                self._mcp_tools_by_server[server_name] = mcp_tool
                 LOG.info(f"✓ Successfully connected to MCP server: {server_name}")
             except asyncio.CancelledError:
                 # Connection was cancelled - properly close the tool to cleanup async generators
@@ -797,15 +796,107 @@ Guidelines:
             traceback.print_exc()
             yield error_msg
 
-    async def process_message(self, message: str) -> AsyncGenerator[str, None]:
+    async def _fetch_background_tool_result(self, task_id: str) -> Dict[str, Any]:
+        """
+        Ask connected MCP servers for a background tool result.
+
+        `mada-tools` exposes this through a server tool named
+        `get_background_task_result`. We try each connected server because the
+        task descriptor returned by the original tool does not always include
+        the server name.
+        """
+        for mcp_tool in self._mcp_tools_by_server.values():
+            for fn in getattr(mcp_tool, "_functions", []):
+                if getattr(fn, "name", None) != "get_background_task_result":
+                    continue
+
+                try:
+                    result = await fn.invoke(task_id=task_id)
+                except TypeError:
+                    result = await fn.invoke({"task_id": task_id})
+
+                if isinstance(result, list) and result:
+                    result = result[0]
+                if hasattr(result, "text"):
+                    result = result.text
+                if isinstance(result, bytes):
+                    result = result.decode("utf-8", errors="replace")
+
+                try:
+                    payload = json.loads(result) if isinstance(result, str) else result
+                except (TypeError, json.JSONDecodeError):
+                    payload = {
+                        "task_id": task_id,
+                        "status": "failed",
+                        "error": str(result),
+                    }
+
+                if isinstance(payload, dict) and payload.get("status") != "not_found":
+                    return payload
+
+        return {
+            "task_id": task_id,
+            "status": "not_found",
+            "message": "Background task not found on connected MCP servers.",
+        }
+
+    async def _poll_background_tool(
+        self,
+        task_id: str,
+        tool_name: str,
+        session_id: str,
+    ) -> None:
+        """
+        Poll a server-side MCP background tool until it finishes, then persist it.
+        """
+        while True:
+            result = await self._fetch_background_tool_result(task_id)
+            status = result.get("status", "unknown")
+
+            async with self._task_lock:
+                self._task_results[task_id] = {
+                    "status": status,
+                    "type": "mcp_tool",
+                    "tool_name": tool_name,
+                }
+
+            if status == "running":
+                await asyncio.sleep(5)
+                continue
+
+            if status == "completed":
+                output = result.get("result", "")
+                if not isinstance(output, str):
+                    output = json.dumps(output, indent=2, default=str)
+                message = (
+                    f"[{task_id}] Background tool `{tool_name}` completed:\n{output}"
+                )
+            else:
+                output = (
+                    result.get("error")
+                    or result.get("message")
+                    or json.dumps(result, indent=2, default=str)
+                )
+                message = (
+                    f"[{task_id}] Background tool `{tool_name}` {status}:\n{output}"
+                )
+
+            self.session_manager.chat_db.add_message(session_id, "assistant", message)
+            async with self._task_lock:
+                self._pending_tasks.pop(task_id, None)
+            return
+
+    async def process_message(
+        self,
+        message: str,
+        isolated_session: bool = False,
+    ) -> AsyncGenerator[str, None]:
         """
         Process a user message through the planning agent.
 
         The planning agent routes to specialist agents as needed using the
-        as_tool() pattern. Each call runs against an isolated snapshot of the
-        active session so overlapping async requests do not mutate the shared
-        conversation state mid-stream. Successful turns are merged back into the
-        shared session after streaming completes.
+        as_tool() pattern. Each request runs on a copy of the active session so
+        overlapping UI requests do not mutate shared chat state mid-stream.
 
         Args:
             message: User input message.
@@ -820,14 +911,32 @@ Guidelines:
 
         aggregated_assistant_reply = ""
         tool_calls = []
+        response_started = False
 
         try:
-            # Store the user message in the database
-            self.session_manager.add_message("user", message)
+            if isolated_session:
+                turn_id = None
+                run_session = self.planning_agent.create_session()
+                history_lengths = {}
+            else:
+                async with self._session_lock:
+                    if self.session is None:
+                        raise RuntimeError("Orchestrator session not initialized.")
+
+                    turn_id = self._next_turn_id
+                    self._next_turn_id += 1
+                    run_session = AgentSession.from_dict(self.session.to_dict())
+                    history_lengths = {}
+                    for provider_name, provider_state in run_session.state.items():
+                        if isinstance(provider_state, dict) and isinstance(
+                            provider_state.get("messages"), list
+                        ):
+                            history_lengths[provider_name] = len(
+                                provider_state["messages"]
+                            )
 
             # Stream responses from the planning agent with conversation context
-            response_started = False
-            stream = self.planning_agent.run(message, session=self.session, stream=True)
+            stream = self.planning_agent.run(message, session=run_session, stream=True)
             async for chunk in stream:
                 if chunk.text:
                     response_started = True
@@ -843,18 +952,148 @@ Guidelines:
                             ) and d.get("name"):
                                 call_id = d.get("call_id")
                                 name = d.get("name")
+                                call_key = call_id or name
 
-                                if call_id and call_id not in tool_calls:
-                                    tool_calls.append(call_id)
-                                    yield f"\n[Calling: {name}]\n"
+                                if call_key not in tool_calls:
+                                    tool_calls.append(call_key)
+                                    notice = f"\n[Calling: {name}]\n"
+                                    yield notice
 
             if not response_started:
                 LOG.warning("No text chunks received from planning agent")
 
-            if aggregated_assistant_reply.strip():
-                self.session_manager.add_message(
-                    "assistant", aggregated_assistant_reply
-                )
+            if isolated_session:
+                self.session_manager.add_message("user", message)
+                if aggregated_assistant_reply.strip():
+                    self.session_manager.add_message(
+                        "assistant", aggregated_assistant_reply
+                    )
+
+                reply_text = aggregated_assistant_reply.strip()
+                try:
+                    descriptor = json.loads(reply_text)
+                except json.JSONDecodeError:
+                    descriptor = None
+                    start = reply_text.find("{")
+                    end = reply_text.rfind("}")
+                    if start != -1 and end > start:
+                        try:
+                            descriptor = json.loads(reply_text[start : end + 1])
+                        except json.JSONDecodeError:
+                            descriptor = None
+
+                if isinstance(descriptor, dict) and descriptor.get("task_id"):
+                    task_id = descriptor["task_id"]
+                    status = descriptor.get("status", "running")
+                    tool_name = descriptor.get("tool_name", "background_tool")
+                    if (
+                        status == "running"
+                        and task_id not in self._background_tool_poll_tasks
+                    ):
+                        session_id = self.session_manager.current_session_id
+                        poll_task = asyncio.create_task(
+                            self._poll_background_tool(task_id, tool_name, session_id)
+                        )
+                        self._background_tool_poll_tasks[task_id] = poll_task
+                        self._pending_tasks[task_id] = poll_task
+                        self._task_results[task_id] = {
+                            "status": "running",
+                            "type": "mcp_tool",
+                            "tool_name": tool_name,
+                        }
+                return
+
+            async with self._session_lock:
+                self._completed_turns[turn_id] = {
+                    "message": message,
+                    "assistant_reply": aggregated_assistant_reply,
+                    "run_session": run_session,
+                    "history_lengths": history_lengths,
+                }
+
+                while self._next_turn_commit_id in self._completed_turns:
+                    completed = self._completed_turns.pop(self._next_turn_commit_id)
+                    completed_session = completed["run_session"]
+                    completed_history_lengths = completed["history_lengths"]
+
+                    for provider_name, source_state in completed_session.state.items():
+                        if not isinstance(source_state, dict):
+                            self.session.state[provider_name] = copy.deepcopy(
+                                source_state
+                            )
+                            continue
+
+                        target_state = self.session.state.setdefault(provider_name, {})
+                        if not isinstance(target_state, dict):
+                            target_state = {}
+                            self.session.state[provider_name] = target_state
+
+                        source_messages = source_state.get("messages")
+                        if isinstance(source_messages, list):
+                            start_index = completed_history_lengths.get(
+                                provider_name, 0
+                            )
+                            delta_messages = source_messages[start_index:]
+                            if delta_messages:
+                                target_messages = target_state.setdefault(
+                                    "messages", []
+                                )
+                                if not isinstance(target_messages, list):
+                                    target_messages = []
+                                    target_state["messages"] = target_messages
+                                target_messages.extend(copy.deepcopy(delta_messages))
+
+                        for key, value in source_state.items():
+                            if key != "messages":
+                                target_state[key] = copy.deepcopy(value)
+
+                    if completed_session.service_session_id:
+                        self.session.service_session_id = (
+                            completed_session.service_session_id
+                        )
+
+                    self.session_manager.add_message("user", completed["message"])
+                    if completed["assistant_reply"].strip():
+                        self.session_manager.add_message(
+                            "assistant", completed["assistant_reply"]
+                        )
+
+                    reply_text = completed["assistant_reply"].strip()
+                    try:
+                        descriptor = json.loads(reply_text)
+                    except json.JSONDecodeError:
+                        descriptor = None
+                        start = reply_text.find("{")
+                        end = reply_text.rfind("}")
+                        if start != -1 and end > start:
+                            try:
+                                descriptor = json.loads(reply_text[start : end + 1])
+                            except json.JSONDecodeError:
+                                descriptor = None
+
+                    if isinstance(descriptor, dict) and descriptor.get("task_id"):
+                        task_id = descriptor["task_id"]
+                        status = descriptor.get("status", "running")
+                        tool_name = descriptor.get("tool_name", "background_tool")
+                        if (
+                            status == "running"
+                            and task_id not in self._background_tool_poll_tasks
+                        ):
+                            session_id = self.session_manager.current_session_id
+                            poll_task = asyncio.create_task(
+                                self._poll_background_tool(
+                                    task_id, tool_name, session_id
+                                )
+                            )
+                            self._background_tool_poll_tasks[task_id] = poll_task
+                            self._pending_tasks[task_id] = poll_task
+                            self._task_results[task_id] = {
+                                "status": "running",
+                                "type": "mcp_tool",
+                                "tool_name": tool_name,
+                            }
+
+                    self._next_turn_commit_id += 1
 
         except Exception as e:
             # Check for authentication errors
@@ -897,12 +1136,110 @@ Guidelines:
                 traceback.print_exc()
                 yield error_msg
 
+    async def collect_message_response(self, message: str) -> str:
+        """
+        Collect a streamed assistant response into a single string.
+        """
+        response_chunks = []
+        async for response_chunk in self.process_message(message):
+            response_chunks.append(response_chunk)
+        return "".join(response_chunks)
+
+    async def run_query(self, user_input: str, blocking: bool = True) -> str:
+        """
+        Run a query inline, or detach it only after it starts calling a tool.
+        """
+        if blocking:
+            response = await self.collect_message_response(user_input)
+            print(response)
+            print("")
+            return response
+
+        async with self._task_lock:
+            use_isolated_session = any(
+                task.get("type") == "agent"
+                and task.get("status") in ("pending", "running")
+                for task in self._task_results.values()
+            )
+
+        first_tool_call = asyncio.Event()
+        first_tool_name = None
+
+        async def _collect_response() -> str:
+            nonlocal first_tool_name
+            response_chunks = []
+            async for response_chunk in self.process_message(
+                user_input,
+                isolated_session=use_isolated_session,
+            ):
+                response_chunks.append(response_chunk)
+                if response_chunk.startswith("\n[Calling:"):
+                    first_tool_name = (
+                        response_chunk.strip()[len("[Calling:") :].rstrip("]").strip()
+                    )
+                    first_tool_call.set()
+            return "".join(response_chunks)
+
+        task = asyncio.create_task(_collect_response())
+        tool_waiter = asyncio.create_task(first_tool_call.wait())
+        done, _ = await asyncio.wait(
+            {task, tool_waiter},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if task in done:
+            tool_waiter.cancel()
+            response = await task
+            print(response)
+            print("")
+            return response
+
+        async with self._task_lock:
+            task_id = f"task-{self._next_background_task_id}"
+            self._next_background_task_id += 1
+            self._pending_tasks[task_id] = task
+            self._task_results[task_id] = {
+                "status": "pending",
+                "type": "agent",
+                "tool_name": first_tool_name or "tool call",
+            }
+
+        def _done_callback(done_task: asyncio.Task[str]) -> None:
+            async def _finalize() -> None:
+                async with self._task_lock:
+                    if task_id in self._hidden_task_ids:
+                        self._pending_tasks.pop(task_id, None)
+                        self._task_results.pop(task_id, None)
+                        return
+
+                    task_state = self._task_results.setdefault(
+                        task_id, {"status": "pending"}
+                    )
+                    try:
+                        result = done_task.result()
+                        task_state["status"] = "completed"
+                        print(f"\n[{task_id}] Completed:")
+                        print(result)
+                        print("")
+                    except asyncio.CancelledError:
+                        task_state["status"] = "cancelled"
+                        print(f"\n[{task_id}] Cancelled.\n")
+                    except Exception as e:
+                        task_state["status"] = "failed"
+                        print(f"\n[{task_id}] Failed: {e}\n")
+                    finally:
+                        self._pending_tasks.pop(task_id, None)
+
+            asyncio.create_task(_finalize())
+
+        task.add_done_callback(_done_callback)
+        message = f"[{task_id}] Started in background."
+        print(f"{message}\n")
+        return message
+
     async def get_task_snapshot(self) -> Dict[str, Dict[str, str]]:
         """
-        Return a snapshot of background task state.
-
-        Returns:
-            Mapping of task ID to task metadata.
+        Return a copy of interface and MCP background task state.
         """
         async with self._task_lock:
             return copy.deepcopy(self._task_results)
@@ -910,9 +1247,6 @@ Guidelines:
     async def count_pending_tasks(self) -> int:
         """
         Return the current number of in-flight background tasks.
-
-        Returns:
-            Count of pending background tasks.
         """
         async with self._task_lock:
             return len(self._pending_tasks)
@@ -925,6 +1259,12 @@ Guidelines:
             `None`.
         """
         try:
+            for task in self._pending_tasks.values():
+                if not task.done():
+                    task.cancel()
+            for task in self._background_tool_poll_tasks.values():
+                if not task.done():
+                    task.cancel()
             await self.exit_stack.aclose()
             self.specialist_agents.clear()
             self.planning_agent = None
@@ -935,6 +1275,8 @@ Guidelines:
             self._pending_tasks.clear()
             self._task_results.clear()
             self._hidden_task_ids.clear()
+            self._background_tool_poll_tasks.clear()
+            self._mcp_tools_by_server.clear()
             self._next_background_task_id = 1
             self._agent_descriptions.clear()
             LOG.info("Orchestrator cleanup completed")
@@ -981,162 +1323,3 @@ Guidelines:
             exc_tb: Traceback associated with the exception, if any.
         """
         await self.cleanup()
-
-    async def run_query(self, user_input: str, blocking: bool) -> str:
-        """
-        Run a query either in blocking or background mode.
-
-        Args:
-            user_input: Query text to send to the orchestrator.
-
-        Returns:
-            Text that the caller should display immediately.
-        """
-
-        async def _collect_background_response() -> str:
-            async with self._session_lock:
-                if self.session is None:
-                    raise RuntimeError("Orchestrator session not initialized.")
-
-                run_session = AgentSession.from_dict(self.session.to_dict())
-                history_lengths = {}
-                for provider_name, provider_state in run_session.state.items():
-                    if not isinstance(provider_state, dict):
-                        continue
-                    messages = provider_state.get("messages")
-                    if isinstance(messages, list):
-                        history_lengths[provider_name] = len(messages)
-
-            response_chunks = []
-            aggregated_assistant_reply = ""
-            tool_calls = []
-
-            try:
-                response_started = False
-                stream = self.planning_agent.run(
-                    user_input, session=run_session, stream=True
-                )
-                async for chunk in stream:
-                    if chunk.text:
-                        response_started = True
-                        aggregated_assistant_reply += chunk.text
-                        response_chunks.append(chunk.text)
-                    elif hasattr(chunk, "contents") and chunk.contents:
-                        for content in chunk.contents:
-                            if hasattr(content, "to_dict"):
-                                d = content.to_dict()
-                                if d.get("type") in (
-                                    "function_call",
-                                    "tool_call",
-                                ) and d.get("name"):
-                                    call_id = d.get("call_id")
-                                    name = d.get("name")
-
-                                    if call_id and call_id not in tool_calls:
-                                        tool_calls.append(call_id)
-                                        response_chunks.append(f"\n[Calling: {name}]\n")
-
-                if not response_started:
-                    LOG.warning("No text chunks received from planning agent")
-
-                async with self._session_lock:
-                    if self.session is None:
-                        raise RuntimeError("Orchestrator session not initialized.")
-
-                    for provider_name, source_state in run_session.state.items():
-                        if not isinstance(source_state, dict):
-                            if provider_name not in self.session.state:
-                                self.session.state[provider_name] = copy.deepcopy(
-                                    source_state
-                                )
-                            continue
-
-                        target_state = self.session.state.setdefault(provider_name, {})
-                        if not isinstance(target_state, dict):
-                            self.session.state[provider_name] = copy.deepcopy(
-                                source_state
-                            )
-                            continue
-
-                        source_messages = source_state.get("messages")
-                        if isinstance(source_messages, list):
-                            start_index = history_lengths.get(provider_name, 0)
-                            delta_messages = source_messages[start_index:]
-                            if delta_messages:
-                                target_messages = target_state.setdefault(
-                                    "messages", []
-                                )
-                                if not isinstance(target_messages, list):
-                                    target_messages = []
-                                    target_state["messages"] = target_messages
-                                target_messages.extend(copy.deepcopy(delta_messages))
-
-                        for key, value in source_state.items():
-                            if key == "messages":
-                                continue
-                            target_state[key] = copy.deepcopy(value)
-
-                    if run_session.service_session_id:
-                        self.session.service_session_id = run_session.service_session_id
-
-                    self.session_manager.add_message("user", user_input)
-                    if aggregated_assistant_reply.strip():
-                        self.session_manager.add_message(
-                            "assistant", aggregated_assistant_reply
-                        )
-
-                return "".join(response_chunks)
-            except Exception as e:
-                error_msg = f"Error processing message: {e}"
-                LOG.error(error_msg)
-                traceback.print_exc()
-                return error_msg
-
-        if blocking:
-            response = await _collect_background_response()
-            print(response)
-            print("")
-            return response
-
-        async with self._task_lock:
-            task_id = f"task-{self._next_background_task_id}"
-            self._next_background_task_id += 1
-
-            task = asyncio.create_task(_collect_background_response())
-            self._hidden_task_ids.discard(task_id)
-            self._pending_tasks[task_id] = task
-            self._task_results[task_id] = {"status": "pending"}
-
-        def _done_callback(done_task: asyncio.Task[str]) -> None:
-            async def _finalize() -> None:
-                async with self._task_lock:
-                    if task_id in self._hidden_task_ids:
-                        self._pending_tasks.pop(task_id, None)
-                        self._task_results.pop(task_id, None)
-                        return
-
-                    task_state = self._task_results.setdefault(
-                        task_id,
-                        {"status": "pending"},
-                    )
-                    try:
-                        result = done_task.result()
-                        task_state["status"] = "completed"
-                        print(f"\n[{task_id}] Completed:")
-                        print(result)
-                        print("")
-                    except asyncio.CancelledError:
-                        task_state["status"] = "cancelled"
-                        print(f"\n[{task_id}] Cancelled.\n")
-                    except Exception as e:
-                        task_state["status"] = "failed"
-                        print(f"\n[{task_id}] Failed: {e}\n")
-                    finally:
-                        self._pending_tasks.pop(task_id, None)
-
-            asyncio.create_task(_finalize())
-
-        task.add_done_callback(_done_callback)
-        message = f"[{task_id}] Started in background."
-        print(f"{message}\n")
-        return message

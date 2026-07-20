@@ -19,12 +19,6 @@ from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
 from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
 
-try:
-    BaseExceptionGroup
-except NameError:
-    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
-
-
 LOG = logging.getLogger("mada-gradio")
 
 
@@ -50,8 +44,8 @@ class MCPGradioClientSession:
         Args:
             model_config: Model configuration for MADA
             agents: List of agent configurations
-            blocking: If True, wait for responses inline. If False, submit
-                queries as background tasks.
+            blocking: If True, wait for each response inline. If False,
+                submit queries in the background and return immediately.
         """
         self.model_config = model_config
         self.agents = agents
@@ -62,7 +56,6 @@ class MCPGradioClientSession:
         self.mcp_servers = mcp_servers or {}
         self.session_manager = ChatSessionManager(database_config)
         self.session_bearer_token = None  # Store session bearer token
-        self._displayed_task_ids = set()
 
     async def connect_servers(
         self, agent_table: gr.Dataframe, request: gr.Request
@@ -288,7 +281,9 @@ class MCPGradioClientSession:
             return
 
         try:
-            response = await self.orchestrator.run_query(message, self.blocking)
+            response = await self.orchestrator.run_query(
+                message, blocking=self.blocking
+            )
             yield response
 
         except Exception as e:
@@ -300,9 +295,6 @@ class MCPGradioClientSession:
     async def get_task_status_markdown(self) -> str:
         """
         Render background task state for the Gradio task panel.
-
-        Returns:
-            Markdown summary of background task status.
         """
         if not self.orchestrator:
             return "### Task Status\nNo orchestrator connected."
@@ -314,7 +306,11 @@ class MCPGradioClientSession:
         lines = ["### Task Status"]
         for task_id, task_state in reversed(list(task_snapshot.items())):
             status = task_state.get("status", "unknown")
-            lines.append(f"- `{task_id}` [{status}]")
+            tool_name = task_state.get("tool_name")
+            if tool_name:
+                lines.append(f"- `{task_id}` [{status}] {tool_name}")
+            else:
+                lines.append(f"- `{task_id}` [{status}]")
 
         return "\n".join(lines)
 
@@ -323,14 +319,10 @@ class MCPGradioClientSession:
     ) -> Tuple[List[Any], str]:
         """
         Refresh chat history and background task status for the Gradio UI.
-
-        Args:
-            history: Current Gradio chat history.
-
-        Returns:
-            Current chat history and task status markdown.
         """
         task_status = await self.get_task_status_markdown()
+        if self.orchestrator and await self.orchestrator.count_pending_tasks() == 0:
+            return self.session_manager.load_history(), task_status
         return list(history), task_status
 
     async def cleanup(self):
@@ -344,5 +336,4 @@ class MCPGradioClientSession:
                 )
             except Exception as e:
                 LOG.error(f"Error during cleanup: {e}")
-        self._displayed_task_ids.clear()
         self.initialized = False

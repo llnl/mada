@@ -18,10 +18,8 @@ from mada.core.config import AppConfig, load_config_from_json
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
 
-try:
-    BaseExceptionGroup
-except NameError:
-    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
+from prompt_toolkit import PromptSession
+from prompt_toolkit.patch_stdout import patch_stdout
 
 
 class MADACLIInterface:
@@ -38,8 +36,8 @@ class MADACLIInterface:
 
         Args:
             config: Application configuration
-            blocking: If True, process one query at a time. If False, run
-                queries in the background and immediately return to the prompt.
+            blocking: If True, wait for each response inline. If False,
+                submit queries in the background and return to the prompt.
         """
         self.config = config
         self.blocking = blocking
@@ -292,17 +290,22 @@ class MADACLIInterface:
                     traceback.print_exc()
 
                 print("\nChat with the agents (type 'quit' to exit)")
-                print(f"Query mode: {'blocking' if self.blocking else 'background'}")
-                if not self.blocking:
-                    print(
-                        "Type 'tasks' to list pending and completed background queries."
-                    )
                 print("-" * 50)
+
+                prompt_session = PromptSession() if PromptSession else None
 
                 # Interactive chat loop
                 while True:
                     try:
-                        user_input = (await asyncio.to_thread(input, "\nYou: ")).strip()
+                        if prompt_session and patch_stdout:
+                            with patch_stdout():
+                                user_input = (
+                                    await prompt_session.prompt_async("\nYou: ")
+                                ).strip()
+                        else:
+                            user_input = (
+                                await asyncio.to_thread(input, "\nYou: ")
+                            ).strip()
 
                         if user_input.lower() in ["quit", "exit", "q"]:
                             pending_count = await orchestrator.count_pending_tasks()
@@ -318,24 +321,35 @@ class MADACLIInterface:
 
                         if not self.blocking and user_input.lower() == "tasks":
                             task_snapshot = await orchestrator.get_task_snapshot()
-                            pending = [
-                                task_id
-                                for task_id, task in task_snapshot.items()
-                                if task.get("status") == "pending"
-                            ]
-                            completed = [
-                                task_id
-                                for task_id, task in task_snapshot.items()
-                                if task.get("status") != "pending"
-                            ]
-                            print(f"\nPending tasks: {pending}")
-                            print(f"Completed tasks: {completed}")
+                            pending = []
+                            finished = []
+                            for task_id, task in task_snapshot.items():
+                                status = task.get("status", "unknown")
+                                tool_name = task.get("tool_name", "unknown tool")
+                                task_type = task.get("type", "task")
+                                line = f"{task_id}: {status}, {task_type}, tool={tool_name}"
+                                if status in ("pending", "running"):
+                                    pending.append(line)
+                                else:
+                                    finished.append(line)
+
+                            print("\nPending tasks:")
+                            for line in pending:
+                                print(f"  - {line}")
+                            if not pending:
+                                print("  none")
+
+                            print("Finished tasks:")
+                            for line in finished:
+                                print(f"  - {line}")
+                            if not finished:
+                                print("  none")
                             continue
 
                         print("\nAgents:")
                         print("-" * 20)
 
-                        await self.orchestrator.run_query(user_input, self.blocking)
+                        await orchestrator.run_query(user_input, blocking=self.blocking)
 
                     except KeyboardInterrupt:
                         print("\n\nGoodbye!")

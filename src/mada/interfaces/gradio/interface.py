@@ -251,9 +251,7 @@ class MADAMultiAgentGradioInterface:
 
             # Selecting a session -> load history into chatbot
             session_list.change(
-                fn=self.client.select_session,
-                inputs=session_list,
-                outputs=chatbot,
+                fn=self.client.select_session, inputs=session_list, outputs=chatbot
             )
 
             # Deleting a session
