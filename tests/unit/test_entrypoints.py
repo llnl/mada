@@ -812,7 +812,7 @@ class TestMADACLICmd:
                 await async_main("config.json")
 
                 mock_load.assert_called_once_with("config.json")
-                mock_cli_class.assert_called_once_with(dummy_config)
+                mock_cli_class.assert_called_once_with(dummy_config, blocking=False)
                 mock_cli_instance.run.assert_awaited_once()
                 # Should not call sys.exit on success
                 mock_exit.assert_not_called()
@@ -868,7 +868,9 @@ class TestMADACLICmd:
                 "ok",
                 ["tool1", "tool2"],
             )
-            orchestrator_mock.process_message = AsyncMock()
+            orchestrator_mock.count_pending_tasks.return_value = 0
+            prompt_session = MagicMock()
+            prompt_session.prompt_async = AsyncMock(return_value="quit")
 
             with (
                 patch(
@@ -878,7 +880,10 @@ class TestMADACLICmd:
                 patch.object(
                     MADACLIInterface, "startup_session_menu", return_value=True
                 ),
-                patch("mada.interfaces.cli.main.input", side_effect=["quit"]),
+                patch(
+                    "mada.interfaces.cli.main.PromptSession",
+                    return_value=prompt_session,
+                ),
                 patch("builtins.print") as mock_print,
             ):
                 cli = MADACLIInterface(config)
@@ -887,7 +892,7 @@ class TestMADACLICmd:
                 orchestrator_mock.initialize_orchestrator.assert_awaited_once_with(
                     config.agents, config.mcp_servers
                 )
-                orchestrator_mock.process_message.assert_not_called()
+                orchestrator_mock.run_query.assert_not_called()
 
                 printed_texts = "".join(
                     str(call.args[0]) for call in mock_print.call_args_list
@@ -910,14 +915,10 @@ class TestMADACLICmd:
             orchestrator_mock.initialize_orchestrator = AsyncMock(
                 return_value=("ok", [])
             )
-
-            async def fake_process_message(_msg):
-                yield "chunk1"
-                yield "chunk2"
-
-            orchestrator_mock.process_message = MagicMock(
-                side_effect=fake_process_message
-            )
+            orchestrator_mock.count_pending_tasks = AsyncMock(return_value=0)
+            orchestrator_mock.run_query = AsyncMock()
+            prompt_session = MagicMock()
+            prompt_session.prompt_async = AsyncMock(side_effect=["hello", "quit"])
 
             with (
                 patch(
@@ -928,18 +929,19 @@ class TestMADACLICmd:
                     MADACLIInterface, "startup_session_menu", return_value=True
                 ),
                 patch(
-                    "mada.interfaces.cli.main.input",
-                    side_effect=["hello", "quit"],
+                    "mada.interfaces.cli.main.PromptSession",
+                    return_value=prompt_session,
                 ),
                 patch("builtins.print") as mock_print,
             ):
                 cli = MADACLIInterface(config)
                 await cli.run()
 
-                orchestrator_mock.process_message.assert_called_once_with("hello")
+                orchestrator_mock.run_query.assert_awaited_once_with(
+                    "hello", blocking=False
+                )
 
                 printed_texts = "".join(
                     str(call.args[0]) for call in mock_print.call_args_list
                 )
-                assert "chunk1" in printed_texts
-                assert "chunk2" in printed_texts
+                assert "Goodbye!" in printed_texts
