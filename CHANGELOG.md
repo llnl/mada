@@ -23,7 +23,7 @@
 
 ### Changed
 - re-architected the test suite into unit/integration/e2e tests
-- Converted interfaces to use async tools
+- converted interfaces to use async tools
 
 ### Fixed
 - broken tests in the test suite
