@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Added
--
+- DOI link to README
 
 ### Changed
 - OpenAI-compatible model configs and streamable MCP server configs now support a `verify` setting for TLS verification control.
