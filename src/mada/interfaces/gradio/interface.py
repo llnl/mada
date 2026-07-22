@@ -380,9 +380,22 @@ class MADAMultiAgentGradioInterface:
 
             # If the last render started a background task, poll that task.
             if self.in_situ_viz_task_id:
-                result_tool = self._find_sim_server_tool(
-                    sim_server, "get_background_task_result"
-                )
+                result_tool = None
+                for agent in self.client.orchestrator.specialist_agents:
+                    for mcp_tool in getattr(agent, "mcp_tools", []):
+                        if getattr(mcp_tool, "name", None) != sim_server:
+                            continue
+                        for fn in getattr(mcp_tool, "_functions", []):
+                            if (
+                                getattr(fn, "name", None)
+                                == "get_background_task_result"
+                            ):
+                                result_tool = fn
+                                break
+                        if result_tool is not None:
+                            break
+                    if result_tool is not None:
+                        break
 
                 if result_tool is None:
                     return (
@@ -410,7 +423,11 @@ class MADAMultiAgentGradioInterface:
                     payload = await self.in_situ_viz_tool.invoke()
                     result = self._tool_payload_to_dict(payload)
                 except Exception as exc:
-                    task_id = self._task_id_from_error(exc)
+                    task_id = None
+                    message = str(exc)
+                    marker = '"task_id": "'
+                    if marker in message:
+                        task_id = message.split(marker, 1)[1].split('"', 1)[0]
                     if task_id:
                         self.in_situ_viz_task_id = task_id
                         return gr.skip(), f"{task_id}: Visualization render is running."
@@ -452,18 +469,23 @@ class MADAMultiAgentGradioInterface:
         finally:
             self.in_situ_viz_in_progress = False
 
-    def _find_sim_server_tool(self, sim_server: str, tool_name: str) -> Any:
-        for agent in self.client.orchestrator.specialist_agents:
-            for mcp_tool in getattr(agent, "mcp_tools", []):
-                if getattr(mcp_tool, "name", None) != sim_server:
-                    continue
-                for fn in getattr(mcp_tool, "_functions", []):
-                    if getattr(fn, "name", None) == tool_name:
-                        return fn
-        return None
-
     @staticmethod
     def _tool_payload_to_dict(payload: Any) -> dict:
+        """
+        Normalize an MCP tool payload into a dictionary.
+
+        Args:
+            payload: Tool response payload. This may be a list containing one
+                payload item, an object with `structured_content`, an object with
+                `text`, bytes, a JSON string, or a dictionary.
+
+        Returns:
+            Parsed payload dictionary.
+
+        Raises:
+            json.JSONDecodeError: If a string payload is not valid JSON.
+            TypeError: If the normalized payload is not a dictionary.
+        """
         if isinstance(payload, list) and payload:
             payload = payload[0]
         if getattr(payload, "structured_content", None) is not None:
@@ -477,12 +499,3 @@ class MADAMultiAgentGradioInterface:
         if not isinstance(payload, dict):
             raise TypeError(f"Expected tool payload to be a dict, got {type(payload)}")
         return payload
-
-    @staticmethod
-    def _task_id_from_error(exc: Exception) -> str | None:
-        message = str(exc)
-        marker = '"task_id": "'
-        if marker not in message:
-            return None
-
-        return message.split(marker, 1)[1].split('"', 1)[0]

@@ -754,7 +754,12 @@ class TestMADAOpenAIApiCmd:
                             "messages": [{"role": "user", "content": "hello"}],
                         },
                     ) as response:
-                        body = "".join(response.iter_text())
+                        chunks = []
+                        for chunk in response.iter_text():
+                            chunks.append(chunk)
+                            if "data: [DONE]" in chunk:
+                                break
+                        body = "".join(chunks)
 
                 assert response.status_code == 200
                 assert "data: [DONE]" in body
@@ -864,11 +869,12 @@ class TestMADACLICmd:
             orchestrator_mock = AsyncMock()
             orchestrator_mock.__aenter__.return_value = orchestrator_mock
             orchestrator_mock.__aexit__.return_value = False
+            orchestrator_mock.background_tasks = AsyncMock()
             orchestrator_mock.initialize_orchestrator.return_value = (
                 "ok",
                 ["tool1", "tool2"],
             )
-            orchestrator_mock.count_pending_tasks.return_value = 0
+            orchestrator_mock.background_tasks.count_pending_tasks.return_value = 0
             prompt_session = MagicMock()
             prompt_session.prompt_async = AsyncMock(return_value="quit")
 
@@ -892,7 +898,7 @@ class TestMADACLICmd:
                 orchestrator_mock.initialize_orchestrator.assert_awaited_once_with(
                     config.agents, config.mcp_servers
                 )
-                orchestrator_mock.run_query.assert_not_called()
+                orchestrator_mock.background_tasks.run_query.assert_not_called()
 
                 printed_texts = "".join(
                     str(call.args[0]) for call in mock_print.call_args_list
@@ -915,8 +921,11 @@ class TestMADACLICmd:
             orchestrator_mock.initialize_orchestrator = AsyncMock(
                 return_value=("ok", [])
             )
-            orchestrator_mock.count_pending_tasks = AsyncMock(return_value=0)
-            orchestrator_mock.run_query = AsyncMock()
+            orchestrator_mock.background_tasks = MagicMock()
+            orchestrator_mock.background_tasks.count_pending_tasks = AsyncMock(
+                return_value=0
+            )
+            orchestrator_mock.background_tasks.run_query = AsyncMock()
             prompt_session = MagicMock()
             prompt_session.prompt_async = AsyncMock(side_effect=["hello", "quit"])
 
@@ -937,7 +946,7 @@ class TestMADACLICmd:
                 cli = MADACLIInterface(config)
                 await cli.run()
 
-                orchestrator_mock.run_query.assert_awaited_once_with(
+                orchestrator_mock.background_tasks.run_query.assert_awaited_once_with(
                     "hello", blocking=False
                 )
 

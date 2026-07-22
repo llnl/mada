@@ -303,7 +303,7 @@ class MADACLIInterface:
                             ).strip()
 
                         if user_input.lower() in ["quit", "exit", "q"]:
-                            pending_count = await orchestrator.count_pending_tasks()
+                            pending_count = await orchestrator.background_tasks.count_pending_tasks()
                             if pending_count:
                                 print(
                                     f"\nExiting with {pending_count} pending background task(s)."
@@ -315,7 +315,9 @@ class MADACLIInterface:
                             continue
 
                         if not self.blocking and user_input.lower() == "tasks":
-                            task_snapshot = await orchestrator.get_task_snapshot()
+                            task_snapshot = (
+                                await orchestrator.background_tasks.get_task_snapshot()
+                            )
                             pending = []
                             finished = []
                             for task_id, task in task_snapshot.items():
@@ -344,7 +346,9 @@ class MADACLIInterface:
                         print("\nAgents:")
                         print("-" * 20)
 
-                        await orchestrator.run_query(user_input, blocking=self.blocking)
+                        await orchestrator.background_tasks.run_query(
+                            user_input, blocking=self.blocking
+                        )
 
                     except KeyboardInterrupt:
                         print("\n\nGoodbye!")

@@ -262,15 +262,21 @@ class MCPGradioClientSession:
         agent_table: gr.Dataframe,
     ) -> AsyncGenerator[str, None]:
         """
-        Process a user message through the orchestrator.
+        Process a user message through the orchestrator's background task manager.
 
         Args:
             message: User input message
             history: Chat history (not used in current implementation)
             agent_table: Agent configuration table (not used in current implementation)
 
+        Returns:
+            Async generator that emits response strings for the Gradio chat UI.
+
         Yields:
-            Response chunks from the orchestrator
+            The assistant response, or a background-task start acknowledgement.
+
+        Raises:
+            None. Processing errors are logged and yielded as error text.
         """
         if not self.initialized:
             yield "Error: MCP servers not connected. Please connect first."
@@ -281,7 +287,7 @@ class MCPGradioClientSession:
             return
 
         try:
-            response = await self.orchestrator.run_query(
+            response = await self.orchestrator.background_tasks.run_query(
                 message, blocking=self.blocking
             )
             if response.startswith("[task-") and "Started in background." in response:
@@ -298,11 +304,20 @@ class MCPGradioClientSession:
     async def get_task_status_markdown(self) -> str:
         """
         Render background task state for the Gradio task panel.
+
+        Args:
+            None.
+
+        Returns:
+            Markdown text describing current background task status.
+
+        Raises:
+            None.
         """
         if not self.orchestrator:
             return "### Task Status\nNo orchestrator connected."
 
-        task_snapshot = await self.orchestrator.get_task_snapshot()
+        task_snapshot = await self.orchestrator.background_tasks.get_task_snapshot()
         if not task_snapshot:
             return "### Task Status\nNo background tasks yet."
 
@@ -320,9 +335,22 @@ class MCPGradioClientSession:
     async def refresh_chat_and_task_status(self, history: List[Any]) -> Tuple[Any, str]:
         """
         Refresh chat history and background task status for the Gradio UI.
+
+        Args:
+            history: Current Gradio chat history.
+
+        Returns:
+            Tuple containing the refreshed chat history or `gr.skip()`, and the
+            task status markdown.
+
+        Raises:
+            Exception: Propagates unexpected chat-history load failures.
         """
         task_status = await self.get_task_status_markdown()
-        if not self.orchestrator or await self.orchestrator.count_pending_tasks() > 0:
+        if (
+            not self.orchestrator
+            or await self.orchestrator.background_tasks.count_pending_tasks() > 0
+        ):
             return gr.skip(), task_status
 
         persisted_history = self.session_manager.load_history()
@@ -332,7 +360,18 @@ class MCPGradioClientSession:
         return persisted_history, task_status
 
     async def cleanup(self):
-        """Clean up resources."""
+        """
+        Clean up resources.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        Raises:
+            None. Cleanup errors are logged and suppressed.
+        """
         if self.orchestrator:
             try:
                 await self.orchestrator.__aexit__(None, None, None)
