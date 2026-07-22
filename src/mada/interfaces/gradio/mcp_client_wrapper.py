@@ -274,9 +274,6 @@ class MCPGradioClientSession:
 
         Yields:
             The assistant response, or a background-task start acknowledgement.
-
-        Raises:
-            None. Processing errors are logged and yielded as error text.
         """
         if not self.initialized:
             yield "Error: MCP servers not connected. Please connect first."
@@ -305,14 +302,8 @@ class MCPGradioClientSession:
         """
         Render background task state for the Gradio task panel.
 
-        Args:
-            None.
-
         Returns:
             Markdown text describing current background task status.
-
-        Raises:
-            None.
         """
         if not self.orchestrator:
             return "### Task Status\nNo orchestrator connected."
@@ -359,17 +350,11 @@ class MCPGradioClientSession:
 
         return persisted_history, task_status
 
-    async def cleanup(self):
+    async def cleanup(self) -> None:
         """
         Clean up resources.
 
-        Args:
-            None.
-
         Returns:
-            None.
-
-        Raises:
             None. Cleanup errors are logged and suppressed.
         """
         if self.orchestrator:

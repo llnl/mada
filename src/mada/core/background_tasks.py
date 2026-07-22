@@ -49,12 +49,6 @@ class BackgroundTaskManager:
                 server name.
             collect_message_response: Callable that runs a user message and
                 returns the full assistant response.
-
-        Returns:
-            None.
-
-        Raises:
-            None.
         """
         self.session_manager = session_manager
         self.mcp_tools_by_server = mcp_tools_by_server
@@ -134,10 +128,8 @@ class BackgroundTaskManager:
 
         Returns:
             True if the message is followed by a background-task acknowledgement,
-            otherwise False.
-
-        Raises:
-            None. History loading errors are suppressed and treated as no match.
+            otherwise False. History loading errors are suppressed and treated
+            as no match.
         """
         try:
             history = self.session_manager.load_history()
@@ -375,14 +367,8 @@ class BackgroundTaskManager:
         Each key is a task ID, and each value contains status metadata suitable
         for CLI or Gradio task-status displays.
 
-        Args:
-            None.
-
         Returns:
             Deep copy of task state keyed by task ID.
-
-        Raises:
-            None.
         """
         async with self._task_lock:
             return copy.deepcopy(self._task_results)
@@ -391,14 +377,8 @@ class BackgroundTaskManager:
         """
         Return the current number of in-flight background tasks.
 
-        Args:
-            None.
-
         Returns:
             Number of tasks currently tracked as pending.
-
-        Raises:
-            None.
         """
         async with self._task_lock:
             return len(self._pending_tasks)
@@ -407,13 +387,7 @@ class BackgroundTaskManager:
         """
         Cancel active background tasks and reset task state.
 
-        Args:
-            None.
-
         Returns:
-            None.
-
-        Raises:
             None.
         """
         async with self._task_lock:

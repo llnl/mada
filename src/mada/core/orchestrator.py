@@ -71,9 +71,6 @@ class MADAOrchestrator(MCPAgentManager):
                 servers as `X-Token`.
             timeout: Timeout in seconds for server operations.
 
-        Returns:
-            None.
-
         Raises:
             Exception: Propagates session manager initialization failures.
         """
@@ -883,9 +880,6 @@ Guidelines:
 
         Returns:
             User-facing error message.
-
-        Raises:
-            None.
         """
         error_str = str(error)
         is_auth_error = (
@@ -970,9 +964,6 @@ Guidelines:
 
         Returns:
             Mapping of provider name to the initial message count.
-
-        Raises:
-            None.
         """
         history_lengths = {}
         for provider_name, provider_state in session.state.items():
@@ -993,9 +984,6 @@ Guidelines:
 
         Returns:
             Formatted tool-call notices for new tool calls in the chunk.
-
-        Raises:
-            None.
         """
         if not hasattr(chunk, "contents") or not chunk.contents:
             return []
