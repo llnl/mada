@@ -9,6 +9,7 @@ Tests for the following entry point modules:
 - mada/interface/gradio/main.py -> The `mada-gradio` command.
 """
 
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Callable
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -190,6 +191,8 @@ class TestMADAOrchestratorCmd:
                 mock_async_main.assert_called_once_with("config.json")
                 # We do not care about exact object, just that asyncio.run was used
                 mock_asyncio_run.assert_called_once()
+                (call_arg,), _ = mock_asyncio_run.call_args
+                call_arg.close()
 
     class TestRunOpenAIApiFromArgs:
         def test_run_openai_api_from_args_calls_entrypoint(self):
@@ -774,6 +777,8 @@ class TestMADACLICmd:
                 assert result.exit_code == 0
                 # Confirm asyncio.run was called once
                 mock_run.assert_called_once()
+                (call_arg,), _ = mock_run.call_args
+                call_arg.close()
 
         def test_main_calls_asyncio_run_with_async_main_strict(self, runner):
             """
@@ -788,6 +793,7 @@ class TestMADACLICmd:
                 # call_arg should be a coroutine object from async_main("config.json")
                 assert call_arg.cr_code is async_main.__code__
                 assert call_arg.cr_await is None or hasattr(call_arg, "cr_frame")
+                call_arg.close()
 
     class TestAsyncMain:
         @pytest.mark.asyncio
@@ -885,6 +891,10 @@ class TestMADACLICmd:
                     "mada.interfaces.cli.main.PromptSession",
                     return_value=prompt_session,
                 ),
+                patch(
+                    "mada.interfaces.cli.main.patch_stdout",
+                    return_value=nullcontext(),
+                ),
                 patch("builtins.print") as mock_print,
             ):
                 cli = MADACLIInterface(config)
@@ -935,6 +945,10 @@ class TestMADACLICmd:
                 patch(
                     "mada.interfaces.cli.main.PromptSession",
                     return_value=prompt_session,
+                ),
+                patch(
+                    "mada.interfaces.cli.main.patch_stdout",
+                    return_value=nullcontext(),
                 ),
                 patch("builtins.print") as mock_print,
             ):
