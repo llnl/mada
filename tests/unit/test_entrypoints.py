@@ -729,10 +729,11 @@ class TestMADAOpenAIApiCmd:
             """
             config = create_dummy_config()
 
-            async def fake_stream_response(_messages):
-                yield 'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
-                yield 'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
-                yield "data: [DONE]\n\n"
+            stream_chunks = [
+                'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
+                'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+                "data: [DONE]\n\n",
+            ]
 
             with (
                 patch.object(MADAOpenAIAPIService, "ensure_started", new=AsyncMock()),
@@ -740,26 +741,20 @@ class TestMADAOpenAIApiCmd:
                 patch.object(
                     MADAOpenAIAPIService,
                     "stream_response",
-                    side_effect=fake_stream_response,
+                    return_value=iter(stream_chunks),
                 ),
             ):
                 app = create_openai_api_app(config, model_name="mada-api")
                 with TestClient(app) as client:
-                    with client.stream(
-                        "POST",
+                    response = client.post(
                         "/v1/chat/completions",
                         json={
                             "model": "mada-api",
                             "stream": True,
                             "messages": [{"role": "user", "content": "hello"}],
                         },
-                    ) as response:
-                        chunks = []
-                        for chunk in response.iter_text():
-                            chunks.append(chunk)
-                            if "data: [DONE]" in chunk:
-                                break
-                        body = "".join(chunks)
+                    )
+                    body = response.text
 
                 assert response.status_code == 200
                 assert "data: [DONE]" in body
