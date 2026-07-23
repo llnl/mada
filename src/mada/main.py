@@ -7,11 +7,9 @@ Main entry point for MADA.
 Provides the main launcher that dispatches to different interface modes.
 """
 
-import asyncio
-
 import click
 
-from mada.interfaces.cli.main import async_main as cli_async_main
+from mada.interfaces.cli.main import main as cli_entrypoint
 from mada.interfaces.gradio.main import gradio_entrypoint
 
 
@@ -63,25 +61,7 @@ def _run_cli_from_args(args: list[str]):
     Args:
         args: command line arguments.
     """
-
-    @click.command(
-        context_settings={
-            "help_option_names": ["-h", "--help"],
-        },
-    )
-    @click.argument(
-        "config_file",
-        type=str,
-    )
-    def cli_cmd(config_file: str) -> None:
-        """
-        Run MADA in CLI mode.
-
-        CONFIG_FILE is the path to the MADA configuration file.
-        """
-        asyncio.run(cli_async_main(config_file))
-
-    cli_cmd.main(args=args, standalone_mode=False)
+    cli_entrypoint.main(args=args, standalone_mode=False)
 
 
 def _run_openai_api_from_args(args: list[str]):

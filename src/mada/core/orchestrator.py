@@ -97,6 +97,7 @@ class MADAOrchestrator(MCPAgentManager):
         self._mcp_tools_by_server: Dict[str, Any] = {}
         self._agent_descriptions = {}
         self._mcp_tool_count = 0
+        self._control_agent: Optional[Agent] = None
         self.orchestration = orchestration_config or OrchestrationConfig()
         self.orchestration_strategy = self._build_orchestration_strategy(
             self.orchestration.mode
@@ -190,6 +191,46 @@ class MADAOrchestrator(MCPAgentManager):
             if cfg.agent_name == "PlanningAgent":
                 return cfg
         return None
+
+    def _get_control_agent(self) -> Agent:
+        """
+        Return a tool-free agent for internal control turns.
+
+        Autonomy control prompts must never trigger tool calls, so they run
+        through a dedicated agent with no tools and no shared chat session.
+        """
+        if self._control_agent is not None:
+            return self._control_agent
+
+        instructions = (
+            "You are an internal control agent for the MADA orchestrator.\n"
+            "You MUST NOT call any tools. You will be given a control prompt "
+            "that requires outputting a strict key=value format. Follow it "
+            "exactly.\n"
+            "Do not include explanations or extra text."
+        )
+        self._control_agent = self.model_client.as_agent(
+            name="AutonomyControl",
+            instructions=instructions,
+            tools=[],
+        )
+        return self._control_agent
+
+    async def run_control_prompt(self, prompt: str) -> str:
+        """
+        Run a tool-free control prompt and return the aggregated text.
+
+        This is used for autonomy gating decisions and must not alter the
+        shared interactive planning session or the chat database.
+        """
+        agent = self._get_control_agent()
+        session = agent.create_session()
+        aggregated = ""
+        stream = agent.run(prompt, session=session, stream=True)
+        async for chunk in stream:
+            if getattr(chunk, "text", None):
+                aggregated += chunk.text
+        return aggregated
 
     async def _cleanup_http_client(self, http_client, context: str = ""):
         """
@@ -749,6 +790,7 @@ Guidelines:
         self,
         message: str,
         isolated_session: bool = False,
+        record_to_db: bool = True,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message through the planning agent.
@@ -767,6 +809,9 @@ Guidelines:
                 transcript merging because `AgentSession` can contain
                 provider-specific state beyond messages, and an overlapping turn
                 cannot see the unfinished turn's eventual result.
+            record_to_db: If True, persist the completed user/assistant turn and
+                background-task side effects to the chat database. Set False for
+                internal/autonomous turns where the caller owns persistence.
 
         Yields:
             Response text chunks from the planning agent, plus bracketed tool
@@ -801,7 +846,11 @@ Guidelines:
                 LOG.warning("No text chunks received from planning agent")
 
             if isolated_session:
-                self._persist_isolated_response(message, aggregated_assistant_reply)
+                self._persist_isolated_response(
+                    message,
+                    aggregated_assistant_reply,
+                    record_to_db=record_to_db,
+                )
                 return
 
             await self._commit_completed_turn(
@@ -810,6 +859,7 @@ Guidelines:
                 aggregated_assistant_reply,
                 run_session,
                 history_lengths,
+                record_to_db=record_to_db,
             )
 
         except Exception as e:
@@ -960,6 +1010,7 @@ Guidelines:
         self,
         message: str,
         assistant_reply: str,
+        record_to_db: bool = True,
     ) -> None:
         """
         Persist a response produced from an isolated agent session.
@@ -974,6 +1025,9 @@ Guidelines:
         Raises:
             Exception: Propagates database persistence failures.
         """
+        if not record_to_db:
+            return
+
         if not self.background_tasks.user_message_already_started_background_task(
             message
         ):
@@ -992,6 +1046,7 @@ Guidelines:
         assistant_reply: str,
         run_session: AgentSession,
         history_lengths: Dict[str, int],
+        record_to_db: bool = True,
     ) -> None:
         """
         Queue and commit a completed shared-session turn in turn order.
@@ -1022,6 +1077,7 @@ Guidelines:
                 "assistant_reply": assistant_reply,
                 "run_session": run_session,
                 "history_lengths": history_lengths,
+                "record_to_db": record_to_db,
             }
 
             while self._next_turn_commit_id in self._completed_turns:
@@ -1094,6 +1150,9 @@ Guidelines:
         Raises:
             Exception: Propagates database persistence failures.
         """
+        if not completed.get("record_to_db", True):
+            return
+
         message = completed["message"]
         assistant_reply = completed["assistant_reply"]
 
@@ -1170,6 +1229,7 @@ Guidelines:
             await self.exit_stack.aclose()
             self.specialist_agents.clear()
             self.planning_agent = None
+            self._control_agent = None
             self.session = None
             self._completed_turns.clear()
             self._next_turn_id = 1

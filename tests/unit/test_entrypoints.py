@@ -180,21 +180,28 @@ class TestMADAOrchestratorCmd:
     class TestRunCLIFromArgs:
         def test_run_cli_from_args_calls_async_main(self):
             """
-            Test that `_run_cli_from_args` calls the asynchronous main function
-            for the CLI interface with the correct arguments.
+            Test that `_run_cli_from_args` delegates to the CLI Click command so
+            CLI-specific flags remain reachable from `mada cli`.
             """
-            with (
-                patch("mada.main.cli_async_main") as mock_async_main,
-                patch("mada.main.asyncio.run") as mock_asyncio_run,
-            ):
-                _run_cli_from_args(["config.json"])
+            with patch("mada.main.cli_entrypoint.main") as mock_cli_main:
+                _run_cli_from_args(
+                    [
+                        "--autonomy-level",
+                        "4",
+                        "--show-autonomy-debug",
+                        "config.json",
+                    ]
+                )
 
-                # Ensure we call asyncio.run with the coroutine returned by cli_async_main("config.json")
-                mock_async_main.assert_called_once_with("config.json")
-                # We do not care about exact object, just that asyncio.run was used
-                mock_asyncio_run.assert_called_once()
-                (call_arg,), _ = mock_asyncio_run.call_args
-                call_arg.close()
+                mock_cli_main.assert_called_once_with(
+                    args=[
+                        "--autonomy-level",
+                        "4",
+                        "--show-autonomy-debug",
+                        "config.json",
+                    ],
+                    standalone_mode=False,
+                )
 
     class TestRunOpenAIApiFromArgs:
         def test_run_openai_api_from_args_calls_entrypoint(self):
@@ -869,9 +876,42 @@ class TestMADACLICmd:
 
                 mock_load.assert_called_once_with("config.json")
                 mock_cli_class.assert_called_once_with(dummy_config, blocking=False)
-                mock_cli_instance.run.assert_awaited_once()
+                mock_cli_instance.run.assert_awaited_once_with(
+                    autonomy_level=0,
+                    show_autonomy_debug=False,
+                )
                 # Should not call sys.exit on success
                 mock_exit.assert_not_called()
+
+        @pytest.mark.asyncio
+        async def test_async_main_passes_autonomy_options(
+            self,
+            create_dummy_config: Callable,
+        ):
+            dummy_config = create_dummy_config()
+
+            with (
+                patch(
+                    "mada.interfaces.cli.main.load_config_from_json",
+                    return_value=dummy_config,
+                ),
+                patch("mada.interfaces.cli.main.MADACLIInterface") as mock_cli_class,
+            ):
+                mock_cli_instance = AsyncMock()
+                mock_cli_class.return_value = mock_cli_instance
+
+                await async_main(
+                    "config.json",
+                    blocking=True,
+                    autonomy_level=3,
+                    show_autonomy_debug=True,
+                )
+
+                mock_cli_class.assert_called_once_with(dummy_config, blocking=True)
+                mock_cli_instance.run.assert_awaited_once_with(
+                    autonomy_level=3,
+                    show_autonomy_debug=True,
+                )
 
         @pytest.mark.asyncio
         async def test_async_main_file_not_found_exits_with_code_1(self):

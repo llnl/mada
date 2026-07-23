@@ -95,12 +95,19 @@ class MADAMultiAgentGradioInterface:
         """
         return gr.Accordion("MCP Server Connection", open=True)
 
-    def create_chat_interface(self, agent_table: gr.Dataframe) -> gr.Chatbot:
+    def create_chat_interface(
+        self,
+        agent_table: gr.Dataframe,
+        autonomy_level: gr.Slider,
+        show_autonomy_debug: gr.Checkbox,
+    ) -> gr.Chatbot:
         """
         Create the chat message and input components.
 
         Args:
             agent_table: The agent configuration table to include as input
+            autonomy_level: Slider controlling autonomy behavior
+            show_autonomy_debug: Checkbox toggling autonomy debug output
 
         Returns:
             The configured Gradio chatbot component
@@ -126,6 +133,8 @@ class MADAMultiAgentGradioInterface:
                 message_box,
                 chatbot,
                 *self.get_additional_chat_inputs(agent_table),
+                autonomy_level,
+                show_autonomy_debug,
             ],
             outputs=[message_box, chatbot],
             show_progress="hidden",
@@ -255,13 +264,33 @@ class MADAMultiAgentGradioInterface:
                     # Custom components (subclasses can add their own)
                     self.create_custom_components(demo)
 
+                    autonomy_level = gr.Slider(
+                        minimum=0,
+                        maximum=9,
+                        step=1,
+                        value=0,
+                        label="Autonomy Level (0-9)",
+                        interactive=True,
+                    )
+                    show_autonomy_debug = gr.Checkbox(
+                        value=False,
+                        label="Show autonomy debug",
+                        interactive=True,
+                    )
+                    stop_autonomy_btn = gr.Button("Stop autonomy", variant="stop")
+                    stop_autonomy_status = gr.Markdown()
+
                     task_status = gr.Markdown(
                         "### Task Status\nNo background tasks yet."
                     )
                     task_refresh = gr.Timer(value=0.5)
 
                     # Chat interface
-                    chatbot = self.create_chat_interface(agent_table)
+                    chatbot = self.create_chat_interface(
+                        agent_table,
+                        autonomy_level,
+                        show_autonomy_debug,
+                    )
 
             task_refresh.tick(
                 fn=self.client.refresh_chat_and_task_status,
@@ -295,6 +324,13 @@ class MADAMultiAgentGradioInterface:
                 fn=self.client.delete_session,
                 inputs=session_list,
                 outputs=[session_list, chatbot],
+            )
+
+            stop_autonomy_btn.click(
+                fn=self.client.request_stop,
+                inputs=[session_list],
+                outputs=[stop_autonomy_status],
+                show_progress=False,
             )
 
             # Show confirmation panel when "Delete ALL chats" is clicked

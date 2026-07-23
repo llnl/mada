@@ -8,12 +8,22 @@ Provides a client session that connects to MCP servers and processes messages
 for the Gradio interface, adapted to work with MADA's architecture.
 """
 
+import asyncio
 import logging
 import traceback
 from typing import Any, AsyncGenerator, Dict, List, Tuple
 
 import gradio as gr
 
+from mada.core.autonomy import (
+    MAX_AUTONOMY_WAIT_SECONDS,
+    build_autonomy_enabled_prompt,
+    build_autonomy_followup_prompt,
+    default_wait_seconds_from_user_message,
+    max_autonomy_followups,
+    parse_autonomy_control,
+    tail_text,
+)
 from mada.core.config import (
     AgentConfig,
     DatabaseConfig,
@@ -64,6 +74,31 @@ class MCPGradioClientSession:
         self.orchestration_config = orchestration_config or OrchestrationConfig()
         self.session_manager = ChatSessionManager(database_config)
         self.session_bearer_token = None  # Store session bearer token
+        self._pending_clarifications: Dict[str, str] = {}
+        self._autonomy_cancel_events: Dict[str, asyncio.Event] = {}
+        self._active_response_sessions: set[str] = set()
+
+    def _get_autonomy_cancel_event(self, session_id: str) -> asyncio.Event:
+        event = self._autonomy_cancel_events.get(session_id)
+        if event is None:
+            event = asyncio.Event()
+            self._autonomy_cancel_events[session_id] = event
+        return event
+
+    def request_stop(self, session_label: str | None) -> str:
+        """
+        Request that any in-flight autonomy loop stop for the given session.
+        """
+        if session_label:
+            session_id = self._extract_id_from_label(session_label)
+        else:
+            session_id = self.session_manager.current_session_id
+
+        if not session_id:
+            return "No active session selected."
+
+        self._get_autonomy_cancel_event(session_id).set()
+        return "Stop requested."
 
     async def connect_servers(
         self, agent_table: gr.Dataframe, request: gr.Request
@@ -195,6 +230,9 @@ class MCPGradioClientSession:
         new_id = self.session_manager.create_session_id()
         self.session_manager.create_new_session(new_id)
         self.session_manager.select_session(new_id)
+        self._pending_clarifications.pop(new_id, None)
+        self._autonomy_cancel_events.pop(new_id, None)
+        self._active_response_sessions.discard(new_id)
         updated_sessions = self.list_sessions()
         return gr.update(
             choices=updated_sessions, value=None
@@ -256,6 +294,9 @@ class MCPGradioClientSession:
 
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
+        self._pending_clarifications.pop(session_id, None)
+        self._autonomy_cancel_events.pop(session_id, None)
+        self._active_response_sessions.discard(session_id)
         updated_sessions = self.list_sessions()
         return gr.update(
             choices=updated_sessions, value=None
@@ -273,6 +314,9 @@ class MCPGradioClientSession:
         try:
             LOG.info("Attempting to delete all sessions")
             self.session_manager.delete_all_sessions(confirm=False)
+            self._pending_clarifications.clear()
+            self._autonomy_cancel_events.clear()
+            self._active_response_sessions.clear()
             LOG.info("Successfully deleted all sessions")
             return gr.update(choices=[], value=None), []
         except Exception as e:
@@ -286,20 +330,26 @@ class MCPGradioClientSession:
         message: str,
         history: List,
         agent_table: gr.Dataframe,
+        autonomy_level: int | float = 0,
+        show_autonomy_debug: bool = False,
     ) -> AsyncGenerator[str, None]:
         """
-        Process a user message through the orchestrator's background task manager.
+        Process a user message for the Gradio chat UI.
 
         Args:
             message: User input message
             history: Chat history (not used in current implementation)
             agent_table: Agent configuration table (not used in current implementation)
+            autonomy_level: 0 disables autonomous follow-ups; 1-9 enables a
+                bounded internal self-followup loop.
+            show_autonomy_debug: If True, show autonomy parse and decision
+                details inline.
 
         Returns:
             Async generator that emits response strings for the Gradio chat UI.
 
         Yields:
-            The assistant response, or a background-task start acknowledgement.
+            The assistant response buffer for the current chat turn.
         """
         if not self.initialized:
             yield "Error: MCP servers not connected. Please connect first."
@@ -309,20 +359,233 @@ class MCPGradioClientSession:
             yield "Error: Orchestrator not initialized."
             return
 
-        try:
-            response = await self.orchestrator.background_tasks.run_query(
-                message, blocking=self.blocking
-            )
-            if response.startswith("[task-") and "Started in background." in response:
-                self.session_manager.add_message("user", message)
-                self.session_manager.add_message("assistant", response)
-            yield response
+        assistant_buffer = ""
+        session_id = self.session_manager.current_session_id
+        if not session_id:
+            session_id = self.session_manager.create_session_id()
+            self.session_manager.create_new_session(session_id)
+            self.session_manager.select_session(session_id)
+        self._active_response_sessions.add(session_id)
 
+        try:
+            level = int(autonomy_level or 0)
+            if level < 0:
+                level = 0
+            if level > 9:
+                level = 9
+
+            if level <= 0:
+                response = await self.orchestrator.background_tasks.run_query(
+                    message,
+                    blocking=self.blocking,
+                )
+                if (
+                    response.startswith("[task-")
+                    and "Started in background." in response
+                ):
+                    self.session_manager.add_message("user", message)
+                    self.session_manager.add_message("assistant", response)
+                yield response
+                return
+
+            user_message = message
+            cancel_event = self._get_autonomy_cancel_event(session_id)
+            cancel_event.clear()
+
+            pending_clarification = self._pending_clarifications.pop(session_id, None)
+            if pending_clarification:
+                message = (
+                    "Previous question you asked the user:\n"
+                    f"{pending_clarification}\n\n"
+                    "User answer:\n"
+                    f"{user_message}"
+                )
+
+            max_followups = max_autonomy_followups(level)
+            self.session_manager.add_message("user", user_message)
+
+            last_reply = ""
+            prompt_for_model = build_autonomy_enabled_prompt(
+                message,
+                level=level,
+                followups_used=0,
+                followups_max=max_followups,
+            )
+            async for chunk in self.orchestrator.process_message(
+                prompt_for_model,
+                record_to_db=False,
+            ):
+                last_reply += chunk
+                assistant_buffer += chunk
+                yield assistant_buffer
+
+            followup_count = 0
+            while followup_count < max_followups:
+                if cancel_event.is_set():
+                    assistant_buffer += "\n\n---\n\n[Autonomy stopped]\n"
+                    yield assistant_buffer
+                    break
+
+                decision_prompt = (
+                    "[INTERNAL CONTROL MESSAGE]\n"
+                    "Choose exactly one:\n"
+                    "- WAIT: sleep briefly and then issue a follow-up query\n"
+                    "- CONTINUE: immediately issue a follow-up query\n"
+                    "- ASK: ask the user ONE question (only if truly blocked)\n"
+                    "- STOP: stop\n\n"
+                    f"Autonomy level: {level} (0=off, 9=most autonomous)\n"
+                    f"Follow-up safety cap used: {followup_count}/{max_followups}\n\n"
+                    "User request:\n"
+                    f"{message}\n\n"
+                    "Assistant reply:\n"
+                    f"{(last_reply or '').strip()}\n\n"
+                    "Assistant transcript so far (tail):\n"
+                    f"{tail_text(assistant_buffer, 2000).strip()}\n\n"
+                    "Important:\n"
+                    "- The system CAN wait in real time. Do NOT claim you cannot wait.\n"
+                    "- If the user requested timed repetition (e.g., 'every 20 seconds'), choose WAIT and set AUTONOMY_WAIT_SECONDS accordingly.\n"
+                    "- If the user requested 'until sufficient', choose a reasonable stopping point and STOP once you reach it.\n"
+                    "- Do not include explanations, code fences, or any other text.\n\n"
+                    "Output EXACTLY this format, with no extra text:\n"
+                    "AUTONOMY_DECISION=<CONTINUE|WAIT|ASK|STOP>\n"
+                    "AUTONOMY_QUERY=<single-line query to run next>\n"
+                    "AUTONOMY_WAIT_SECONDS=<integer seconds to wait (WAIT only)>\n"
+                    "AUTONOMY_QUESTION=<single-line question for the user>\n"
+                    "Rules:\n"
+                    "- If decision is CONTINUE, set AUTONOMY_QUERY and leave AUTONOMY_QUESTION empty.\n"
+                    "- If decision is WAIT, set AUTONOMY_WAIT_SECONDS and AUTONOMY_QUERY, and leave AUTONOMY_QUESTION empty.\n"
+                    "- If decision is ASK, set AUTONOMY_QUESTION and leave AUTONOMY_QUERY empty.\n"
+                    "- If decision is STOP, leave all other fields empty.\n"
+                )
+
+                decision_text = await self.orchestrator.run_control_prompt(
+                    decision_prompt
+                )
+                (
+                    decision,
+                    next_query,
+                    question,
+                    wait_seconds,
+                    parse_ok,
+                ) = parse_autonomy_control(decision_text)
+
+                decision_preview = " ".join(
+                    [
+                        f"AUTONOMY_DECISION={decision}",
+                        f"AUTONOMY_QUERY={'<set>' if bool(next_query) else ''}".strip(),
+                        (
+                            f"AUTONOMY_WAIT_SECONDS={wait_seconds if wait_seconds else ''}"
+                        ).strip(),
+                        (
+                            f"AUTONOMY_QUESTION={'<set>' if bool(question) else ''}"
+                        ).strip(),
+                    ]
+                ).strip()
+                LOG.info(
+                    "Autonomy decision level=%s parse_ok=%s decision=%s next_query=%s question=%s preview=%s",
+                    level,
+                    parse_ok,
+                    decision,
+                    "yes" if bool(next_query) else "no",
+                    "yes" if bool(question) else "no",
+                    decision_preview or "<empty>",
+                )
+
+                if show_autonomy_debug:
+                    assistant_buffer += (
+                        "\n\n---\n\n"
+                        f"[Autonomy debug] level={level} parse_ok={parse_ok} decision={decision} "
+                        f"next_query={'yes' if bool(next_query) else 'no'} wait_seconds={wait_seconds or 0} "
+                        f"question={'yes' if bool(question) else 'no'}\n"
+                        f"[Autonomy debug] decision_preview={decision_preview or '<empty>'}\n"
+                    )
+                    yield assistant_buffer
+
+                if decision == "ASK" and question:
+                    assistant_buffer += f"\n\n{question}"
+                    yield assistant_buffer
+                    self._pending_clarifications[session_id] = question
+                    break
+
+                if decision == "STOP":
+                    break
+
+                if decision not in ("CONTINUE", "WAIT") or not next_query:
+                    break
+
+                if decision == "WAIT":
+                    if wait_seconds <= 0:
+                        wait_seconds = default_wait_seconds_from_user_message(
+                            user_message
+                        )
+                    if wait_seconds > MAX_AUTONOMY_WAIT_SECONDS:
+                        wait_seconds = MAX_AUTONOMY_WAIT_SECONDS
+
+                    assistant_buffer += "\n\n---\n\n[Autonomous wait]\n\n"
+                    assistant_buffer += f"[Wait seconds] {wait_seconds}\n"
+                    assistant_buffer += f"[Autonomous query] {next_query}\n"
+                    yield assistant_buffer
+
+                    try:
+                        await asyncio.wait_for(
+                            cancel_event.wait(), timeout=wait_seconds
+                        )
+                        assistant_buffer += "\n\n---\n\n[Autonomy stopped]\n"
+                        yield assistant_buffer
+                        break
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    assistant_buffer += "\n\n---\n\n[Autonomous follow-up]\n\n"
+                    assistant_buffer += f"[Autonomous query] {next_query}\n\n"
+                    yield assistant_buffer
+
+                previous_reply = last_reply
+                last_reply = ""
+                followup_prompt = build_autonomy_followup_prompt(
+                    next_query,
+                    original_request=message,
+                    last_reply=previous_reply,
+                    assistant_buffer=assistant_buffer,
+                    level=level,
+                    followups_used=followup_count,
+                    followups_max=max_followups,
+                )
+                async for chunk in self.orchestrator.process_message(
+                    followup_prompt,
+                    record_to_db=False,
+                ):
+                    last_reply += chunk
+                    assistant_buffer += chunk
+                    yield assistant_buffer
+
+                followup_count += 1
+
+            if assistant_buffer.strip():
+                self.session_manager.add_message("assistant", assistant_buffer)
+
+        except asyncio.CancelledError:
+            if session_id:
+                self._get_autonomy_cancel_event(session_id).set()
+            marker = "\n\n---\n\n[Generation cancelled]\n"
+            assistant_buffer = (assistant_buffer or "") + marker
+            if assistant_buffer.strip() and int(autonomy_level or 0) > 0:
+                self.session_manager.add_message("assistant", assistant_buffer)
+            yield assistant_buffer
+            return
         except Exception as e:
             error_msg = f"Error processing message: {e}"
             LOG.error(error_msg)
             traceback.print_exc()
-            yield error_msg
+            if assistant_buffer.strip():
+                assistant_buffer += f"\n\n{error_msg}"
+                self.session_manager.add_message("assistant", assistant_buffer)
+                yield assistant_buffer
+            else:
+                yield error_msg
+        finally:
+            if session_id:
+                self._active_response_sessions.discard(session_id)
 
     async def get_task_status_markdown(self) -> str:
         """
@@ -364,6 +627,9 @@ class MCPGradioClientSession:
             Exception: Propagates unexpected chat-history load failures.
         """
         task_status = await self.get_task_status_markdown()
+        session_id = self.session_manager.current_session_id
+        if session_id and session_id in self._active_response_sessions:
+            return gr.skip(), task_status
         if (
             not self.orchestrator
             or await self.orchestrator.background_tasks.count_pending_tasks() > 0

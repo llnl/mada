@@ -15,6 +15,15 @@ import click
 from typing import Dict, List
 
 from mada.core.config import AppConfig, OrchestrationConfig, load_config_from_json
+from mada.core.autonomy import (
+    MAX_AUTONOMY_WAIT_SECONDS,
+    build_autonomy_enabled_prompt,
+    build_autonomy_followup_prompt,
+    default_wait_seconds_from_user_message,
+    max_autonomy_followups,
+    parse_autonomy_control,
+    tail_text,
+)
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
 
@@ -242,7 +251,11 @@ class MADACLIInterface:
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
 
-    async def run(self):
+    async def run(
+        self,
+        autonomy_level: int = 0,
+        show_autonomy_debug: bool = False,
+    ):
         """Run the interactive CLI session."""
         print("MADA Multi-Agent Orchestrator")
         print("=" * 50)
@@ -299,6 +312,7 @@ class MADACLIInterface:
                 print("-" * 50)
 
                 prompt_session = PromptSession()
+                pending_clarification: str | None = None
 
                 # Interactive chat loop
                 while True:
@@ -319,6 +333,12 @@ class MADACLIInterface:
 
                         if not user_input:
                             continue
+
+                        level = int(autonomy_level or 0)
+                        if level < 0:
+                            level = 0
+                        if level > 9:
+                            level = 9
 
                         if not self.blocking and user_input.lower() == "tasks":
                             task_snapshot = (
@@ -352,9 +372,184 @@ class MADACLIInterface:
                         print("\nAgents:")
                         print("-" * 20)
 
-                        await orchestrator.background_tasks.run_query(
-                            user_input, blocking=self.blocking
+                        if level <= 0:
+                            await orchestrator.background_tasks.run_query(
+                                user_input,
+                                blocking=self.blocking,
+                            )
+                            continue
+
+                        model_user_input = user_input
+                        if pending_clarification:
+                            model_user_input = (
+                                "Previous question you asked the user:\n"
+                                f"{pending_clarification}\n\n"
+                                "User answer:\n"
+                                f"{user_input}"
+                            )
+                            pending_clarification = None
+
+                        max_followups = max_autonomy_followups(level)
+                        assistant_buffer = ""
+                        last_reply = ""
+                        self.session_manager.add_message("user", user_input)
+
+                        autonomy_prompt = build_autonomy_enabled_prompt(
+                            model_user_input,
+                            level=level,
+                            followups_used=0,
+                            followups_max=max_followups,
                         )
+
+                        try:
+                            async for chunk in orchestrator.process_message(
+                                autonomy_prompt,
+                                record_to_db=False,
+                            ):
+                                last_reply += chunk
+                                assistant_buffer += chunk
+                                print(chunk, end="", flush=True)
+                        except KeyboardInterrupt:
+                            marker = "\n\n---\n\n[Generation cancelled]\n"
+                            print(marker, end="", flush=True)
+                            assistant_buffer += marker
+                            if assistant_buffer.strip():
+                                self.session_manager.add_message(
+                                    "assistant",
+                                    assistant_buffer,
+                                )
+                            print("\n")
+                            continue
+
+                        followup_count = 0
+                        while followup_count < max_followups:
+                            decision_prompt = (
+                                "[INTERNAL CONTROL MESSAGE]\n"
+                                "Choose exactly one:\n"
+                                "- WAIT: sleep briefly and then issue a follow-up query\n"
+                                "- CONTINUE: immediately issue a follow-up query\n"
+                                "- ASK: ask the user ONE question (only if truly blocked)\n"
+                                "- STOP: stop\n\n"
+                                f"Autonomy level: {level} (0=off, 9=most autonomous)\n"
+                                f"Follow-up safety cap used: {followup_count}/{max_followups}\n\n"
+                                "User request:\n"
+                                f"{model_user_input}\n\n"
+                                "Assistant reply:\n"
+                                f"{(last_reply or '').strip()}\n\n"
+                                "Assistant transcript so far (tail):\n"
+                                f"{tail_text(assistant_buffer, 2000).strip()}\n\n"
+                                "Important:\n"
+                                "- The system CAN wait in real time. Do NOT claim you cannot wait.\n"
+                                "- If the user requested timed repetition (e.g., 'every 20 seconds'), choose WAIT and set AUTONOMY_WAIT_SECONDS accordingly.\n"
+                                "- If the user requested 'until sufficient', choose a reasonable stopping point and STOP once you reach it.\n"
+                                "- Do not include explanations, code fences, or any other text.\n\n"
+                                "Output EXACTLY this format, with no extra text:\n"
+                                "AUTONOMY_DECISION=<CONTINUE|WAIT|ASK|STOP>\n"
+                                "AUTONOMY_QUERY=<single-line query to run next>\n"
+                                "AUTONOMY_WAIT_SECONDS=<integer seconds to wait (WAIT only)>\n"
+                                "AUTONOMY_QUESTION=<single-line question for the user>\n"
+                                "Rules:\n"
+                                "- If decision is CONTINUE, set AUTONOMY_QUERY and leave AUTONOMY_QUESTION empty.\n"
+                                "- If decision is WAIT, set AUTONOMY_WAIT_SECONDS and AUTONOMY_QUERY, and leave AUTONOMY_QUESTION empty.\n"
+                                "- If decision is ASK, set AUTONOMY_QUESTION and leave AUTONOMY_QUERY empty.\n"
+                                "- If decision is STOP, leave all other fields empty.\n"
+                            )
+
+                            decision_text = await orchestrator.run_control_prompt(
+                                decision_prompt
+                            )
+                            (
+                                decision,
+                                next_query,
+                                question,
+                                wait_seconds,
+                                parse_ok,
+                            ) = parse_autonomy_control(decision_text)
+
+                            if show_autonomy_debug:
+                                debug_text = (
+                                    "\n\n---\n\n"
+                                    f"[Autonomy debug] level={level} parse_ok={parse_ok} "
+                                    f"decision={decision} next_query={'yes' if bool(next_query) else 'no'} "
+                                    f"wait_seconds={wait_seconds or 0} question={'yes' if bool(question) else 'no'}\n"
+                                )
+                                print(debug_text, end="", flush=True)
+                                assistant_buffer += debug_text
+
+                            if decision == "ASK" and question:
+                                question_text = f"\n\n{question}\n"
+                                print(question_text, end="", flush=True)
+                                assistant_buffer += question_text
+                                pending_clarification = question
+                                break
+
+                            if decision == "STOP":
+                                break
+
+                            if decision not in ("CONTINUE", "WAIT") or not next_query:
+                                break
+
+                            if decision == "WAIT":
+                                if wait_seconds <= 0:
+                                    wait_seconds = (
+                                        default_wait_seconds_from_user_message(
+                                            user_input
+                                        )
+                                    )
+                                if wait_seconds > MAX_AUTONOMY_WAIT_SECONDS:
+                                    wait_seconds = MAX_AUTONOMY_WAIT_SECONDS
+
+                                marker = (
+                                    f"\n\n---\n\n[Autonomous wait] {wait_seconds}s\n"
+                                )
+                                print(marker, end="", flush=True)
+                                assistant_buffer += marker
+
+                                try:
+                                    await asyncio.sleep(wait_seconds)
+                                except KeyboardInterrupt:
+                                    interrupted = "\n\n[Autonomous wait interrupted]\n"
+                                    print(interrupted, end="", flush=True)
+                                    assistant_buffer += interrupted
+                                    break
+
+                            marker = f"\n\n---\n\n[Autonomous query] {next_query}\n\n"
+                            print(marker, end="", flush=True)
+                            assistant_buffer += marker
+
+                            previous_reply = last_reply
+                            last_reply = ""
+                            followup_prompt = build_autonomy_followup_prompt(
+                                next_query,
+                                original_request=model_user_input,
+                                last_reply=previous_reply,
+                                assistant_buffer=assistant_buffer,
+                                level=level,
+                                followups_used=followup_count,
+                                followups_max=max_followups,
+                            )
+                            try:
+                                async for chunk in orchestrator.process_message(
+                                    followup_prompt,
+                                    record_to_db=False,
+                                ):
+                                    last_reply += chunk
+                                    assistant_buffer += chunk
+                                    print(chunk, end="", flush=True)
+                            except KeyboardInterrupt:
+                                marker = "\n\n---\n\n[Generation cancelled]\n"
+                                print(marker, end="", flush=True)
+                                assistant_buffer += marker
+                                break
+
+                            followup_count += 1
+
+                        if assistant_buffer.strip():
+                            self.session_manager.add_message(
+                                "assistant",
+                                assistant_buffer,
+                            )
+                        print("\n")
 
                     except KeyboardInterrupt:
                         print("\n\nGoodbye!")
@@ -383,13 +578,21 @@ class MADACLIInterface:
         # Note: Cleanup is handled automatically by the 'async with' context manager
 
 
-async def async_main(config_file: str, blocking: bool = False):
+async def async_main(
+    config_file: str,
+    blocking: bool = False,
+    autonomy_level: int = 0,
+    show_autonomy_debug: bool = False,
+):
     """
     Async main entry point for CLI.
 
     Args:
         config_file: The path to the MADA configuration file.
         blocking: If True, process one query at a time.
+        autonomy_level: 0 disables autonomous follow-ups; 1-9 enables bounded
+            autonomous follow-up turns.
+        show_autonomy_debug: If True, print autonomy control details inline.
     """
     try:
         # Load configuration
@@ -397,7 +600,10 @@ async def async_main(config_file: str, blocking: bool = False):
 
         # Run CLI
         cli = MADACLIInterface(config, blocking=blocking)
-        await cli.run()
+        await cli.run(
+            autonomy_level=autonomy_level,
+            show_autonomy_debug=show_autonomy_debug,
+        )
 
     except FileNotFoundError:
         print(f"Configuration file not found: {config_file}")
@@ -422,13 +628,38 @@ async def async_main(config_file: str, blocking: bool = False):
     is_flag=True,
     help="Process one query at a time instead of running queries in the background.",
 )
-def main(config_file: str, blocking: bool) -> None:
+@click.option(
+    "--autonomy-level",
+    type=int,
+    default=0,
+    show_default=True,
+    help="0 disables autonomy; 1-9 enables bounded autonomous follow-ups.",
+)
+@click.option(
+    "--show-autonomy-debug",
+    is_flag=True,
+    default=False,
+    help="Print autonomy control parsing and decision details.",
+)
+def main(
+    config_file: str,
+    blocking: bool,
+    autonomy_level: int,
+    show_autonomy_debug: bool,
+) -> None:
     """
     Run MADA in CLI mode.
 
     CONFIG_FILE is the path to the MADA configuration file.
     """
-    asyncio.run(async_main(config_file, blocking=blocking))
+    asyncio.run(
+        async_main(
+            config_file,
+            blocking=blocking,
+            autonomy_level=autonomy_level,
+            show_autonomy_debug=show_autonomy_debug,
+        )
+    )
 
 
 if __name__ == "__main__":
