@@ -183,6 +183,7 @@ class MCPGradioClientSession:
                     agent
                     for agent in self.agents
                     if agent.agent_name in configured_participants
+                    and agent.agent_name in agent_dict
                 ]
                 table_agent_dict = agent_dict
             self.initialized = True
