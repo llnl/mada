@@ -9,6 +9,7 @@ without blocking the system.
 import asyncio
 import pytest
 import logging
+import httpx
 
 from mada.core.config import (
     OpenAIModelConfig,
@@ -18,6 +19,34 @@ from mada.core.config import (
 )
 from mada.core.orchestrator import MADAOrchestrator
 from mada.core.database import ChatSessionManager
+
+
+class FailingMCPStreamableHTTPTool:
+    """Deterministic stand-in for failed streamable HTTP MCP connections."""
+
+    def __init__(self, *args, **kwargs):
+        self._functions = []
+
+    async def __aenter__(self):
+        raise httpx.ConnectError("connection refused")
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def close(self):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def fail_streamable_http_mcp_connections(monkeypatch):
+    """
+    Avoid real failed MCP transport attempts, which can leak third-party async
+    generator cleanup state after assertions pass.
+    """
+    monkeypatch.setattr(
+        "mada.core.orchestrator.MCPStreamableHTTPTool",
+        FailingMCPStreamableHTTPTool,
+    )
 
 
 @pytest.fixture
@@ -93,7 +122,7 @@ async def test_failed_mcp_connection_does_not_block(
     mcp_servers = {"failing_server": failing_mcp_server}
 
     async with MADAOrchestrator(
-        model_config=model_config, session_manager=session_manager
+        model_config=model_config, session_manager=session_manager, timeout=1
     ) as orchestrator:
         # Initialize orchestrator with failing MCP server
         status, tools = await orchestrator.initialize_orchestrator(
@@ -154,7 +183,7 @@ async def test_multiple_failed_mcp_connections(model_config, session_manager):
     )
 
     async with MADAOrchestrator(
-        model_config=model_config, session_manager=session_manager
+        model_config=model_config, session_manager=session_manager, timeout=1
     ) as orchestrator:
         status, tools = await orchestrator.initialize_orchestrator(
             [agent_config], mcp_servers
@@ -201,7 +230,7 @@ async def test_mixed_successful_and_failed_mcp_connections(
     )
 
     async with MADAOrchestrator(
-        model_config=model_config, session_manager=session_manager
+        model_config=model_config, session_manager=session_manager, timeout=1
     ) as orchestrator:
         # This should not raise an exception or block
         status, tools = await orchestrator.initialize_orchestrator(
@@ -243,7 +272,7 @@ async def test_no_async_generator_warnings_on_cleanup(model_config, session_mana
         )
 
         async with MADAOrchestrator(
-            model_config=model_config, session_manager=session_manager
+            model_config=model_config, session_manager=session_manager, timeout=1
         ) as orchestrator:
             status, tools = await orchestrator.initialize_orchestrator(
                 [agent_config], mcp_servers

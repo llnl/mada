@@ -184,6 +184,18 @@ class TestAddMessage:
 
         manager.chat_db.add_message.assert_called_once_with("current", "user", "hello")
 
+    def test_add_message_to_session_passes_explicit_session(self, mock_factory):
+        """Verify add_message_to_session writes to the requested session."""
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
+
+        manager.add_message_to_session("target", "assistant", "hello")
+
+        manager.chat_db.add_message.assert_called_once_with(
+            "target", "assistant", "hello"
+        )
+
 
 class TestListSessions:
     """

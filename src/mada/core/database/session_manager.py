@@ -143,6 +143,17 @@ class ChatSessionManager:
         """
         self.chat_db.add_message(self.current_session_id, role, message)
 
+    def add_message_to_session(self, session_id: str, role: str, message: str):
+        """
+        Add a message to a specific database session.
+
+        Args:
+            session_id (str): The session that should receive the message.
+            role (str): The role (user or assistant) to designate who wrote the message.
+            message (str): The message contents.
+        """
+        self.chat_db.add_message(session_id, role, message)
+
     def list_sessions(self) -> List[Tuple[str, datetime]]:
         """
         List all sessions currently stored in the database.

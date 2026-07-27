@@ -47,11 +47,11 @@ from mada.main import (
 )
 
 try:
-    from fastapi.testclient import TestClient
+    import httpx
 except (
     ImportError
 ):  # pragma: no cover - exercised only in missing dependency environments
-    TestClient = None
+    httpx = None
 
 
 class DummyInterfaceConfig:
@@ -652,11 +652,18 @@ class TestMADAOpenAIApiCmd:
                 )
                 assert "unsupported orchestration mode: magentic" in printed
 
-    @pytest.mark.skipif(
-        TestClient is None, reason="fastapi test client is not installed"
-    )
+    @pytest.mark.skipif(httpx is None, reason="httpx ASGI client is not installed")
     class TestCreateOpenAIApiApp:
-        def test_models_endpoint_returns_exposed_model(
+        @staticmethod
+        async def _request(app, method: str, path: str, **kwargs):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                return await client.request(method, path, **kwargs)
+
+        @pytest.mark.asyncio
+        async def test_models_endpoint_returns_exposed_model(
             self, create_dummy_config: Callable
         ):
             """
@@ -666,13 +673,13 @@ class TestMADAOpenAIApiCmd:
 
             with patch.object(MADAOpenAIAPIService, "shutdown", new=AsyncMock()):
                 app = create_openai_api_app(config, model_name="mada-api")
-                with TestClient(app) as client:
-                    response = client.get("/v1/models")
+                response = await self._request(app, "GET", "/v1/models")
 
                 assert response.status_code == 200
                 assert response.json()["data"][0]["id"] == "mada-api"
 
-        def test_models_endpoint_without_v1_returns_exposed_model(
+        @pytest.mark.asyncio
+        async def test_models_endpoint_without_v1_returns_exposed_model(
             self, create_dummy_config: Callable
         ):
             """
@@ -682,13 +689,13 @@ class TestMADAOpenAIApiCmd:
 
             with patch.object(MADAOpenAIAPIService, "shutdown", new=AsyncMock()):
                 app = create_openai_api_app(config, model_name="mada-api")
-                with TestClient(app) as client:
-                    response = client.get("/models")
+                response = await self._request(app, "GET", "/models")
 
                 assert response.status_code == 200
                 assert response.json()["data"][0]["id"] == "mada-api"
 
-        def test_health_endpoint_reports_not_initialized_before_first_chat(
+        @pytest.mark.asyncio
+        async def test_health_endpoint_reports_not_initialized_before_first_chat(
             self, create_dummy_config: Callable
         ):
             """
@@ -699,13 +706,13 @@ class TestMADAOpenAIApiCmd:
 
             with patch.object(MADAOpenAIAPIService, "shutdown", new=AsyncMock()):
                 app = create_openai_api_app(config, model_name="mada-api")
-                with TestClient(app) as client:
-                    response = client.get("/health")
+                response = await self._request(app, "GET", "/health")
 
                 assert response.status_code == 200
                 assert response.json()["orchestrator_initialized"] == "false"
 
-        def test_chat_completions_returns_openai_shape(
+        @pytest.mark.asyncio
+        async def test_chat_completions_returns_openai_shape(
             self, create_dummy_config: Callable
         ):
             """
@@ -724,21 +731,23 @@ class TestMADAOpenAIApiCmd:
                 ),
             ):
                 app = create_openai_api_app(config, model_name="mada-api")
-                with TestClient(app) as client:
-                    response = client.post(
-                        "/v1/chat/completions",
-                        json={
-                            "model": "mada-api",
-                            "messages": [{"role": "user", "content": "hello"}],
-                        },
-                    )
+                response = await self._request(
+                    app,
+                    "POST",
+                    "/v1/chat/completions",
+                    json={
+                        "model": "mada-api",
+                        "messages": [{"role": "user", "content": "hello"}],
+                    },
+                )
 
                 assert response.status_code == 200
                 payload = response.json()
                 assert payload["object"] == "chat.completion"
                 assert payload["choices"][0]["message"]["content"] == "hello from mada"
 
-        def test_chat_completions_returns_503_when_orchestrator_startup_fails(
+        @pytest.mark.asyncio
+        async def test_chat_completions_returns_503_when_orchestrator_startup_fails(
             self, create_dummy_config: Callable
         ):
             """
@@ -763,14 +772,15 @@ class TestMADAOpenAIApiCmd:
                 )
 
                 app = create_openai_api_app(config, model_name="mada-api")
-                with TestClient(app) as client:
-                    response = client.post(
-                        "/v1/chat/completions",
-                        json={
-                            "model": "mada-api",
-                            "messages": [{"role": "user", "content": "hello"}],
-                        },
-                    )
+                response = await self._request(
+                    app,
+                    "POST",
+                    "/v1/chat/completions",
+                    json={
+                        "model": "mada-api",
+                        "messages": [{"role": "user", "content": "hello"}],
+                    },
+                )
 
             assert response.status_code == 503
             detail = response.json()["detail"]
@@ -780,7 +790,8 @@ class TestMADAOpenAIApiCmd:
             )
             assert "random startup failure" in detail
 
-        def test_chat_completions_streams_sse_chunks(
+        @pytest.mark.asyncio
+        async def test_chat_completions_streams_sse_chunks(
             self, create_dummy_config: Callable
         ):
             """
@@ -795,26 +806,31 @@ class TestMADAOpenAIApiCmd:
                 "data: [DONE]\n\n",
             ]
 
+            async def stream_response(_messages):
+                for chunk in stream_chunks:
+                    yield chunk
+
             with (
                 patch.object(MADAOpenAIAPIService, "ensure_started", new=AsyncMock()),
                 patch.object(MADAOpenAIAPIService, "shutdown", new=AsyncMock()),
                 patch.object(
                     MADAOpenAIAPIService,
                     "stream_response",
-                    return_value=iter(stream_chunks),
+                    side_effect=stream_response,
                 ),
             ):
                 app = create_openai_api_app(config, model_name="mada-api")
-                with TestClient(app) as client:
-                    response = client.post(
-                        "/v1/chat/completions",
-                        json={
-                            "model": "mada-api",
-                            "stream": True,
-                            "messages": [{"role": "user", "content": "hello"}],
-                        },
-                    )
-                    body = response.text
+                response = await self._request(
+                    app,
+                    "POST",
+                    "/v1/chat/completions",
+                    json={
+                        "model": "mada-api",
+                        "stream": True,
+                        "messages": [{"role": "user", "content": "hello"}],
+                    },
+                )
+                body = response.text
 
                 assert response.status_code == 200
                 assert "data: [DONE]" in body

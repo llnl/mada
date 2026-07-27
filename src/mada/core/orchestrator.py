@@ -271,7 +271,10 @@ class MADAOrchestrator(MCPAgentManager):
                     # For MCPStreamableHTTPTool and MCPStdioTool, call __aexit__ to properly
                     # clean up async generators even though __aenter__ failed
                     if hasattr(mcp_tool, "__aexit__"):
-                        await mcp_tool.__aexit__(None, None, None)
+                        await asyncio.wait_for(
+                            mcp_tool.__aexit__(None, None, None),
+                            timeout=max(float(self.timeout), 0.1),
+                        )
                 finally:
                     # Restore original logging level
                     af_logger.setLevel(original_level)
@@ -392,8 +395,11 @@ class MADAOrchestrator(MCPAgentManager):
                 if self.bearer_token:
                     headers["X-Token"] = self.bearer_token
 
+                connection_timeout = max(float(self.timeout), 0.1)
                 # MCPStreamableHTTPTool requires an http_client with custom headers, not a headers parameter
-                http_client = httpx.AsyncClient(headers=headers, timeout=180.0)
+                http_client = httpx.AsyncClient(
+                    headers=headers, timeout=connection_timeout
+                )
                 http_client_to_cleanup = (
                     http_client  # Store for cleanup if connection fails
                 )
@@ -413,7 +419,10 @@ class MADAOrchestrator(MCPAgentManager):
             )
 
             try:
-                mcp_tool = await self.exit_stack.enter_async_context(mcp_tool)
+                mcp_tool = await asyncio.wait_for(
+                    self.exit_stack.enter_async_context(mcp_tool),
+                    timeout=max(float(self.timeout), 0.1),
+                )
                 all_tools.append(mcp_tool)
                 all_tool_names.append(server_name)
                 self._mcp_tools_by_server[server_name] = mcp_tool
@@ -446,6 +455,7 @@ class MADAOrchestrator(MCPAgentManager):
                 continue
             except (
                 httpx.TimeoutException,
+                asyncio.TimeoutError,
                 httpcore.ReadTimeout,
                 httpcore.WriteTimeout,
                 httpcore.PoolTimeout,
@@ -791,6 +801,7 @@ Guidelines:
         message: str,
         isolated_session: bool = False,
         record_to_db: bool = True,
+        background_poll_session_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message through the planning agent.
@@ -812,6 +823,9 @@ Guidelines:
             record_to_db: If True, persist the completed user/assistant turn and
                 background-task side effects to the chat database. Set False for
                 internal/autonomous turns where the caller owns persistence.
+            background_poll_session_id: Optional session that should receive
+                MCP background-tool poll results. Defaults to the current chat
+                session when a poller is registered.
 
         Yields:
             Response text chunks from the planning agent, plus bracketed tool
@@ -850,6 +864,7 @@ Guidelines:
                     message,
                     aggregated_assistant_reply,
                     record_to_db=record_to_db,
+                    background_poll_session_id=background_poll_session_id,
                 )
                 return
 
@@ -860,6 +875,7 @@ Guidelines:
                 run_session,
                 history_lengths,
                 record_to_db=record_to_db,
+                background_poll_session_id=background_poll_session_id,
             )
 
         except Exception as e:
@@ -1011,6 +1027,7 @@ Guidelines:
         message: str,
         assistant_reply: str,
         record_to_db: bool = True,
+        background_poll_session_id: Optional[str] = None,
     ) -> None:
         """
         Persist a response produced from an isolated agent session.
@@ -1025,6 +1042,11 @@ Guidelines:
         Raises:
             Exception: Propagates database persistence failures.
         """
+        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+            assistant_reply,
+            session_id=background_poll_session_id,
+        )
+
         if not record_to_db:
             return
 
@@ -1035,10 +1057,6 @@ Guidelines:
         if assistant_reply.strip():
             self.session_manager.add_message("assistant", assistant_reply)
 
-        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-            assistant_reply
-        )
-
     async def _commit_completed_turn(
         self,
         turn_id: Optional[int],
@@ -1047,6 +1065,7 @@ Guidelines:
         run_session: AgentSession,
         history_lengths: Dict[str, int],
         record_to_db: bool = True,
+        background_poll_session_id: Optional[str] = None,
     ) -> None:
         """
         Queue and commit a completed shared-session turn in turn order.
@@ -1078,6 +1097,7 @@ Guidelines:
                 "run_session": run_session,
                 "history_lengths": history_lengths,
                 "record_to_db": record_to_db,
+                "background_poll_session_id": background_poll_session_id,
             }
 
             while self._next_turn_commit_id in self._completed_turns:
@@ -1150,11 +1170,16 @@ Guidelines:
         Raises:
             Exception: Propagates database persistence failures.
         """
-        if not completed.get("record_to_db", True):
-            return
-
         message = completed["message"]
         assistant_reply = completed["assistant_reply"]
+
+        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+            assistant_reply,
+            session_id=completed.get("background_poll_session_id"),
+        )
+
+        if not completed.get("record_to_db", True):
+            return
 
         if not self.background_tasks.user_message_already_started_background_task(
             message
@@ -1162,10 +1187,6 @@ Guidelines:
             self.session_manager.add_message("user", message)
         if assistant_reply.strip():
             self.session_manager.add_message("assistant", assistant_reply)
-
-        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-            assistant_reply
-        )
 
     async def collect_message_response(
         self,
@@ -1226,7 +1247,10 @@ Guidelines:
         """
         try:
             await self.background_tasks.cleanup()
-            await self.exit_stack.aclose()
+            await asyncio.wait_for(
+                self.exit_stack.aclose(),
+                timeout=max(float(self.timeout), 0.1),
+            )
             self.specialist_agents.clear()
             self.planning_agent = None
             self._control_agent = None

@@ -61,7 +61,9 @@ class BackgroundTaskManager:
         self._hidden_task_ids: Set[str] = set()
         self._background_tool_poll_tasks: Dict[str, asyncio.Task[None]] = {}
 
-    def start_background_tool_poll_from_reply_if_needed(self, reply_text: str) -> None:
+    def start_background_tool_poll_from_reply_if_needed(
+        self, reply_text: str, session_id: str | None = None
+    ) -> None:
         """
         Start polling when an assistant reply contains a running MCP task descriptor.
 
@@ -73,6 +75,8 @@ class BackgroundTaskManager:
         Args:
             reply_text: Assistant reply text that may contain a background task
                 descriptor as JSON.
+            session_id: Optional chat session that should receive the final
+                background-tool result. Defaults to the current session.
 
         Returns:
             None.
@@ -103,7 +107,7 @@ class BackgroundTaskManager:
         if status != "running" or task_id in self._background_tool_poll_tasks:
             return
 
-        session_id = self.session_manager.current_session_id
+        session_id = session_id or self.session_manager.current_session_id
         poll_task = asyncio.create_task(
             self._poll_background_tool(task_id, tool_name, session_id)
         )

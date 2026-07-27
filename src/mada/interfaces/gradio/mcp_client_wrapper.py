@@ -85,6 +85,20 @@ class MCPGradioClientSession:
             self._autonomy_cancel_events[session_id] = event
         return event
 
+    def _persist_turn_to_session(
+        self, session_id: str, user_message: str, assistant_message: str
+    ) -> None:
+        """
+        Persist a complete user/assistant turn to the session that started it.
+        """
+        if not session_id or not assistant_message.strip():
+            return
+
+        self.session_manager.add_message_to_session(session_id, "user", user_message)
+        self.session_manager.add_message_to_session(
+            session_id, "assistant", assistant_message
+        )
+
     def request_stop(self, session_label: str | None) -> str:
         """
         Request that any in-flight autonomy loop stop for the given session.
@@ -360,6 +374,7 @@ class MCPGradioClientSession:
             return
 
         assistant_buffer = ""
+        original_user_message = message
         session_id = self.session_manager.current_session_id
         if not session_id:
             session_id = self.session_manager.create_session_id()
@@ -383,12 +398,11 @@ class MCPGradioClientSession:
                     response.startswith("[task-")
                     and "Started in background." in response
                 ):
-                    self.session_manager.add_message("user", message)
-                    self.session_manager.add_message("assistant", response)
+                    self._persist_turn_to_session(session_id, message, response)
                 yield response
                 return
 
-            user_message = message
+            user_message = original_user_message
             cancel_event = self._get_autonomy_cancel_event(session_id)
             cancel_event.clear()
 
@@ -402,7 +416,6 @@ class MCPGradioClientSession:
                 )
 
             max_followups = max_autonomy_followups(level)
-            self.session_manager.add_message("user", user_message)
 
             last_reply = ""
             prompt_for_model = build_autonomy_enabled_prompt(
@@ -414,6 +427,7 @@ class MCPGradioClientSession:
             async for chunk in self.orchestrator.process_message(
                 prompt_for_model,
                 record_to_db=False,
+                background_poll_session_id=session_id,
             ):
                 last_reply += chunk
                 assistant_buffer += chunk
@@ -554,6 +568,7 @@ class MCPGradioClientSession:
                 async for chunk in self.orchestrator.process_message(
                     followup_prompt,
                     record_to_db=False,
+                    background_poll_session_id=session_id,
                 ):
                     last_reply += chunk
                     assistant_buffer += chunk
@@ -562,7 +577,9 @@ class MCPGradioClientSession:
                 followup_count += 1
 
             if assistant_buffer.strip():
-                self.session_manager.add_message("assistant", assistant_buffer)
+                self._persist_turn_to_session(
+                    session_id, user_message, assistant_buffer
+                )
 
         except asyncio.CancelledError:
             if session_id:
@@ -570,7 +587,9 @@ class MCPGradioClientSession:
             marker = "\n\n---\n\n[Generation cancelled]\n"
             assistant_buffer = (assistant_buffer or "") + marker
             if assistant_buffer.strip() and int(autonomy_level or 0) > 0:
-                self.session_manager.add_message("assistant", assistant_buffer)
+                self._persist_turn_to_session(
+                    session_id, original_user_message, assistant_buffer
+                )
             yield assistant_buffer
             return
         except Exception as e:
@@ -579,10 +598,14 @@ class MCPGradioClientSession:
             traceback.print_exc()
             if assistant_buffer.strip():
                 assistant_buffer += f"\n\n{error_msg}"
-                self.session_manager.add_message("assistant", assistant_buffer)
-                yield assistant_buffer
+                assistant_reply = assistant_buffer
             else:
-                yield error_msg
+                assistant_reply = error_msg
+            if int(autonomy_level or 0) > 0:
+                self._persist_turn_to_session(
+                    session_id, original_user_message, assistant_reply
+                )
+            yield assistant_reply
         finally:
             if session_id:
                 self._active_response_sessions.discard(session_id)
