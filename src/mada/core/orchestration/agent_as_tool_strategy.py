@@ -392,6 +392,8 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         orchestrator: "MADAOrchestrator",
         message: str,
         isolated_session: bool = False,
+        record_to_db: bool = True,
+        background_poll_session_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message through the planning agent.
@@ -405,11 +407,14 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         response_started = False
 
         try:
+            # Internal/autonomy turns should not write raw prompt framing into the
+            # reusable provider session when the caller is suppressing DB writes.
+            effective_isolated_session = isolated_session or not record_to_db
             (
                 turn_id,
                 run_session,
                 history_lengths,
-            ) = await orchestrator._create_run_session(isolated_session)
+            ) = await orchestrator._create_run_session(effective_isolated_session)
 
             stream = orchestrator.planning_agent.run(
                 message, session=run_session, stream=True
@@ -427,9 +432,12 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
             if not response_started:
                 LOG.warning("No text chunks received from planning agent")
 
-            if isolated_session:
+            if effective_isolated_session:
                 orchestrator._persist_isolated_response(
-                    message, aggregated_assistant_reply
+                    message,
+                    aggregated_assistant_reply,
+                    record_to_db=record_to_db,
+                    background_poll_session_id=background_poll_session_id,
                 )
                 return
 
@@ -439,6 +447,8 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 aggregated_assistant_reply,
                 run_session,
                 history_lengths,
+                record_to_db=record_to_db,
+                background_poll_session_id=background_poll_session_id,
             )
         except Exception as e:
             yield orchestrator._process_message_error(e)

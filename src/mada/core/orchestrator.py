@@ -795,7 +795,11 @@ Guidelines:
         Process a user message using the configured strategy.
         """
         async for chunk in self.orchestration_strategy.process_message(
-            self, message, isolated_session=isolated_session
+            self,
+            message,
+            isolated_session=isolated_session,
+            record_to_db=record_to_db,
+            background_poll_session_id=background_poll_session_id,
         ):
             yield chunk
 

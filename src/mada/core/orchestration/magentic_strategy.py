@@ -458,6 +458,8 @@ Guidelines:
         orchestrator: "MADAOrchestrator",
         message: str,
         isolated_session: bool = False,
+        record_to_db: bool = True,
+        background_poll_session_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message through a fresh Magentic workflow.
@@ -484,6 +486,8 @@ Guidelines:
                 orchestrator._persist_isolated_response(
                     message,
                     aggregated_assistant_reply,
+                    record_to_db=record_to_db,
+                    background_poll_session_id=background_poll_session_id,
                 )
             else:
                 async with orchestrator._session_lock:
@@ -505,6 +509,8 @@ Guidelines:
                         {
                             "message": message,
                             "assistant_reply": aggregated_assistant_reply,
+                            "record_to_db": record_to_db,
+                            "background_poll_session_id": background_poll_session_id,
                         }
                     )
 
