@@ -36,15 +36,20 @@ class AppConfig:
     """
     Top-level configuration for the MADA multi-agent application.
 
-    This configuration aggregates model settings, interface layout
-    settings, and agent definitions. It can be loaded from a JSON file
-    using the `from_dict` method.
+    This configuration aggregates model settings, agent definitions, named MCP
+    server definitions, database settings, orchestration settings, and optional
+    interface layout settings. It can be loaded from a JSON file using the
+    `from_dict` method.
 
     Attributes:
         model (ModelConfig): Provider-specific configuration for the model backend.
-        agents (List[AgentConfig]): List of agent definitions including server paths and descriptions.
+        agents (List[AgentConfig]): List of specialist agent definitions,
+            including descriptions, optional named MCP server references, and
+            legacy `server_path` entries.
         database (DatabaseConfig): Configuration for the database connection.
+        mcp_servers (Dict[str, MCPServerConfig]): Named MCP server definitions.
         interface (InterfaceConfig): Configuration for the Gradio interface layout and options.
+        orchestration (OrchestrationConfig): Mode and participant selection.
     """
 
     model: ModelConfig

@@ -8,7 +8,7 @@ Agent-as-tool orchestration strategy implementation.
 import logging
 import sys
 import traceback
-from typing import TYPE_CHECKING, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Tuple
 
 from agent_framework import MCPStdioTool
 
@@ -81,6 +81,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 continue
 
             LOG.warning(f"Agent {config.agent_name} has no MCP servers configured")
+            failed_agents.append(config.agent_name)
 
         return all_tools, failed_servers, failed_agents
 
@@ -228,6 +229,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
             participant_configs=active_participant_configs,
         )
         orchestrator.session = orchestrator.planning_agent.create_session()
+        orchestrator.manager_agent = None
 
     def _build_status(
         self,
@@ -263,6 +265,66 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
 
         return "\n".join(status_parts)
 
+    @staticmethod
+    def _tool_call_notices_from_chunk(chunk: Any, tool_calls: List[Any]) -> List[str]:
+        """
+        Return tool-call notices for first appearances of tool calls in a chunk.
+        """
+        if not hasattr(chunk, "contents") or not chunk.contents:
+            return []
+
+        notices = []
+        for content in chunk.contents:
+            if not hasattr(content, "to_dict"):
+                continue
+
+            item = content.to_dict()
+            if item.get("type") not in ("function_call", "tool_call"):
+                continue
+
+            name = item.get("name")
+            if not name:
+                continue
+
+            call_id = item.get("call_id")
+            call_key = call_id or name
+            if call_key in tool_calls:
+                continue
+
+            tool_calls.append(call_key)
+            notices.append(f"\n[Calling: {name}]\n")
+
+        return notices
+
+    async def _stream_response(
+        self,
+        orchestrator: "MADAOrchestrator",
+        prompt: str,
+        *,
+        session,
+        include_tool_notices: bool,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream output from the reusable planning-agent runtime.
+        """
+        response_started = False
+        tool_calls = []
+        stream = orchestrator.planning_agent.run(prompt, session=session, stream=True)
+        async for chunk in stream:
+            if chunk.text:
+                response_started = True
+                yield chunk.text
+                continue
+
+            if not include_tool_notices:
+                continue
+
+            for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
+                yield notice
+
+        if not response_started:
+            LOG.warning("No text chunks received from planning agent")
+
     async def initialize(
         self,
         orchestrator: "MADAOrchestrator",
@@ -278,6 +340,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         """
         orchestrator.specialist_agents = []
         orchestrator._mcp_tool_count = 0
+        orchestrator._agent_descriptions = {}
         participant_configs = orchestrator.resolve_participant_configs(agent_configs)
         orchestrator.mcp_servers = mcp_servers or {}
         all_tools, failed_servers, failed_agents = await self._initialize_participants(
@@ -293,3 +356,89 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         LOG.info(status)
 
         return status, all_tools
+
+    async def process_openai_messages(
+        self,
+        orchestrator: "MADAOrchestrator",
+        messages: List[Dict[str, Any]],
+    ) -> AsyncGenerator[str, None]:
+        """
+        Process OpenAI-style chat messages without shared session reuse.
+        """
+        if not orchestrator.planning_agent:
+            yield "Error: Orchestrator not initialized."
+            return
+
+        transcript_messages = orchestrator._normalize_transcript_messages(messages)
+        prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
+        request_session = orchestrator.planning_agent.create_session()
+
+        try:
+            async for chunk in self._stream_response(
+                orchestrator,
+                prompt,
+                session=request_session,
+                include_tool_notices=True,
+            ):
+                yield chunk
+        except Exception as e:
+            error_msg = f"Error processing message: {e}"
+            LOG.error(error_msg)
+            traceback.print_exc()
+            yield error_msg
+
+    async def process_message(
+        self,
+        orchestrator: "MADAOrchestrator",
+        message: str,
+        isolated_session: bool = False,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Process a user message through the planning agent.
+        """
+        if not orchestrator.planning_agent:
+            yield "Error: Orchestrator not initialized. Call initialize_orchestrator() first."
+            return
+
+        aggregated_assistant_reply = ""
+        tool_calls = []
+        response_started = False
+
+        try:
+            (
+                turn_id,
+                run_session,
+                history_lengths,
+            ) = await orchestrator._create_run_session(isolated_session)
+
+            stream = orchestrator.planning_agent.run(
+                message, session=run_session, stream=True
+            )
+            async for chunk in stream:
+                if chunk.text:
+                    response_started = True
+                    aggregated_assistant_reply += chunk.text
+                    yield chunk.text
+                    continue
+
+                for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
+                    yield notice
+
+            if not response_started:
+                LOG.warning("No text chunks received from planning agent")
+
+            if isolated_session:
+                orchestrator._persist_isolated_response(
+                    message, aggregated_assistant_reply
+                )
+                return
+
+            await orchestrator._commit_completed_turn(
+                turn_id,
+                message,
+                aggregated_assistant_reply,
+                run_session,
+                history_lengths,
+            )
+        except Exception as e:
+            yield orchestrator._process_message_error(e)

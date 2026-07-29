@@ -47,3 +47,5 @@ In Open WebUI, add a new OpenAI connection with:
 - Model: the value from `--model-name`, such as `mada-team`
 
 Open WebUI sends the full chat history in each request. The MADA API mode rebuilds the conversation for each HTTP request so callers do not share state with the CLI or Gradio sessions.
+
+When `orchestration.mode` is `magentic`, MADA still keeps the same OpenAI-compatible request and response shapes. The server runs a fresh Magentic workflow for each request, rebuilds state from the supplied transcript, and returns only the final assistant text rather than internal planning or progress events.
