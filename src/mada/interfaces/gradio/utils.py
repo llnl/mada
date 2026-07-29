@@ -51,16 +51,18 @@ def create_agent_table(
         ]
         table_rows.append(row)
 
+    column_count = len(headers)
+
     return gr.Dataframe(
         headers=headers,
-        datatype=["str"] * len(headers),
+        datatype=["str"] * column_count,
         row_count=len(table_rows),
-        column_count=len(headers),
+        column_count=column_count,
         label="Agents",
         value=table_rows,
         interactive=False,
         elem_id="my_df",
-        column_widths=[f"{math.floor(100 / len(row))}%"] * len(row),
+        column_widths=[f"{math.floor(100 / column_count)}%"] * column_count,
     )
 
 

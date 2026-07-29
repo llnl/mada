@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "mada"
 description = "Multi-agent orchestration system for MADA workflows"
 version = "0.2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [
     # Can't use basic `agent-framework` install since hyperlight breaks install on HPCs
@@ -22,6 +22,7 @@ dependencies = [
     "fastapi",
     "gradio>=6.2.0",
     "openai",
+    "prompt_toolkit",
     "python-dotenv",
     "psycopg2",
     "tiktoken",

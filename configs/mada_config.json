@@ -38,6 +38,10 @@
       "description": "Professor surrogate modeling"
     }
   },
+  "orchestration": {
+    "mode": "agent-as-tool",
+    "participants": ["JobManagementAgent", "InverseDesignAgent"]
+  },
   "interface": {
     "title": "MADA Multi-Agent Orchestrator",
     "description": "Coordinate multiple agents for complex engineering workflows",

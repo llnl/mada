@@ -14,7 +14,7 @@ a JSON file.
 import json
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 from mada.core.config.agents import AgentConfig
@@ -22,6 +22,10 @@ from mada.core.config.database import DatabaseConfig, load_database_config
 from mada.core.config.interface import InterfaceConfig
 from mada.core.config.mcp_servers import MCPServerConfig
 from mada.core.config.models import ModelConfig, load_model_config
+from mada.core.config.orchestration import (
+    OrchestrationConfig,
+    load_orchestration_config,
+)
 
 
 LOG = logging.getLogger("mada-interface")
@@ -48,6 +52,7 @@ class AppConfig:
     database: DatabaseConfig
     mcp_servers: Dict[str, MCPServerConfig] = None  # MCP server configurations
     interface: InterfaceConfig = None  # Optional, used only by the Gradio app
+    orchestration: OrchestrationConfig = field(default_factory=OrchestrationConfig)
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "AppConfig":
@@ -89,6 +94,12 @@ class AppConfig:
         # Load database
         database_config = config_dict.get("database", {})
         app_conf["database"] = load_database_config(database_config)
+
+        orchestration_cfg = load_orchestration_config(config_dict.get("orchestration"))
+        orchestration_cfg.validate_participants(
+            [agent.agent_name for agent in agent_cfgs]
+        )
+        app_conf["orchestration"] = orchestration_cfg
 
         # Load MCP servers configuration (optional)
         python_exe = config_dict.get("python_executable", sys.executable)

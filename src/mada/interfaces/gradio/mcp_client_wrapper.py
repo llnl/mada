@@ -10,20 +10,20 @@ for the Gradio interface, adapted to work with MADA's architecture.
 
 import logging
 import traceback
-from typing import AsyncGenerator, Dict, List, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Tuple
 
 import gradio as gr
 
-from mada.core.config import AgentConfig, DatabaseConfig, MCPServerConfig, ModelConfig
+from mada.core.config import (
+    AgentConfig,
+    DatabaseConfig,
+    MCPServerConfig,
+    ModelConfig,
+    OrchestrationConfig,
+)
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
 from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
-
-try:
-    BaseExceptionGroup
-except NameError:
-    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
-
 
 LOG = logging.getLogger("mada-gradio")
 
@@ -42,6 +42,8 @@ class MCPGradioClientSession:
         agents: List[AgentConfig],
         database_config: DatabaseConfig,
         mcp_servers: MCPServerConfig = None,
+        orchestration_config: OrchestrationConfig = None,
+        blocking: bool = False,
     ):
         """
         Initialize the MCP client session.
@@ -49,13 +51,17 @@ class MCPGradioClientSession:
         Args:
             model_config: Model configuration for MADA
             agents: List of agent configurations
+            blocking: If True, wait for each response inline. If False,
+                submit queries in the background and return immediately.
         """
         self.model_config = model_config
         self.agents = agents
         self.database_config = database_config
+        self.blocking = blocking
         self.orchestrator = None
         self.initialized = False
         self.mcp_servers = mcp_servers or {}
+        self.orchestration_config = orchestration_config or OrchestrationConfig()
         self.session_manager = ChatSessionManager(database_config)
         self.session_bearer_token = None  # Store session bearer token
 
@@ -94,6 +100,7 @@ class MCPGradioClientSession:
                     self.model_config,
                     self.database_config,
                     session_manager=self.session_manager,
+                    orchestration_config=self.orchestration_config,
                     bearer_token=self.session_bearer_token,
                 )
                 # Enter the async context manager (required for proper setup)
@@ -110,11 +117,29 @@ class MCPGradioClientSession:
                 mcp_servers=self.mcp_servers,  # Placeholder for MCP server config, replace with real config when available
             )
             LOG.info("Orchestrator initialization complete!")
+            status_msg = (
+                f"Orchestration mode: {self.orchestration_config.mode} | {status_msg}"
+            )
 
             agent_dict = cycle_through_tools(self.orchestrator.specialist_agents)
+            configured_participants = self.orchestration_config.participants
+            if configured_participants is None:
+                active_agents = [
+                    agent for agent in self.agents if agent.agent_name in agent_dict
+                ]
+                table_agents = active_agents or self.agents
+                table_agent_dict = agent_dict if active_agents else None
+            else:
+                table_agents = [
+                    agent
+                    for agent in self.agents
+                    if agent.agent_name in configured_participants
+                    and agent.agent_name in agent_dict
+                ]
+                table_agent_dict = agent_dict
             self.initialized = True
             return gr.Button(status_msg, elem_id="green_btn"), create_agent_table(
-                self.agents, agent_dict
+                table_agents, table_agent_dict
             )
 
         except BaseExceptionGroup as eg:
@@ -264,15 +289,18 @@ class MCPGradioClientSession:
         agent_table: gr.Dataframe,
     ) -> AsyncGenerator[str, None]:
         """
-        Process a user message through the orchestrator.
+        Process a user message through the orchestrator's background task manager.
 
         Args:
             message: User input message
             history: Chat history (not used in current implementation)
             agent_table: Agent configuration table (not used in current implementation)
 
+        Returns:
+            Async generator that emits response strings for the Gradio chat UI.
+
         Yields:
-            Response chunks from the orchestrator
+            The assistant response, or a background-task start acknowledgement.
         """
         if not self.initialized:
             yield "Error: MCP servers not connected. Please connect first."
@@ -283,12 +311,13 @@ class MCPGradioClientSession:
             return
 
         try:
-            # Process message through orchestrator
-            full_response = ""
-            async for chunk in self.orchestrator.process_message(message):
-                full_response += chunk
-
-            yield full_response
+            response = await self.orchestrator.background_tasks.run_query(
+                message, blocking=self.blocking
+            )
+            if response.startswith("[task-") and "Started in background." in response:
+                self.session_manager.add_message("user", message)
+                self.session_manager.add_message("assistant", response)
+            yield response
 
         except Exception as e:
             error_msg = f"Error processing message: {e}"
@@ -296,8 +325,65 @@ class MCPGradioClientSession:
             traceback.print_exc()
             yield error_msg
 
-    async def cleanup(self):
-        """Clean up resources."""
+    async def get_task_status_markdown(self) -> str:
+        """
+        Render background task state for the Gradio task panel.
+
+        Returns:
+            Markdown text describing current background task status.
+        """
+        if not self.orchestrator:
+            return "### Task Status\nNo orchestrator connected."
+
+        task_snapshot = await self.orchestrator.background_tasks.get_task_snapshot()
+        if not task_snapshot:
+            return "### Task Status\nNo background tasks yet."
+
+        lines = ["### Task Status"]
+        for task_id, task_state in reversed(list(task_snapshot.items())):
+            status = task_state.get("status", "unknown")
+            tool_name = task_state.get("tool_name")
+            if tool_name:
+                lines.append(f"- `{task_id}` [{status}] {tool_name}")
+            else:
+                lines.append(f"- `{task_id}` [{status}]")
+
+        return "\n".join(lines)
+
+    async def refresh_chat_and_task_status(self, history: List[Any]) -> Tuple[Any, str]:
+        """
+        Refresh chat history and background task status for the Gradio UI.
+
+        Args:
+            history: Current Gradio chat history.
+
+        Returns:
+            Tuple containing the refreshed chat history or `gr.skip()`, and the
+            task status markdown.
+
+        Raises:
+            Exception: Propagates unexpected chat-history load failures.
+        """
+        task_status = await self.get_task_status_markdown()
+        if (
+            not self.orchestrator
+            or await self.orchestrator.background_tasks.count_pending_tasks() > 0
+        ):
+            return gr.skip(), task_status
+
+        persisted_history = self.session_manager.load_history()
+        if persisted_history == list(history):
+            return gr.skip(), task_status
+
+        return persisted_history, task_status
+
+    async def cleanup(self) -> None:
+        """
+        Clean up resources.
+
+        Returns:
+            None. Cleanup errors are logged and suppressed.
+        """
         if self.orchestrator:
             try:
                 await self.orchestrator.__aexit__(None, None, None)
