@@ -7,3 +7,5 @@ venv/
 .jeds/
 livai_models.py
 **/sandbox-config.yaml
+**/.claude
+**/.codex
