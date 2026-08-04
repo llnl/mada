@@ -17,7 +17,7 @@ import importlib.resources
 import click
 import gradio as gr
 
-from mada.core.config import AppConfig, load_config_from_json
+from mada.core.config import AppConfig, OrchestrationConfig, load_config_from_json
 from mada.interfaces.gradio.interface import MADAMultiAgentGradioInterface
 from mada.interfaces.gradio.mcp_client_wrapper import MCPGradioClientSession
 
@@ -33,6 +33,10 @@ def _load_asset_text(filename: str) -> str:
 
 _GRADIO_CSS = _load_asset_text("gradio.css")
 _GRADIO_JS = _load_asset_text("gradio.js")
+
+
+def _get_orchestration_config(config: AppConfig) -> OrchestrationConfig:
+    return getattr(config, "orchestration", None) or OrchestrationConfig()
 
 
 def setup_logging():
@@ -76,6 +80,7 @@ def run_gradio(config: AppConfig):
         agents=config.agents,
         database_config=config.database,
         mcp_servers=config.mcp_servers,
+        orchestration_config=_get_orchestration_config(config),
     )
     gradio_interface = MADAMultiAgentGradioInterface(
         config.interface, config.agents, client
@@ -117,6 +122,7 @@ def create_gradio_app(config_path: str) -> gr.Blocks:
         agents=config.agents,
         database_config=config.database,
         mcp_servers=config.mcp_servers,
+        orchestration_config=_get_orchestration_config(config),
     )
     gradio_interface = MADAMultiAgentGradioInterface(
         config.interface, config.agents, client

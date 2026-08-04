@@ -9,9 +9,9 @@ with MCP servers, adapted to work with MADA's configuration system.
 """
 
 import base64
+import json
 import logging
 from typing import Any, List
-import json
 
 import gradio as gr
 
@@ -57,6 +57,7 @@ class MADAMultiAgentGradioInterface:
         # In-situ Visualization
         self.in_situ_viz_config = getattr(self.interface_config, "in_situ_viz", None)
         self.in_situ_viz_tool = None
+        self.in_situ_viz_task_id = None
         self.in_situ_viz_in_progress = False
 
     def create_custom_components(self, demo: gr.Blocks) -> None:
@@ -94,15 +95,15 @@ class MADAMultiAgentGradioInterface:
         """
         return gr.Accordion("MCP Server Connection", open=True)
 
-    def create_chat_interface(self, agent_table: gr.Dataframe) -> gr.ChatInterface:
+    def create_chat_interface(self, agent_table: gr.Dataframe) -> gr.Chatbot:
         """
-        Create the chat interface component.
+        Create the chat message and input components.
 
         Args:
             agent_table: The agent configuration table to include as input
 
         Returns:
-            The configured Gradio chat interface component
+            The configured Gradio chatbot component
         """
         placeholder = "Describe your workflow or ask for help..."
         if self.interface_config and hasattr(self.interface_config, "chat_placeholder"):
@@ -114,13 +115,50 @@ class MADAMultiAgentGradioInterface:
             elem_id="mada-chatbot",
         )
 
-        return gr.ChatInterface(
-            fn=self.client.process_message,
-            chatbot=chatbot,
-            textbox=gr.Textbox(label="Your Message", placeholder=placeholder),
-            additional_inputs=self.get_additional_chat_inputs(agent_table),
-            fill_height=True,
+        message_box = gr.Textbox(
+            label="",
+            placeholder=placeholder,
+            elem_id="mada-message-box",
         )
+        message_box.submit(
+            fn=self._send_message,
+            inputs=[
+                message_box,
+                chatbot,
+                *self.get_additional_chat_inputs(agent_table),
+            ],
+            outputs=[message_box, chatbot],
+            show_progress="hidden",
+        )
+
+        return chatbot
+
+    async def _send_message(
+        self,
+        message: str,
+        history: List[Any],
+        *additional_inputs: Any,
+    ):
+        """
+        Add the user message and stream the assistant response.
+        """
+        if not message or not message.strip():
+            yield gr.skip(), history
+            return
+
+        updated_history = list(history or [])
+        updated_history.append({"role": "user", "content": message})
+        yield "", updated_history
+
+        updated_history.append({"role": "assistant", "content": ""})
+        async for response in self.client.process_message(
+            message, updated_history, *additional_inputs
+        ):
+            updated_history[-1] = {
+                "role": "assistant",
+                "content": response,
+            }
+            yield gr.skip(), updated_history
 
     def create_interface(self) -> gr.Blocks:
         """
@@ -217,10 +255,21 @@ class MADAMultiAgentGradioInterface:
                     # Custom components (subclasses can add their own)
                     self.create_custom_components(demo)
 
-                    # Chat interface
-                    chat_interface = self.create_chat_interface(agent_table)
+                    task_status = gr.Markdown(
+                        "### Task Status\nNo background tasks yet."
+                    )
+                    task_refresh = gr.Timer(value=0.5)
 
-            chatbot = chat_interface.chatbot
+                    # Chat interface
+                    chatbot = self.create_chat_interface(agent_table)
+
+            task_refresh.tick(
+                fn=self.client.refresh_chat_and_task_status,
+                inputs=[chatbot],
+                outputs=[chatbot, task_status],
+                show_progress="hidden",
+                concurrency_limit=1,
+            )
 
             # Update session list after connect, to be sure DB exists
             connect_button.click(
@@ -329,9 +378,67 @@ class MADAMultiAgentGradioInterface:
                         f"Could not find tool 'in_situ_viz' for server '{sim_server}'.",
                     )
 
-            # Call the in_situ_viz tool from the mcp server
-            result = await self.in_situ_viz_tool.invoke()
-            result = json.loads(result[0].text)
+            # If the last render started a background task, poll that task.
+            if self.in_situ_viz_task_id:
+                result_tool = None
+                for agent in self.client.orchestrator.specialist_agents:
+                    for mcp_tool in getattr(agent, "mcp_tools", []):
+                        if getattr(mcp_tool, "name", None) != sim_server:
+                            continue
+                        for fn in getattr(mcp_tool, "_functions", []):
+                            if (
+                                getattr(fn, "name", None)
+                                == "get_background_task_result"
+                            ):
+                                result_tool = fn
+                                break
+                        if result_tool is not None:
+                            break
+                    if result_tool is not None:
+                        break
+
+                if result_tool is None:
+                    return (
+                        gr.skip(),
+                        f"{self.in_situ_viz_task_id}: Waiting for render result.",
+                    )
+
+                try:
+                    payload = await result_tool.invoke(task_id=self.in_situ_viz_task_id)
+                except TypeError:
+                    payload = await result_tool.invoke(
+                        {"task_id": self.in_situ_viz_task_id}
+                    )
+
+                result = self._tool_payload_to_dict(payload)
+
+                if result.get("status") == "completed" and "result" in result:
+                    result = result["result"]
+                    if isinstance(result, str):
+                        result = json.loads(result)
+
+            # Otherwise, start a new render.
+            else:
+                try:
+                    payload = await self.in_situ_viz_tool.invoke()
+                    result = self._tool_payload_to_dict(payload)
+                except Exception as exc:
+                    task_id = None
+                    message = str(exc)
+                    marker = '"task_id": "'
+                    if marker in message:
+                        task_id = message.split(marker, 1)[1].split('"', 1)[0]
+                    if task_id:
+                        self.in_situ_viz_task_id = task_id
+                        return gr.skip(), f"{task_id}: Visualization render is running."
+                    raise
+
+            if result.get("status") == "running" and result.get("task_id"):
+                self.in_situ_viz_task_id = result["task_id"]
+                message = result.get("message", "Visualization render is running.")
+                return gr.skip(), f"{self.in_situ_viz_task_id}: {message}"
+
+            self.in_situ_viz_task_id = None
 
             gif_path = result.get("gif_path")
             status = result.get("status", "unknown")
@@ -361,3 +468,34 @@ class MADAMultiAgentGradioInterface:
             return gr.skip(), f"Error fetching frame: {exc}"
         finally:
             self.in_situ_viz_in_progress = False
+
+    @staticmethod
+    def _tool_payload_to_dict(payload: Any) -> dict:
+        """
+        Normalize an MCP tool payload into a dictionary.
+
+        Args:
+            payload: Tool response payload. This may be a list containing one
+                payload item, an object with `structured_content`, an object with
+                `text`, bytes, a JSON string, or a dictionary.
+
+        Returns:
+            Parsed payload dictionary.
+
+        Raises:
+            json.JSONDecodeError: If a string payload is not valid JSON.
+            TypeError: If the normalized payload is not a dictionary.
+        """
+        if isinstance(payload, list) and payload:
+            payload = payload[0]
+        if getattr(payload, "structured_content", None) is not None:
+            payload = payload.structured_content
+        elif hasattr(payload, "text"):
+            payload = payload.text
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8", errors="replace")
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict):
+            raise TypeError(f"Expected tool payload to be a dict, got {type(payload)}")
+        return payload

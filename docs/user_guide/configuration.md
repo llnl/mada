@@ -10,6 +10,7 @@ Additionally, there are optional configuration options:
 
 - [Database Configuration](#optional-database-configuration)
 - [Gradio Interface Configuration](#optional-gradio-interface-configuration)
+- [Orchestration Configuration](#optional-orchestration-configuration)
 
 ## Agent Configuration
 
@@ -202,6 +203,31 @@ When you start MADA, it reads your model configuration to connect to the right l
 
 - Fill out the model configuration section with your preferred model and settings.
 - Make sure your API key and endpoint are correct.
+
+## (Optional) Orchestration Configuration
+
+MADA now exposes the orchestration pattern as an explicit top-level config block. In
+this release, the current planner-plus-specialist flow is named `agent-as-tool` and
+it is the only supported mode.
+
+### Fields
+
+| Field Name     | Description                                                                 | Required? | Default           |
+| -------------- | --------------------------------------------------------------------------- | --------- | ----------------- |
+| `mode`         | Internal orchestration mode. Only `agent-as-tool` is supported right now.   | No        | `agent-as-tool`   |
+| `participants` | Optional list of specialist agent names to include. `PlanningAgent` is excluded. | No        | All non-`PlanningAgent` agents |
+
+### Example
+
+```json
+"orchestration": {
+    "mode": "agent-as-tool",
+    "participants": ["JobManagementAgent", "InverseDesignAgent", "GeometryAgent"]
+}
+```
+
+If `participants` is omitted, MADA includes every configured agent except
+`PlanningAgent`.
 
 ## (Optional) Database Configuration
 
