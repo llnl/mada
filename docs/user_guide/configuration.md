@@ -119,6 +119,7 @@ A typical agent configuration might include multiple MCP servers, each with diff
 | `url`         | URL for when `transport` is set to 'streamable-http'.         | No        | None      |
 | `command`     | Command to launch server when `transport` is set to `stdio`.  | No        | None      |
 | `description` | Human-readable description of the server.                     | No        | None      |
+| `verify`      | TLS verification for `streamable-http`. Use `true` for env/system trust, `false` to disable verification, or a CA bundle path. | No | `true` |
 
 ### Example
 
@@ -127,7 +128,8 @@ A typical agent configuration might include multiple MCP servers, each with diff
     "flux": {
         "transport": "streamable-http",
         "url": "http://localhost:8001/mcp",
-        "description": "Flux workload manager for job execution"
+        "description": "Flux workload manager for job execution",
+        "verify": true
     },
     "merlin": {
         "transport": "streamable-http",
@@ -145,6 +147,10 @@ A typical agent configuration might include multiple MCP servers, each with diff
 ## Model Configuration
 
 Model configuration tells MADA which language model to use for agent conversations, and how to connect to the selected provider. Depending on the provider, this may include values such as the model name, API key, base URL, region, or other authentication settings.
+
+For OpenAI-compatible providers, `verify` controls TLS verification. Use
+`true` to keep MADA's default env/system trust resolution, `false` to disable
+verification, or a CA bundle path string.
 
 MADA supports multiple providers for model configuration. Each provider has its own required and optional fields. Refer to the following documentation for provider-specific details:
 
@@ -175,6 +181,7 @@ export API_BASE_URL="https://api.openai.com/v1/responses"
     "model": "o3",
     "api_key": "${API_KEY}",
     "base_url": "${API_BASE_URL:-https://api.openai.com/v1/responses}",
+    "verify": true,
     "extra": {
         "temperature": 0.7,
         "max_tokens": 2048

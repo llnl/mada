@@ -46,6 +46,7 @@ from mada.core.orchestration import (
     AgentAsToolOrchestrationStrategy,
     BaseOrchestrationStrategy,
 )
+from mada.core.tls import resolve_httpx_verify_value
 
 
 LOG = logging.getLogger(__name__)
@@ -377,7 +378,11 @@ class MADAOrchestrator(MCPAgentManager):
                     headers["X-Token"] = self.bearer_token
 
                 # MCPStreamableHTTPTool requires an http_client with custom headers, not a headers parameter
-                http_client = httpx.AsyncClient(headers=headers, timeout=180.0)
+                http_client = httpx.AsyncClient(
+                    headers=headers,
+                    timeout=180.0,
+                    verify=resolve_httpx_verify_value(verify=server_config.verify),
+                )
                 http_client_to_cleanup = (
                     http_client  # Store for cleanup if connection fails
                 )
