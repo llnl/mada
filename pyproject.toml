@@ -25,6 +25,8 @@ dependencies = [
     "gradio>=6.2.0",
     "httpx",
     "openai",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp",
     "prompt_toolkit",
     "python-dotenv",
     "psycopg2",

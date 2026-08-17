@@ -49,6 +49,7 @@ else:
 
 from mada.core.config import AppConfig, OrchestrationConfig
 from mada.core import load_config_from_json
+from mada.core.telemetry import setup_telemetry
 
 if TYPE_CHECKING:
     from mada.core.orchestrator import MADAOrchestrator
@@ -525,6 +526,7 @@ def openai_api_entrypoint(
         `None`.
     """
     try:
+        setup_telemetry()
         print(f"Loading configuration from {config_file}")
         config = load_config_from_json(config_file)
         print(f"Serving OpenAI-compatible API on http://{host}:{port}/v1")

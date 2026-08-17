@@ -17,6 +17,7 @@ from typing import Dict, List
 from mada.core.config import AppConfig, OrchestrationConfig, load_config_from_json
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
+from mada.core.telemetry import setup_telemetry
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -391,6 +392,8 @@ async def async_main(config_file: str, blocking: bool = False):
         blocking: If True, process one query at a time.
     """
     try:
+        setup_telemetry()
+
         # Load configuration
         config = load_config_from_json(config_file)
 

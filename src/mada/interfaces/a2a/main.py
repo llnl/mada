@@ -46,6 +46,7 @@ from starlette.routing import Route
 
 from mada.core import load_config_from_json
 from mada.core.config import A2AConfig, AppConfig, OrchestrationConfig
+from mada.core.telemetry import setup_telemetry
 
 if TYPE_CHECKING:
     from mada.core.orchestrator import MADAOrchestrator
@@ -506,6 +507,7 @@ def a2a_entrypoint(
     Load config and start the A2A API server.
     """
     try:
+        setup_telemetry()
         print(f"Loading configuration from {config_file}")
         config = load_config_from_json(config_file)
         card_url = public_url or f"http://{host}:{port}"

@@ -18,6 +18,7 @@ import click
 import gradio as gr
 
 from mada.core.config import AppConfig, OrchestrationConfig, load_config_from_json
+from mada.core.telemetry import setup_telemetry
 from mada.interfaces.gradio.interface import MADAMultiAgentGradioInterface
 from mada.interfaces.gradio.mcp_client_wrapper import MCPGradioClientSession
 
@@ -148,6 +149,7 @@ def gradio_entrypoint(port: int | None, share: bool, config_file: str):
     """
     # Set up logging first
     setup_logging()
+    setup_telemetry()
 
     try:
         print(f"Loading configuration from {config_file}")
