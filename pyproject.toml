@@ -10,6 +10,8 @@ requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [
     # Can't use basic `agent-framework` install since hyperlight breaks install on HPCs
+    "a2a-sdk>=1.1.0",
+    "grpcio",
     "agent-framework-core>=1.0.1",
     "agent-framework-a2a",
     "agent-framework-ag-ui",
@@ -21,11 +23,13 @@ dependencies = [
     "agent-framework-orchestrations",
     "fastapi",
     "gradio>=6.2.0",
+    "httpx",
     "openai",
     "prompt_toolkit",
     "python-dotenv",
     "psycopg2",
     "tiktoken",
+    "truststore",
     "uvicorn",
     "click"
 ]
@@ -70,14 +74,25 @@ docs = [
     "mike",
 ]
 
+# Example A2A agent requirements
+a2a-examples = [
+    "fastmcp",
+    "google-adk",
+    "langchain-core",
+    "langchain-mcp-adapters",
+    "langchain-openai",
+    "litellm",
+]
+
 # All requirements
-all = ["mada[tests, docs]"]
+all = ["mada[tests, docs, a2a-examples]"]
 
 [project.scripts]
 mada = "mada.main:main"
 mada-gradio = "mada.interfaces.gradio.main:main"
 mada-cli = "mada.interfaces.cli.main:main"
 mada-openai-api = "mada.interfaces.openai_api.main:main"
+mada-a2a = "mada.interfaces.a2a.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

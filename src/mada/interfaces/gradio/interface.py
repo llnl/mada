@@ -222,7 +222,10 @@ class MADAMultiAgentGradioInterface:
                 with gr.Column(scale=4):
                     # MCP Server connection section
                     with self.create_accordion():
-                        agent_table = create_agent_table(self.agents)
+                        agent_table = create_agent_table(
+                            self.agents,
+                            a2a_agents=getattr(self.client, "a2a_agents", {}),
+                        )
 
                         connect_button = gr.Button(
                             "Connect to MCP Servers", variant="primary"

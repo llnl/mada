@@ -1,0 +1,37 @@
+{
+  "name": "MADAOrchestrator",
+  "description": "MADA multi-agent orchestrator that coordinates local reasoning agents and delegates to remote A2A agents when their capabilities match the task.",
+  "version": "0.2.0",
+  "supportedInterfaces": [
+    {
+      "url": "http://localhost:9120",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "capabilities": {
+    "streaming": true
+  },
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": [
+    {
+      "id": "mada-orchestration",
+      "name": "MADA orchestration",
+      "description": "Coordinate configured local MADA agents and remote A2A agents to answer delegated tasks.",
+      "tags": ["mada", "orchestration", "multi-agent", "a2a"]
+    },
+    {
+      "id": "csv-table-routing",
+      "name": "CSV table routing",
+      "description": "Route CSV table-reading and column-average requests to the appropriate remote A2A specialist.",
+      "tags": ["csv", "table", "average", "routing"]
+    },
+    {
+      "id": "answer-review",
+      "name": "Answer review",
+      "description": "Use local critique behavior to identify gaps, risky assumptions, and concrete improvements.",
+      "tags": ["review", "critique", "reasoning"]
+    }
+  ]
+}

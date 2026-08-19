@@ -39,7 +39,7 @@
     }
   },
   "orchestration": {
-    "mode": "magentic",
+    "mode": "agent-as-tool",
     "participants": ["JobManagementAgent", "InverseDesignAgent"]
   },
   "interface": {

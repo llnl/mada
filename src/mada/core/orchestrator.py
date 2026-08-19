@@ -13,6 +13,7 @@ persistence, and strategy selection. Mode-specific request handling lives in
 import asyncio
 import copy
 import logging
+import re
 import traceback
 from types import TracebackType
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Type
@@ -23,18 +24,22 @@ import httpcore
 from agent_framework import (
     Agent,
     AgentSession,
+    FunctionInvocationContext,
+    FunctionTool,
     MCPStdioTool,
     MCPStreamableHTTPTool,
 )
 from agent_framework.exceptions import ToolException
 
 from mada.core.background_tasks import BackgroundTaskManager
+from mada.core.a2a_client import RemoteA2AClient
 from mada.core.config import (
     AgentConfig,
     DatabaseConfig,
     ModelConfig,
     MCPServerConfig,
     OrchestrationConfig,
+    RemoteA2AAgentConfig,
 )
 from mada.core.coordinator import MCPAgentManager
 from mada.core.database import ChatSessionManager
@@ -43,6 +48,11 @@ from mada.core.orchestration import (
     BaseOrchestrationStrategy,
     MagenticOrchestrationStrategy,
 )
+from mada.core.orchestration.stream_events import (
+    apply_text_control,
+    tool_call_name,
+)
+from mada.core.tls import resolve_httpx_verify_value
 
 
 LOG = logging.getLogger(__name__)
@@ -99,15 +109,17 @@ class MADAOrchestrator(MCPAgentManager):
         self.planning_agent = None
         self.manager_agent = None
         self.mcp_servers = {}
+        self.a2a_agents = {}
+        self._a2a_agent_cards: Dict[str, Dict[str, Any]] = {}
         self.session = None
         self._session_lock = asyncio.Lock()
         self._next_turn_id = 1
         self._next_turn_commit_id = 1
         self._completed_turns: Dict[int, Dict[str, Any]] = {}
         self._mcp_tools_by_server: Dict[str, Any] = {}
+        self._a2a_clients_by_agent: Dict[str, RemoteA2AClient] = {}
         self._agent_descriptions = {}
         self._mcp_tool_count = 0
-        self._control_agent: Optional[Agent] = None
         self.orchestration = orchestration_config or OrchestrationConfig()
         self.orchestration_strategy = self._build_orchestration_strategy(
             self.orchestration.mode
@@ -121,6 +133,18 @@ class MADAOrchestrator(MCPAgentManager):
         )
         # Authentication bearer token
         self.bearer_token = bearer_token
+
+    @staticmethod
+    def _tool_name(value: str) -> str:
+        """
+        Convert a configured remote agent name into a Python tool function name.
+        """
+        normalized = re.sub(r"[^0-9a-zA-Z_]+", "_", value.strip()).strip("_").lower()
+        if not normalized:
+            normalized = "remote_a2a_agent"
+        if normalized[0].isdigit():
+            normalized = f"agent_{normalized}"
+        return normalized
 
     def _build_orchestration_strategy(self, mode: str) -> BaseOrchestrationStrategy:
         """
@@ -205,46 +229,6 @@ class MADAOrchestrator(MCPAgentManager):
                 return cfg
         return None
 
-    def _get_control_agent(self) -> Agent:
-        """
-        Return a tool-free agent for internal control turns.
-
-        Autonomy control prompts must never trigger tool calls, so they run
-        through a dedicated agent with no tools and no shared chat session.
-        """
-        if self._control_agent is not None:
-            return self._control_agent
-
-        instructions = (
-            "You are an internal control agent for the MADA orchestrator.\n"
-            "You MUST NOT call any tools. You will be given a control prompt "
-            "that requires outputting a strict key=value format. Follow it "
-            "exactly.\n"
-            "Do not include explanations or extra text."
-        )
-        self._control_agent = self.model_client.as_agent(
-            name="AutonomyControl",
-            instructions=instructions,
-            tools=[],
-        )
-        return self._control_agent
-
-    async def run_control_prompt(self, prompt: str) -> str:
-        """
-        Run a tool-free control prompt and return the aggregated text.
-
-        This is used for autonomy gating decisions and must not alter the
-        shared interactive planning session or the chat database.
-        """
-        agent = self._get_control_agent()
-        session = agent.create_session()
-        aggregated = ""
-        stream = agent.run(prompt, session=session, stream=True)
-        async for chunk in stream:
-            if getattr(chunk, "text", None):
-                aggregated += chunk.text
-        return aggregated
-
     async def _cleanup_http_client(self, http_client, context: str = ""):
         """
         Safely close an HTTP client, suppressing any errors.
@@ -284,10 +268,7 @@ class MADAOrchestrator(MCPAgentManager):
                     # For MCPStreamableHTTPTool and MCPStdioTool, call __aexit__ to properly
                     # clean up async generators even though __aenter__ failed
                     if hasattr(mcp_tool, "__aexit__"):
-                        await asyncio.wait_for(
-                            mcp_tool.__aexit__(None, None, None),
-                            timeout=max(float(self.timeout), 0.1),
-                        )
+                        await mcp_tool.__aexit__(None, None, None)
                 finally:
                     # Restore original logging level
                     af_logger.setLevel(original_level)
@@ -408,10 +389,11 @@ class MADAOrchestrator(MCPAgentManager):
                 if self.bearer_token:
                     headers["X-Token"] = self.bearer_token
 
-                connection_timeout = max(float(self.timeout), 0.1)
                 # MCPStreamableHTTPTool requires an http_client with custom headers, not a headers parameter
                 http_client = httpx.AsyncClient(
-                    headers=headers, timeout=connection_timeout
+                    headers=headers,
+                    timeout=180.0,
+                    verify=resolve_httpx_verify_value(verify=server_config.verify),
                 )
                 http_client_to_cleanup = (
                     http_client  # Store for cleanup if connection fails
@@ -432,10 +414,7 @@ class MADAOrchestrator(MCPAgentManager):
             )
 
             try:
-                mcp_tool = await asyncio.wait_for(
-                    self.exit_stack.enter_async_context(mcp_tool),
-                    timeout=max(float(self.timeout), 0.1),
-                )
+                mcp_tool = await self.exit_stack.enter_async_context(mcp_tool)
                 all_tools.append(mcp_tool)
                 all_tool_names.append(server_name)
                 self._mcp_tools_by_server[server_name] = mcp_tool
@@ -468,7 +447,6 @@ class MADAOrchestrator(MCPAgentManager):
                 continue
             except (
                 httpx.TimeoutException,
-                asyncio.TimeoutError,
                 httpcore.ReadTimeout,
                 httpcore.WriteTimeout,
                 httpcore.PoolTimeout,
@@ -567,6 +545,7 @@ class MADAOrchestrator(MCPAgentManager):
             Planning agent instance with specialist agents exposed as tools.
         """
         team_description = self._generate_team_description(participant_configs)
+        remote_a2a_description = self._generate_remote_a2a_description()
 
         # Convert each specialist agent to a tool using as_tool()
         agent_tools = []
@@ -581,6 +560,8 @@ class MADAOrchestrator(MCPAgentManager):
                 arg_description="The task to delegate to this agent",
             )
             agent_tools.append(agent_tool)
+
+        agent_tools.extend(self._create_remote_a2a_agent_tools())
 
         # Try to get a user defined planning agent config
         planning_cfg = self._get_planning_agent_config(agent_configs)
@@ -609,8 +590,12 @@ Your specialist agents (available as tools) can be delegated tasks.
 Your specialist agents (available as tools):
 {team_description}
 
+Remote A2A agents (available as tools):
+{remote_a2a_description}
+
 Guidelines:
 - Delegate to specialist agents when the request matches their expertise
+- Delegate to remote A2A agents when their descriptions match the request
 - Answer directly only for questions about the system itself
 - Avoid infinite loops between agents
 - After receiving results, synthesize and respond to the user
@@ -633,6 +618,74 @@ Guidelines:
 
         return planning_agent
 
+    def _create_remote_a2a_agent_tools(self) -> List[Any]:
+        """
+        Create planner tools that delegate tasks to configured remote A2A agents.
+        """
+        tools = []
+        for agent_name, agent_config in self.a2a_agents.items():
+            client = self._a2a_clients_by_agent.get(agent_name)
+            if client is None:
+                client = RemoteA2AClient(agent_name, agent_config)
+                self._a2a_clients_by_agent[agent_name] = client
+
+            card = self._a2a_agent_cards.get(agent_name, {})
+            description = self._remote_a2a_description(
+                card["description"],
+                card,
+            )
+            tool_name = f"call_{self._tool_name(agent_name)}"
+            tools.append(
+                self._build_remote_a2a_agent_tool(
+                    tool_name,
+                    agent_name,
+                    description,
+                    client,
+                )
+            )
+
+        return tools
+
+    def _build_remote_a2a_agent_tool(
+        self,
+        tool_name: str,
+        agent_name: str,
+        description: str,
+        client: RemoteA2AClient,
+    ) -> FunctionTool:
+        """
+        Build one remote A2A planner tool with a clean public signature.
+        """
+        input_schema = {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "The task to delegate to this remote A2A agent",
+                }
+            },
+            "required": ["task"],
+            "additionalProperties": False,
+        }
+
+        async def call_remote_a2a_agent(
+            ctx: FunctionInvocationContext, **kwargs: Any
+        ) -> str:
+            task = str(kwargs.get("task", "")).strip()
+            if not task:
+                raise ValueError("Missing task for remote A2A agent")
+            return await client.send_message(task)
+
+        return FunctionTool(
+            name=tool_name,
+            description=(
+                f"Delegate a task to remote A2A agent {agent_name}. {description}"
+            ),
+            func=call_remote_a2a_agent,
+            input_model=input_schema,
+            approval_mode="never_require",
+        )
+
     def _generate_team_description(self, agent_configs: List[AgentConfig]) -> str:
         """
         Generate formatted team member descriptions.
@@ -652,10 +705,88 @@ Guidelines:
             return "    (no specialist agents configured)"
         return "\n".join(lines)
 
+    def _generate_remote_a2a_description(self) -> str:
+        """
+        Generate formatted remote A2A agent descriptions.
+        """
+        lines = []
+        for agent_name, agent_config in self.a2a_agents.items():
+            card = self._a2a_agent_cards.get(agent_name, {})
+            description = self._remote_a2a_description(
+                card["description"],
+                card,
+            )
+            lines.append(f"    {agent_name}: {description}")
+        if not lines:
+            return "    (no remote A2A agents configured)"
+        return "\n".join(lines)
+
+    def _remote_a2a_description(self, description: str, card: dict[str, Any]) -> str:
+        """
+        Add agent-card skill summaries to a remote A2A description.
+        """
+        skills = card.get("skills")
+        if not isinstance(skills, list) or not skills:
+            return description
+
+        skill_lines = []
+        for skill in skills:
+            if not isinstance(skill, dict):
+                continue
+            skill_name = skill.get("name") or skill.get("id") or "skill"
+            skill_description = skill.get("description") or ""
+            skill_lines.append(f"{skill_name}: {skill_description}".strip())
+        if not skill_lines:
+            return description
+        return f"{description} Skills: {'; '.join(skill_lines)}"
+
+    async def _load_remote_a2a_agent_cards(self) -> List[Dict[str, str]]:
+        """
+        Fetch remote A2A agent cards for planner routing context.
+        """
+        self._a2a_agent_cards.clear()
+        active_agents = {}
+        failed_agents = []
+        for agent_name, agent_config in self.a2a_agents.items():
+            client = self._a2a_clients_by_agent.get(agent_name)
+            if client is None:
+                client = RemoteA2AClient(agent_name, agent_config)
+                self._a2a_clients_by_agent[agent_name] = client
+            try:
+                card = await client.get_agent_card()
+                if not card:
+                    raise RuntimeError(agent_config.card_url or agent_config.url)
+            except Exception as exc:
+                LOG.warning(
+                    "Could not fetch A2A agent card for %s: %s",
+                    agent_name,
+                    exc,
+                )
+                failed_agents.append(
+                    {
+                        "agent": agent_name,
+                        "url": agent_config.card_url or agent_config.url,
+                        "error": str(exc),
+                    }
+                )
+                try:
+                    await client.aclose()
+                except Exception:
+                    LOG.debug("Error closing failed A2A client", exc_info=True)
+                self._a2a_clients_by_agent.pop(agent_name, None)
+                continue
+
+            self._a2a_agent_cards[agent_name] = card
+            active_agents[agent_name] = agent_config
+
+        self.a2a_agents = active_agents
+        return failed_agents
+
     async def initialize_orchestrator(
         self,
         agent_configs: List[AgentConfig],
         mcp_servers: Dict[str, MCPServerConfig] = None,
+        a2a_agents: Dict[str, RemoteA2AAgentConfig] = None,
     ) -> Tuple[str, List[str]]:
         """
         Initialize the orchestrator with the given agent configurations.
@@ -663,6 +794,7 @@ Guidelines:
         Args:
             agent_configs: List of agent configurations to set up.
             mcp_servers: Dictionary of MCP server configurations.
+            a2a_agents: Dictionary of remote A2A agent configurations.
 
         Returns:
             Tuple containing:
@@ -673,6 +805,7 @@ Guidelines:
             orchestrator=self,
             agent_configs=agent_configs,
             mcp_servers=mcp_servers,
+            a2a_agents=a2a_agents,
         )
 
     def _stringify_openai_content(self, content: Any) -> str:
@@ -766,12 +899,6 @@ Guidelines:
             f"{conversation}"
         )
 
-    def build_prompt_from_openai_messages(self, messages: List[Dict[str, Any]]) -> str:
-        """
-        Flatten OpenAI-style chat messages into a single prompt.
-        """
-        return self.build_prompt_from_transcript(messages)
-
     async def process_openai_messages(
         self,
         messages: List[Dict[str, Any]],
@@ -788,6 +915,8 @@ Guidelines:
         self,
         message: str,
         isolated_session: bool = False,
+        persistence_session_id: Optional[str] = None,
+        stateless_session: bool = False,
         record_to_db: bool = True,
         background_poll_session_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
@@ -798,6 +927,8 @@ Guidelines:
             self,
             message,
             isolated_session=isolated_session,
+            persistence_session_id=persistence_session_id,
+            stateless_session=stateless_session,
             record_to_db=record_to_db,
             background_poll_session_id=background_poll_session_id,
         ):
@@ -887,6 +1018,24 @@ Guidelines:
 
         return turn_id, run_session, history_lengths
 
+    async def _load_history_for_session(self, session_id: str) -> List[Dict]:
+        """
+        Load chat history for a specific persisted session.
+
+        Args:
+            session_id: Chat session ID to read.
+
+        Returns:
+            Stored chat history for the session.
+        """
+        async with self._session_lock:
+            previous_session_id = self.session_manager.current_session_id
+            self.session_manager.current_session_id = session_id
+            try:
+                return self.session_manager.load_history()
+            finally:
+                self.session_manager.current_session_id = previous_session_id
+
     @staticmethod
     def _provider_message_lengths(session: AgentSession) -> Dict[str, int]:
         """
@@ -906,10 +1055,12 @@ Guidelines:
                 history_lengths[provider_name] = len(provider_state["messages"])
         return history_lengths
 
-    def _persist_isolated_response(
+    async def _persist_isolated_response(
         self,
         message: str,
         assistant_reply: str,
+        background_task_descriptors: Optional[List[str]] = None,
+        session_id: Optional[str] = None,
         record_to_db: bool = True,
         background_poll_session_id: Optional[str] = None,
     ) -> None:
@@ -919,6 +1070,11 @@ Guidelines:
         Args:
             message: User message for the isolated turn.
             assistant_reply: Aggregated assistant response text.
+            background_task_descriptors: Optional hidden MCP background task
+                descriptors that should start polling but not be stored as
+                assistant-visible text.
+            session_id: Optional chat session that should receive the isolated
+                turn. When omitted, the current session is used.
 
         Returns:
             None.
@@ -926,28 +1082,64 @@ Guidelines:
         Raises:
             Exception: Propagates database persistence failures.
         """
-        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-            assistant_reply,
-            session_id=background_poll_session_id,
-        )
+        if session_id is not None:
+            async with self._session_lock:
+                previous_session_id = self.session_manager.current_session_id
+                self.session_manager.current_session_id = session_id
+                try:
+                    await self._persist_isolated_response(
+                        message,
+                        assistant_reply,
+                        background_task_descriptors=background_task_descriptors,
+                        record_to_db=record_to_db,
+                        background_poll_session_id=background_poll_session_id,
+                    )
+                finally:
+                    self.session_manager.current_session_id = previous_session_id
+            return
 
+        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+            assistant_reply, session_id=background_poll_session_id
+        )
+        for descriptor in background_task_descriptors or []:
+            self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                descriptor, session_id=background_poll_session_id
+            )
         if not record_to_db:
             return
 
-        if not self.background_tasks.user_message_already_started_background_task(
-            message
-        ):
+        # Check if interface layer already persisted a background-start ACK
+        already_started = (
+            self.background_tasks.user_message_already_started_background_task(message)
+        )
+
+        if not already_started:
             self.session_manager.add_message("user", message)
+
+        # Skip persisting duplicate background ACKs
         if assistant_reply.strip():
-            self.session_manager.add_message("assistant", assistant_reply)
+            from mada.core.background_tasks import is_background_task_start_ack
+
+            is_bg_ack = is_background_task_start_ack(assistant_reply)
+            if not (already_started and is_bg_ack):
+                self.session_manager.add_message("assistant", assistant_reply)
+
+        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+            assistant_reply
+        )
+        for descriptor in background_task_descriptors or []:
+            self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                descriptor
+            )
 
     async def _commit_completed_turn(
         self,
         turn_id: Optional[int],
         message: str,
         assistant_reply: str,
-        run_session: AgentSession,
+        run_session: Optional[AgentSession],
         history_lengths: Dict[str, int],
+        background_task_descriptors: Optional[List[str]] = None,
         record_to_db: bool = True,
         background_poll_session_id: Optional[str] = None,
     ) -> None:
@@ -960,6 +1152,9 @@ Guidelines:
             assistant_reply: Aggregated assistant response text.
             run_session: Agent session used to process the turn.
             history_lengths: Provider message counts captured before streaming.
+            background_task_descriptors: Optional hidden MCP background task
+                descriptors that should start polling but not be stored as
+                assistant-visible text.
 
         Returns:
             None.
@@ -972,46 +1167,73 @@ Guidelines:
             raise RuntimeError("Cannot commit an isolated turn to shared session.")
 
         async with self._session_lock:
-            if self.session is None:
-                raise RuntimeError("Orchestrator session not initialized.")
+            # Validate session for agent-as-tool mode
+            # In magentic mode: both run_session and self.session are None
+            # In agent-as-tool mode: both should be non-None
+            if run_session is not None and self.session is None:
+                raise RuntimeError("Orchestrator session not initialized")
 
             self._completed_turns[turn_id] = {
                 "message": message,
                 "assistant_reply": assistant_reply,
                 "run_session": run_session,
                 "history_lengths": history_lengths,
+                "background_task_descriptors": background_task_descriptors or [],
                 "record_to_db": record_to_db,
                 "background_poll_session_id": background_poll_session_id,
             }
 
-            while self._next_turn_commit_id in self._completed_turns:
-                completed = self._completed_turns.pop(self._next_turn_commit_id)
-                self._merge_completed_session(
-                    completed["run_session"], completed["history_lengths"]
-                )
-                self._persist_completed_turn(completed)
+            self._drain_completed_turns_locked()
+
+    async def _retire_failed_turn(self, turn_id: int) -> None:
+        """
+        Mark a reserved turn as complete without persisting it.
+        """
+        async with self._session_lock:
+            if turn_id < self._next_turn_commit_id:
+                return
+            self._completed_turns[turn_id] = {"skip": True}
+            self._drain_completed_turns_locked()
+
+    def _drain_completed_turns_locked(self) -> None:
+        """
+        Persist queued turns in order.
+
+        The caller must hold `_session_lock`.
+        """
+        while self._next_turn_commit_id in self._completed_turns:
+            completed = self._completed_turns.pop(self._next_turn_commit_id)
+            if completed.get("skip"):
                 self._next_turn_commit_id += 1
+                continue
+
+            self._merge_completed_session(
+                completed["run_session"], completed["history_lengths"]
+            )
+            self._persist_completed_turn(completed)
+            self._next_turn_commit_id += 1
 
     def _merge_completed_session(
         self,
-        completed_session: AgentSession,
+        completed_session: Optional[AgentSession],
         history_lengths: Dict[str, int],
     ) -> None:
         """
         Merge one completed run session into the shared orchestrator session.
 
         Args:
-            completed_session: Agent session used by the completed turn.
+            completed_session: Agent session used by the completed turn, or None
+                if the strategy doesn't use session merging (e.g., magentic mode).
             history_lengths: Provider message counts captured before streaming.
 
         Returns:
             None.
 
-        Raises:
-            RuntimeError: If the shared orchestrator session is not initialized.
         """
-        if self.session is None:
-            raise RuntimeError("Orchestrator session not initialized.")
+        # Skip merging if orchestrator session not initialized (magentic mode)
+        # or if no completed session provided
+        if self.session is None or completed_session is None:
+            return
 
         for provider_name, source_state in completed_session.state.items():
             if not isinstance(source_state, dict):
@@ -1056,26 +1278,40 @@ Guidelines:
         """
         message = completed["message"]
         assistant_reply = completed["assistant_reply"]
+        background_task_descriptors = completed.get("background_task_descriptors", [])
 
         self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-            assistant_reply,
-            session_id=completed.get("background_poll_session_id"),
+            assistant_reply, session_id=completed.get("background_poll_session_id")
         )
-
+        for descriptor in background_task_descriptors:
+            self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                descriptor, session_id=completed.get("background_poll_session_id")
+            )
         if not completed.get("record_to_db", True):
             return
 
-        if not self.background_tasks.user_message_already_started_background_task(
-            message
-        ):
+        # Check if interface layer already persisted a background-start ACK
+        already_started = (
+            self.background_tasks.user_message_already_started_background_task(message)
+        )
+
+        if not already_started:
             self.session_manager.add_message("user", message)
+
+        # Skip persisting duplicate background ACKs
         if assistant_reply.strip():
-            self.session_manager.add_message("assistant", assistant_reply)
+            from mada.core.background_tasks import is_background_task_start_ack
+
+            is_bg_ack = is_background_task_start_ack(assistant_reply)
+            if not (already_started and is_bg_ack):
+                self.session_manager.add_message("assistant", assistant_reply)
 
     async def collect_message_response(
         self,
         message: str,
         isolated_session: bool = False,
+        persistence_session_id: Optional[str] = None,
+        stateless_session: bool = False,
         first_tool_call: Optional[asyncio.Event] = None,
         first_tool_state: Optional[Dict[str, str]] = None,
     ) -> str:
@@ -1093,6 +1329,10 @@ Guidelines:
                 provider-specific state beyond messages, and an overlapping turn
                 cannot include another unfinished turn's eventual result in its
                 context.
+            persistence_session_id: Optional chat session where isolated
+                request output should be persisted.
+            stateless_session: If True, isolated processing starts with no chat
+                history and does not persist output.
             first_tool_call: Optional event set when the streamed response first
                 reports a tool call.
             first_tool_state: Optional mutable mapping populated with the first
@@ -1109,15 +1349,33 @@ Guidelines:
         async for response_chunk in self.process_message(
             message,
             isolated_session=isolated_session,
+            persistence_session_id=persistence_session_id,
+            stateless_session=stateless_session,
         ):
-            response_chunks.append(response_chunk)
+            internal_tool_call_name = tool_call_name(response_chunk)
             if (
                 first_tool_call
                 and first_tool_state is not None
-                and response_chunk.startswith("\n[Calling:")
+                and internal_tool_call_name
+            ):
+                first_tool_state["name"] = internal_tool_call_name
+                first_tool_call.set()
+                continue
+
+            handled, terminal = apply_text_control(response_chunks, response_chunk)
+            if handled:
+                if terminal:
+                    break
+                continue
+
+            response_chunks.append(str(response_chunk))
+            if (
+                first_tool_call
+                and first_tool_state is not None
+                and str(response_chunk).startswith("\n[Calling:")
             ):
                 first_tool_state["name"] = (
-                    response_chunk.strip()[len("[Calling:") :].rstrip("]").strip()
+                    str(response_chunk).strip()[len("[Calling:") :].rstrip("]").strip()
                 )
                 first_tool_call.set()
         return "".join(response_chunks)
@@ -1131,10 +1389,7 @@ Guidelines:
         """
         try:
             await self.background_tasks.cleanup()
-            await asyncio.wait_for(
-                self.exit_stack.aclose(),
-                timeout=max(float(self.timeout), 0.1),
-            )
+            await self.exit_stack.aclose()
             self.specialist_agents.clear()
             self.planning_agent = None
             self.manager_agent = None
@@ -1143,6 +1398,9 @@ Guidelines:
             self._next_turn_id = 1
             self._next_turn_commit_id = 1
             self._mcp_tools_by_server.clear()
+            for client in self._a2a_clients_by_agent.values():
+                await client.aclose()
+            self._a2a_clients_by_agent.clear()
             self._agent_descriptions.clear()
             LOG.info("Orchestrator cleanup completed")
         except BaseExceptionGroup as eg:
@@ -1150,7 +1408,8 @@ Guidelines:
             # This is expected when MCP servers failed to connect - their async generators
             # will raise errors during cleanup, which we can safely suppress
             LOG.debug(
-                f"Async cleanup errors suppressed ({len(eg.exceptions)} errors) - this is expected for failed MCP connections"
+                "Async cleanup errors suppressed "
+                f"({len(eg.exceptions)} errors) - this is expected for failed MCP connections"
             )
         except RuntimeError as e:
             # Suppress "Attempted to exit cancel scope in different task" errors

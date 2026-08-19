@@ -9,20 +9,36 @@ Tests for the following entry point modules:
 - mada/interface/gradio/main.py -> The `mada-gradio` command.
 """
 
+import asyncio
+import json
 from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+import httpx
 from click.testing import CliRunner
 
 from mada.core.config import (
+    A2AConfig,
     MCPServerConfig,
     OpenAIModelConfig,
     OrchestrationConfig,
     SQLiteConfig,
 )
+from mada.core.orchestration.stream_events import (
+    InternalError,
+    InternalResponseReplacement,
+)
+from mada.interfaces.a2a.main import (
+    MADAA2AService,
+    _resolve_public_a2a_url,
+    a2a_entrypoint,
+    create_a2a_app,
+)
+from mada.interfaces.a2a.main import main as a2a_main
 from mada.interfaces.cli.main import MADACLIInterface, async_main
 from mada.interfaces.cli.main import main as cli_main
 from mada.interfaces.gradio.main import (
@@ -40,18 +56,13 @@ from mada.interfaces.openai_api.main import (
     main as openai_api_main,
 )
 from mada.main import (
+    _run_a2a_from_args,
     _run_cli_from_args,
     _run_gradio_from_args,
     _run_openai_api_from_args,
     main,
 )
-
-try:
-    import httpx
-except (
-    ImportError
-):  # pragma: no cover - exercised only in missing dependency environments
-    httpx = None
+from a2a.utils.constants import PROTOCOL_VERSION_1_0, VERSION_HEADER
 
 
 class DummyInterfaceConfig:
@@ -73,6 +84,8 @@ class DummyConfig:
         self.mcp_servers = {"s1": MCPServerConfig(transport="stdio")}
         self.database = database
         self.orchestration = OrchestrationConfig()
+        self.a2a = A2AConfig()
+        self.a2a_agents = {}
 
 
 @pytest.fixture
@@ -113,6 +126,13 @@ def create_dummy_config(db_config: SQLiteConfig) -> Callable:
 @pytest.fixture
 def runner():
     return CliRunner()
+
+
+def _asgi_test_client(app):
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    )
 
 
 @pytest.mark.unit
@@ -157,6 +177,16 @@ class TestMADAOrchestratorCmd:
                     ["--port", "8000", "config.json"]
                 )
 
+        def test_main_dispatches_to_a2a(self, runner):
+            """
+            Test that the main entry point correctly dispatches to the A2A API
+            interface when the 'a2a' mode is specified.
+            """
+            with patch("mada.main._run_a2a_from_args") as mock_run_a2a:
+                result = runner.invoke(main, ["a2a", "--port", "8000", "config.json"])
+                assert result.exit_code == 0
+                mock_run_a2a.assert_called_once_with(["--port", "8000", "config.json"])
+
     class TestRunGradioFromArgs:
         def test_run_gradio_from_args_calls_entrypoint(self):
             """
@@ -178,29 +208,15 @@ class TestMADAOrchestratorCmd:
                 mock_entry.assert_called_once_with(None, False, "config.json")
 
     class TestRunCLIFromArgs:
-        def test_run_cli_from_args_calls_async_main(self):
+        def test_run_cli_from_args_calls_cli_entrypoint(self):
             """
-            Test that `_run_cli_from_args` delegates to the CLI Click command so
-            CLI-specific flags remain reachable from `mada cli`.
+            Test that `_run_cli_from_args` invokes the CLI Click entrypoint.
             """
-            with patch("mada.main.cli_entrypoint.main") as mock_cli_main:
-                _run_cli_from_args(
-                    [
-                        "--autonomy-level",
-                        "4",
-                        "--show-autonomy-debug",
-                        "config.json",
-                    ]
-                )
+            with patch("mada.main.cli_entrypoint") as mock_cli_entrypoint:
+                _run_cli_from_args(["config.json"])
 
-                mock_cli_main.assert_called_once_with(
-                    args=[
-                        "--autonomy-level",
-                        "4",
-                        "--show-autonomy-debug",
-                        "config.json",
-                    ],
-                    standalone_mode=False,
+                mock_cli_entrypoint.main.assert_called_once_with(
+                    args=["config.json"], standalone_mode=False
                 )
 
     class TestRunOpenAIApiFromArgs:
@@ -237,6 +253,43 @@ class TestMADAOrchestratorCmd:
                 _run_openai_api_from_args(["config.json"])
                 mock_entry.assert_called_once_with(
                     "0.0.0.0", 8000, "mada-team", None, None, "config.json"
+                )
+
+    class TestRunA2AFromArgs:
+        def test_run_a2a_from_args_calls_entrypoint(self):
+            """
+            Test that the helper function `_run_a2a_from_args` calls the A2A
+            entry point with the correct arguments.
+            """
+            with patch("mada.interfaces.a2a.main.a2a_entrypoint") as mock_entry:
+                _run_a2a_from_args(
+                    [
+                        "--host",
+                        "127.0.0.1",
+                        "--port",
+                        "8000",
+                        "--public-url",
+                        "https://mada.example/a2a",
+                        "config.json",
+                    ]
+                )
+                mock_entry.assert_called_once_with(
+                    "127.0.0.1",
+                    8000,
+                    "https://mada.example/a2a",
+                    None,
+                    None,
+                    "config.json",
+                )
+
+        def test_run_a2a_from_args_uses_defaults(self):
+            """
+            Test `_run_a2a_from_args` when optional flags are not provided.
+            """
+            with patch("mada.interfaces.a2a.main.a2a_entrypoint") as mock_entry:
+                _run_a2a_from_args(["config.json"])
+                mock_entry.assert_called_once_with(
+                    "0.0.0.0", 8000, None, None, None, "config.json"
                 )
 
 
@@ -431,6 +484,7 @@ class TestMADAGradioCmd:
                     agents=["a1", "a2"],
                     database_config=db_config,
                     mcp_servers={"s1": MCPServerConfig(transport="stdio")},
+                    a2a_agents={},
                     orchestration_config=OrchestrationConfig(),
                 )
                 mock_iface_cls.assert_called_once()
@@ -652,16 +706,325 @@ class TestMADAOpenAIApiCmd:
                 )
                 assert "unsupported orchestration mode: magentic" in printed
 
-    @pytest.mark.skipif(httpx is None, reason="httpx ASGI client is not installed")
-    class TestCreateOpenAIApiApp:
-        @staticmethod
-        async def _request(app, method: str, path: str, **kwargs):
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
-                transport=transport, base_url="http://testserver"
-            ) as client:
-                return await client.request(method, path, **kwargs)
+    class TestOpenAIApiService:
+        @pytest.mark.asyncio
+        async def test_collect_response_replaces_stale_magentic_chunks(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAOpenAIAPIService(config=create_dummy_config())
 
+            async def process_openai_messages(messages):
+                assert messages == [{"role": "user", "content": "hello"}]
+                yield "stale partial"
+                yield InternalResponseReplacement("authoritative final")
+
+            service.orchestrator = SimpleNamespace(
+                process_openai_messages=process_openai_messages
+            )
+
+            response = await service.collect_response(
+                [{"role": "user", "content": "hello"}]
+            )
+
+            assert response == "authoritative final"
+
+        @pytest.mark.asyncio
+        async def test_stream_response_emits_content_incrementally(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAOpenAIAPIService(config=create_dummy_config())
+            never_finish = asyncio.Event()
+
+            async def process_openai_messages(messages):
+                assert messages == [{"role": "user", "content": "hello"}]
+                yield "first chunk"
+                await never_finish.wait()
+
+            service.orchestrator = SimpleNamespace(
+                process_openai_messages=process_openai_messages
+            )
+
+            stream = service.stream_response([{"role": "user", "content": "hello"}])
+            await anext(stream)
+            content_event = await asyncio.wait_for(anext(stream), timeout=1)
+            await stream.aclose()
+
+            payload = json.loads(content_event.removeprefix("data: "))
+            assert payload["choices"][0]["delta"]["content"] == "first chunk"
+
+        @pytest.mark.asyncio
+        async def test_stream_response_emits_replacement_before_content(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAOpenAIAPIService(config=create_dummy_config())
+
+            async def process_openai_messages(messages):
+                assert messages == [{"role": "user", "content": "hello"}]
+                yield InternalResponseReplacement("authoritative final")
+
+            service.orchestrator = SimpleNamespace(
+                process_openai_messages=process_openai_messages
+            )
+
+            events = [
+                event
+                async for event in service.stream_response(
+                    [{"role": "user", "content": "hello"}]
+                )
+            ]
+            payloads = [
+                json.loads(event.removeprefix("data: "))
+                for event in events
+                if event.startswith("data: {")
+            ]
+            content = "".join(
+                [
+                    payload["choices"][0]["delta"].get("content", "")
+                    for payload in payloads
+                ]
+            )
+
+            assert content == "authoritative final"
+
+        @pytest.mark.asyncio
+        async def test_stream_response_emits_authoritative_magentic_content(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAOpenAIAPIService(config=create_dummy_config())
+
+            async def process_openai_messages(messages):
+                assert messages == [{"role": "user", "content": "hello"}]
+                yield "authoritative final"
+
+            service.orchestrator = SimpleNamespace(
+                process_openai_messages=process_openai_messages
+            )
+
+            events = [
+                event
+                async for event in service.stream_response(
+                    [{"role": "user", "content": "hello"}]
+                )
+            ]
+            payloads = [
+                json.loads(event.removeprefix("data: "))
+                for event in events
+                if event.startswith("data: {")
+            ]
+            content = "".join(
+                payload["choices"][0]["delta"].get("content", "")
+                for payload in payloads
+                if "choices" in payload
+            )
+            errors = [payload["error"] for payload in payloads if "error" in payload]
+
+            assert content == "authoritative final"
+            assert errors == []
+
+        @pytest.mark.asyncio
+        async def test_stream_response_emits_clean_error_content(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAOpenAIAPIService(config=create_dummy_config())
+
+            async def process_openai_messages(messages):
+                assert messages == [{"role": "user", "content": "hello"}]
+                yield "Error processing message: boom"
+
+            service.orchestrator = SimpleNamespace(
+                process_openai_messages=process_openai_messages
+            )
+
+            events = [
+                event
+                async for event in service.stream_response(
+                    [{"role": "user", "content": "hello"}]
+                )
+            ]
+            payloads = [
+                json.loads(event.removeprefix("data: "))
+                for event in events
+                if event.startswith("data: {")
+            ]
+            content = "".join(
+                payload["choices"][0]["delta"].get("content", "")
+                for payload in payloads
+                if "choices" in payload
+            )
+
+            assert content == "Error processing message: boom"
+
+        @pytest.mark.asyncio
+        async def test_stream_response_reports_error_after_partial_content(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAOpenAIAPIService(config=create_dummy_config())
+
+            async def process_openai_messages(messages):
+                assert messages == [{"role": "user", "content": "hello"}]
+                yield "partial"
+                yield InternalError("Error processing message: boom")
+
+            service.orchestrator = SimpleNamespace(
+                process_openai_messages=process_openai_messages
+            )
+
+            events = [
+                event
+                async for event in service.stream_response(
+                    [{"role": "user", "content": "hello"}]
+                )
+            ]
+            payloads = [
+                json.loads(event.removeprefix("data: "))
+                for event in events
+                if event.startswith("data: {")
+            ]
+            content = "".join(
+                payload["choices"][0]["delta"].get("content", "")
+                for payload in payloads
+                if "choices" in payload
+            )
+            assert all("choices" in payload for payload in payloads)
+            finish_reasons = [
+                payload["choices"][0]["finish_reason"]
+                for payload in payloads
+                if "choices" in payload
+            ]
+
+            assert content == "partial\n\n[Error: Error processing message: boom]"
+            assert finish_reasons[-1] == "stop"
+            assert events[-1] == "data: [DONE]\n\n"
+
+        @pytest.mark.asyncio
+        async def test_stream_response_buffers_and_sends_replacement_in_magentic(
+            self, create_dummy_config: Callable
+        ):
+            config = create_dummy_config()
+            config.orchestration = SimpleNamespace(mode="magentic")
+            service = MADAOpenAIAPIService(config=config)
+
+            async def process_openai_messages(messages):
+                assert messages == [{"role": "user", "content": "hello"}]
+                yield "partial"
+                yield InternalResponseReplacement("authoritative final")
+
+            service.orchestrator = SimpleNamespace(
+                process_openai_messages=process_openai_messages
+            )
+
+            events = [
+                event
+                async for event in service.stream_response(
+                    [{"role": "user", "content": "hello"}]
+                )
+            ]
+            payloads = [
+                json.loads(event.removeprefix("data: "))
+                for event in events
+                if event.startswith("data: {")
+            ]
+            content = "".join(
+                payload["choices"][0]["delta"].get("content", "")
+                for payload in payloads
+                if "choices" in payload
+            )
+            assert all("choices" in payload for payload in payloads)
+            finish_reasons = [
+                payload["choices"][0]["finish_reason"]
+                for payload in payloads
+                if "choices" in payload
+            ]
+
+            # Magentic mode buffers - replacement wins, not error message
+            assert content == "authoritative final"
+            assert finish_reasons[-1] == "stop"
+            assert events[-1] == "data: [DONE]\n\n"
+
+        @pytest.mark.asyncio
+        async def test_stream_response_incremental_in_agent_as_tool(
+            self, create_dummy_config: Callable
+        ):
+            config = create_dummy_config()
+            config.orchestration = SimpleNamespace(mode="agent-as-tool")
+            service = MADAOpenAIAPIService(config=config)
+
+            async def process_openai_messages(messages):
+                assert messages == [{"role": "user", "content": "hello"}]
+                yield "chunk1"
+                yield "chunk2"
+                yield "chunk3"
+
+            service.orchestrator = SimpleNamespace(
+                process_openai_messages=process_openai_messages
+            )
+
+            events = [
+                event
+                async for event in service.stream_response(
+                    [{"role": "user", "content": "hello"}]
+                )
+            ]
+            payloads = [
+                json.loads(event.removeprefix("data: "))
+                for event in events
+                if event.startswith("data: {")
+            ]
+            content_chunks = [
+                payload["choices"][0]["delta"].get("content", "")
+                for payload in payloads
+                if "choices" in payload
+                and payload["choices"][0]["delta"].get("content")
+            ]
+
+            # agent-as-tool streams immediately - each chunk arrives separately
+            assert content_chunks == ["chunk1", "chunk2", "chunk3"]
+            assert events[-1] == "data: [DONE]\n\n"
+
+        @pytest.mark.asyncio
+        async def test_stream_response_flushes_buffer_before_error(
+            self, create_dummy_config: Callable
+        ):
+            config = create_dummy_config()
+            config.orchestration = SimpleNamespace(mode="magentic")
+            service = MADAOpenAIAPIService(config=config)
+
+            async def process_openai_messages(messages):
+                assert messages == [{"role": "user", "content": "hello"}]
+                yield "partial answer"
+                yield InternalError("something went wrong")
+
+            service.orchestrator = SimpleNamespace(
+                process_openai_messages=process_openai_messages
+            )
+
+            events = [
+                event
+                async for event in service.stream_response(
+                    [{"role": "user", "content": "hello"}]
+                )
+            ]
+            payloads = [
+                json.loads(event.removeprefix("data: "))
+                for event in events
+                if event.startswith("data: {")
+            ]
+            content = "".join(
+                payload["choices"][0]["delta"].get("content", "")
+                for payload in payloads
+                if "choices" in payload
+            )
+
+            # Buffered content flushed, then error appended
+            assert content.startswith("partial answer")
+            assert "[Error: something went wrong]" in content
+            assert events[-1] == "data: [DONE]\n\n"
+
+    @pytest.mark.skipif(
+        not hasattr(httpx, "ASGITransport"),
+        reason="httpx ASGI transport is not installed",
+    )
+    class TestCreateOpenAIApiApp:
         @pytest.mark.asyncio
         async def test_models_endpoint_returns_exposed_model(
             self, create_dummy_config: Callable
@@ -673,7 +1036,8 @@ class TestMADAOpenAIApiCmd:
 
             with patch.object(MADAOpenAIAPIService, "shutdown", new=AsyncMock()):
                 app = create_openai_api_app(config, model_name="mada-api")
-                response = await self._request(app, "GET", "/v1/models")
+                async with _asgi_test_client(app) as client:
+                    response = await client.get("/v1/models")
 
                 assert response.status_code == 200
                 assert response.json()["data"][0]["id"] == "mada-api"
@@ -689,7 +1053,8 @@ class TestMADAOpenAIApiCmd:
 
             with patch.object(MADAOpenAIAPIService, "shutdown", new=AsyncMock()):
                 app = create_openai_api_app(config, model_name="mada-api")
-                response = await self._request(app, "GET", "/models")
+                async with _asgi_test_client(app) as client:
+                    response = await client.get("/models")
 
                 assert response.status_code == 200
                 assert response.json()["data"][0]["id"] == "mada-api"
@@ -706,7 +1071,8 @@ class TestMADAOpenAIApiCmd:
 
             with patch.object(MADAOpenAIAPIService, "shutdown", new=AsyncMock()):
                 app = create_openai_api_app(config, model_name="mada-api")
-                response = await self._request(app, "GET", "/health")
+                async with _asgi_test_client(app) as client:
+                    response = await client.get("/health")
 
                 assert response.status_code == 200
                 assert response.json()["orchestrator_initialized"] == "false"
@@ -731,15 +1097,14 @@ class TestMADAOpenAIApiCmd:
                 ),
             ):
                 app = create_openai_api_app(config, model_name="mada-api")
-                response = await self._request(
-                    app,
-                    "POST",
-                    "/v1/chat/completions",
-                    json={
-                        "model": "mada-api",
-                        "messages": [{"role": "user", "content": "hello"}],
-                    },
-                )
+                async with _asgi_test_client(app) as client:
+                    response = await client.post(
+                        "/v1/chat/completions",
+                        json={
+                            "model": "mada-api",
+                            "messages": [{"role": "user", "content": "hello"}],
+                        },
+                    )
 
                 assert response.status_code == 200
                 payload = response.json()
@@ -772,15 +1137,14 @@ class TestMADAOpenAIApiCmd:
                 )
 
                 app = create_openai_api_app(config, model_name="mada-api")
-                response = await self._request(
-                    app,
-                    "POST",
-                    "/v1/chat/completions",
-                    json={
-                        "model": "mada-api",
-                        "messages": [{"role": "user", "content": "hello"}],
-                    },
-                )
+                async with _asgi_test_client(app) as client:
+                    response = await client.post(
+                        "/v1/chat/completions",
+                        json={
+                            "model": "mada-api",
+                            "messages": [{"role": "user", "content": "hello"}],
+                        },
+                    )
 
             assert response.status_code == 503
             detail = response.json()["detail"]
@@ -806,7 +1170,8 @@ class TestMADAOpenAIApiCmd:
                 "data: [DONE]\n\n",
             ]
 
-            async def stream_response(_messages):
+            async def stream_response(self, messages):
+                assert messages == [{"role": "user", "content": "hello"}]
                 for chunk in stream_chunks:
                     yield chunk
 
@@ -816,24 +1181,408 @@ class TestMADAOpenAIApiCmd:
                 patch.object(
                     MADAOpenAIAPIService,
                     "stream_response",
-                    side_effect=stream_response,
+                    stream_response,
                 ),
             ):
                 app = create_openai_api_app(config, model_name="mada-api")
-                response = await self._request(
-                    app,
-                    "POST",
-                    "/v1/chat/completions",
-                    json={
-                        "model": "mada-api",
-                        "stream": True,
-                        "messages": [{"role": "user", "content": "hello"}],
-                    },
-                )
-                body = response.text
+                async with _asgi_test_client(app) as client:
+                    response = await client.post(
+                        "/v1/chat/completions",
+                        json={
+                            "model": "mada-api",
+                            "stream": True,
+                            "messages": [{"role": "user", "content": "hello"}],
+                        },
+                    )
+                    body = response.text
 
-                assert response.status_code == 200
-                assert "data: [DONE]" in body
+            assert response.status_code == 200
+            assert "data: [DONE]" in body
+
+
+@pytest.mark.unit
+class TestMADAA2ACmd:
+    class TestA2AMain:
+        def test_main_calls_a2a_entrypoint_with_args(self, runner):
+            """
+            Test that the A2A main function calls the entry point with the
+            correct CLI arguments.
+            """
+            with patch("mada.interfaces.a2a.main.a2a_entrypoint") as mock_entrypoint:
+                result = runner.invoke(
+                    a2a_main,
+                    [
+                        "--host",
+                        "127.0.0.1",
+                        "--port",
+                        "9000",
+                        "--public-url",
+                        "https://mada.example/a2a",
+                        "config.json",
+                    ],
+                )
+
+                assert result.exit_code == 0
+                mock_entrypoint.assert_called_once_with(
+                    "127.0.0.1",
+                    9000,
+                    "https://mada.example/a2a",
+                    None,
+                    None,
+                    "config.json",
+                )
+
+        def test_main_works_with_only_config_file(self, runner):
+            """
+            Test that the A2A main function uses default values when only the
+            configuration file is provided.
+            """
+            with patch("mada.interfaces.a2a.main.a2a_entrypoint") as mock_entrypoint:
+                result = runner.invoke(a2a_main, ["config.json"])
+
+                assert result.exit_code == 0
+                mock_entrypoint.assert_called_once_with(
+                    "0.0.0.0", 8000, None, None, None, "config.json"
+                )
+
+    class TestA2AEntrypoint:
+        def test_a2a_entrypoint_happy_path_uses_config_and_runs_server(
+            self, create_dummy_config: Callable
+        ):
+            """
+            Test that the A2A entry point loads the config and launches the API
+            server.
+            """
+            config = create_dummy_config()
+
+            with (
+                patch(
+                    "mada.interfaces.a2a.main.load_config_from_json",
+                    return_value=config,
+                ) as mock_load,
+                patch("mada.interfaces.a2a.main.run_a2a") as mock_run,
+                patch("mada.interfaces.a2a.main.sys.exit") as mock_exit,
+            ):
+                a2a_entrypoint(
+                    host="127.0.0.1",
+                    port=8000,
+                    public_url="https://mada.example/a2a",
+                    api_key="secret",
+                    bearer_token="token",
+                    config_file="config.json",
+                )
+
+                mock_load.assert_called_once_with("config.json")
+                mock_run.assert_called_once_with(
+                    config=config,
+                    host="127.0.0.1",
+                    port=8000,
+                    public_url="https://mada.example/a2a",
+                    api_key="secret",
+                    bearer_token="token",
+                )
+                mock_exit.assert_not_called()
+
+        def test_a2a_entrypoint_exits_with_code_1_on_exception(self):
+            """
+            Test that the A2A entry point exits with code 1 when an unexpected
+            exception occurs.
+            """
+            with (
+                patch("mada.interfaces.a2a.main.load_config_from_json") as mock_load,
+                patch("mada.interfaces.a2a.main.sys.exit") as mock_exit,
+            ):
+                mock_load.side_effect = RuntimeError("Bad config")
+
+                a2a_entrypoint(
+                    host="127.0.0.1",
+                    port=8000,
+                    public_url=None,
+                    api_key=None,
+                    bearer_token=None,
+                    config_file="config.json",
+                )
+
+                mock_exit.assert_called_once_with(1)
+
+    class TestA2AUrl:
+        def test_default_public_url_uses_non_loopback_ipv4_for_wildcard_host(self):
+            with patch(
+                "mada.interfaces.a2a.main.socket.getaddrinfo",
+                return_value=[(None, None, None, None, ("192.0.2.10", 0))],
+            ):
+                assert (
+                    _resolve_public_a2a_url("0.0.0.0", 8000) == "http://192.0.2.10:8000"
+                )
+
+        def test_default_public_url_uses_non_loopback_ipv6_for_ipv6_wildcard_host(self):
+            with patch(
+                "mada.interfaces.a2a.main.socket.getaddrinfo",
+                return_value=[(None, None, None, None, ("2001:db8::10", 0, 0, 0))],
+            ):
+                assert (
+                    _resolve_public_a2a_url("::", 8000) == "http://[2001:db8::10]:8000"
+                )
+
+        def test_default_public_url_preserves_explicit_public_url(self):
+            assert (
+                _resolve_public_a2a_url(
+                    "0.0.0.0",
+                    8000,
+                    "https://mada.example/a2a",
+                )
+                == "https://mada.example/a2a"
+            )
+
+    class TestA2AService:
+        @pytest.mark.asyncio
+        async def test_collect_response_uses_isolated_session(
+            self, create_dummy_config: Callable
+        ):
+            config = create_dummy_config()
+            service = MADAA2AService(
+                config=config,
+                public_url="https://mada.example/a2a",
+            )
+
+            async def collect_message_response(
+                message,
+                isolated_session=False,
+                persistence_session_id=None,
+                stateless_session=False,
+            ):
+                assert message == "hello"
+                assert isolated_session is True
+                assert stateless_session is True
+                # A2A uses stateless isolated sessions, no persistence_session_id
+                assert persistence_session_id is None
+                return "world"
+
+            service.orchestrator = SimpleNamespace(
+                collect_message_response=collect_message_response,
+            )
+
+            response = await service.collect_response("hello")
+
+            assert response == "world"
+
+        @pytest.mark.asyncio
+        async def test_stream_response_yields_late_magentic_replacement(
+            self, create_dummy_config: Callable
+        ):
+            config = create_dummy_config()
+            config.orchestration = SimpleNamespace(mode="magentic")
+            service = MADAA2AService(
+                config=config,
+                public_url="https://mada.example/a2a",
+            )
+
+            async def process_message(
+                message,
+                isolated_session=False,
+                persistence_session_id=None,
+                stateless_session=False,
+            ):
+                assert message == "hello"
+                assert isolated_session is True
+                assert stateless_session is True
+                # A2A uses stateless isolated sessions, no persistence_session_id
+                assert persistence_session_id is None
+                yield "stale partial"
+                yield InternalResponseReplacement("authoritative final")
+
+            service.orchestrator = SimpleNamespace(
+                process_message=process_message,
+            )
+
+            chunks = [chunk async for chunk in service.stream_response("hello")]
+
+            assert chunks == ["authoritative final"]
+
+        @pytest.mark.asyncio
+        async def test_stream_response_yields_magentic_error(
+            self, create_dummy_config: Callable
+        ):
+            config = create_dummy_config()
+            config.orchestration = SimpleNamespace(mode="magentic")
+            service = MADAA2AService(
+                config=config,
+                public_url="https://mada.example/a2a",
+            )
+
+            async def process_message(
+                message,
+                isolated_session=False,
+                persistence_session_id=None,
+                stateless_session=False,
+            ):
+                assert message == "hello"
+                assert isolated_session is True
+                assert stateless_session is True
+                assert persistence_session_id is None
+                yield "partial"
+                yield InternalError("Error processing message: boom")
+
+            service.orchestrator = SimpleNamespace(
+                process_message=process_message,
+            )
+
+            chunks = [chunk async for chunk in service.stream_response("hello")]
+
+            assert chunks == ["Error processing message: boom"]
+
+        @pytest.mark.asyncio
+        async def test_stream_response_streams_incrementally_in_agent_as_tool_mode(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAA2AService(
+                config=create_dummy_config(),
+                public_url="https://mada.example/a2a",
+            )
+
+            async def process_message(
+                message,
+                isolated_session=False,
+                persistence_session_id=None,
+                stateless_session=False,
+            ):
+                assert message == "hello"
+                assert isolated_session is True
+                assert stateless_session is True
+                assert persistence_session_id is None
+                yield "first"
+                yield " second"
+
+            service.orchestrator = SimpleNamespace(
+                process_message=process_message,
+            )
+
+            chunks = [chunk async for chunk in service.stream_response("hello")]
+
+            assert chunks == ["first", " second"]
+
+    @pytest.mark.skipif(
+        not hasattr(httpx, "ASGITransport"),
+        reason="httpx ASGI transport is not installed",
+    )
+    class TestCreateA2AApp:
+        @pytest.mark.asyncio
+        async def test_agent_card_endpoint_returns_configured_metadata(
+            self, create_dummy_config: Callable
+        ):
+            """
+            Test that the standard agent card endpoint returns A2A metadata.
+            """
+            config = create_dummy_config()
+            config.a2a = A2AConfig(
+                name="MADA Test",
+                description="Test A2A agent",
+                version="9.9.9",
+            )
+
+            with patch.object(MADAA2AService, "shutdown", new=AsyncMock()):
+                app = create_a2a_app(config, public_url="https://mada.example/a2a")
+                async with _asgi_test_client(app) as client:
+                    response = await client.get("/.well-known/agent-card.json")
+
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["name"] == "MADA Test"
+            assert payload["description"] == "Test A2A agent"
+            assert payload["supportedInterfaces"][0]["url"] == (
+                "https://mada.example/a2a"
+            )
+            assert payload["supportedInterfaces"][0]["protocolVersion"] == "1.0"
+            assert payload["capabilities"]["streaming"] is True
+
+        def test_agent_card_endpoint_can_serve_card_file(
+            self, create_dummy_config: Callable, tmp_path: Path
+        ):
+            """
+            Test that the standard agent card endpoint can load a standalone card.
+            """
+            card_path = tmp_path / "agent-card.json"
+            card_path.write_text(
+                json.dumps(
+                    {
+                        "name": "FileBackedMADA",
+                        "description": "Loaded from a card file",
+                        "version": "1.0.0",
+                        "supportedInterfaces": [
+                            {
+                                "url": "http://placeholder",
+                                "protocolBinding": "JSONRPC",
+                                "protocolVersion": "1.0",
+                            }
+                        ],
+                        "skills": [
+                            {
+                                "id": "file-backed",
+                                "name": "File backed card",
+                                "description": "Served from JSON",
+                                "tags": ["a2a"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = create_dummy_config()
+            config.a2a = A2AConfig(card_path=str(card_path))
+
+            service = MADAA2AService(
+                config=config, public_url="https://mada.example/a2a"
+            )
+            payload = service.build_agent_card()
+
+            assert payload["name"] == "FileBackedMADA"
+            assert payload["description"] == "Loaded from a card file"
+            assert payload["supportedInterfaces"][0]["url"] == (
+                "https://mada.example/a2a"
+            )
+            assert payload["supportedInterfaces"][0]["protocolVersion"] == "1.0"
+
+        @pytest.mark.asyncio
+        async def test_message_send_returns_a2a_task(
+            self, create_dummy_config: Callable
+        ):
+            """
+            Test that JSON-RPC `SendMessage` returns a completed A2A task.
+            """
+            config = create_dummy_config()
+
+            with (
+                patch.object(MADAA2AService, "ensure_started", new=AsyncMock()),
+                patch.object(MADAA2AService, "shutdown", new=AsyncMock()),
+                patch.object(
+                    MADAA2AService,
+                    "collect_response",
+                    new=AsyncMock(return_value="hello from mada"),
+                ),
+            ):
+                app = create_a2a_app(config, public_url="https://mada.example/a2a")
+                async with _asgi_test_client(app) as client:
+                    response = await client.post(
+                        "/",
+                        headers={VERSION_HEADER: PROTOCOL_VERSION_1_0},
+                        json={
+                            "jsonrpc": "2.0",
+                            "id": "req-1",
+                            "method": "SendMessage",
+                            "params": {
+                                "message": {
+                                    "messageId": "msg-1",
+                                    "role": "ROLE_USER",
+                                    "parts": [{"text": "hello"}],
+                                }
+                            },
+                        },
+                    )
+
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["id"] == "req-1"
+            assert payload["result"]["message"]["parts"][0]["text"] == "hello from mada"
 
 
 @pytest.mark.unit
@@ -892,42 +1641,9 @@ class TestMADACLICmd:
 
                 mock_load.assert_called_once_with("config.json")
                 mock_cli_class.assert_called_once_with(dummy_config, blocking=False)
-                mock_cli_instance.run.assert_awaited_once_with(
-                    autonomy_level=0,
-                    show_autonomy_debug=False,
-                )
+                mock_cli_instance.run.assert_awaited_once()
                 # Should not call sys.exit on success
                 mock_exit.assert_not_called()
-
-        @pytest.mark.asyncio
-        async def test_async_main_passes_autonomy_options(
-            self,
-            create_dummy_config: Callable,
-        ):
-            dummy_config = create_dummy_config()
-
-            with (
-                patch(
-                    "mada.interfaces.cli.main.load_config_from_json",
-                    return_value=dummy_config,
-                ),
-                patch("mada.interfaces.cli.main.MADACLIInterface") as mock_cli_class,
-            ):
-                mock_cli_instance = AsyncMock()
-                mock_cli_class.return_value = mock_cli_instance
-
-                await async_main(
-                    "config.json",
-                    blocking=True,
-                    autonomy_level=3,
-                    show_autonomy_debug=True,
-                )
-
-                mock_cli_class.assert_called_once_with(dummy_config, blocking=True)
-                mock_cli_instance.run.assert_awaited_once_with(
-                    autonomy_level=3,
-                    show_autonomy_debug=True,
-                )
 
         @pytest.mark.asyncio
         async def test_async_main_file_not_found_exits_with_code_1(self):
@@ -1027,7 +1743,7 @@ class TestMADACLICmd:
                 await cli.run()
 
                 orchestrator_mock.initialize_orchestrator.assert_awaited_once_with(
-                    config.agents, config.mcp_servers
+                    config.agents, config.mcp_servers, config.a2a_agents
                 )
                 orchestrator_mock.background_tasks.run_query.assert_not_called()
 

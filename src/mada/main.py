@@ -136,6 +136,75 @@ def _run_openai_api_from_args(args: list[str]):
     openai_api_cmd.main(args=args, standalone_mode=False)
 
 
+def _run_a2a_from_args(args: list[str]):
+    """
+    Run the A2A API mode for MADA.
+
+    Args:
+        args: command line arguments.
+    """
+    from mada.interfaces.a2a.main import a2a_entrypoint
+
+    @click.command(
+        context_settings={
+            "help_option_names": ["-h", "--help"],
+        },
+    )
+    @click.option(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        show_default=True,
+        help="Host interface to bind.",
+    )
+    @click.option(
+        "-p",
+        "--port",
+        type=int,
+        default=8000,
+        show_default=True,
+        help="Port for the A2A API.",
+    )
+    @click.option(
+        "--public-url",
+        type=str,
+        default=None,
+        help="Externally reachable URL to publish in the A2A agent card.",
+    )
+    @click.option(
+        "--api-key",
+        type=str,
+        default=None,
+        help="Optional API key that incoming requests must provide.",
+    )
+    @click.option(
+        "--bearer-token",
+        type=str,
+        default=None,
+        help="Optional bearer token forwarded to streamable HTTP MCP servers as X-Token.",
+    )
+    @click.argument(
+        "config_file",
+        type=str,
+    )
+    def a2a_cmd(
+        host: str,
+        port: int,
+        public_url: str | None,
+        api_key: str | None,
+        bearer_token: str | None,
+        config_file: str,
+    ) -> None:
+        """
+        Run MADA in A2A API mode.
+
+        CONFIG_FILE is the path to the MADA configuration file.
+        """
+        a2a_entrypoint(host, port, public_url, api_key, bearer_token, config_file)
+
+    a2a_cmd.main(args=args, standalone_mode=False)
+
+
 @click.command(
     context_settings={
         "help_option_names": ["-h", "--help"],
@@ -145,14 +214,14 @@ def _run_openai_api_from_args(args: list[str]):
 )
 @click.argument(
     "mode",
-    type=click.Choice(["gradio", "cli", "openai-api"], case_sensitive=False),
+    type=click.Choice(["gradio", "cli", "openai-api", "a2a"], case_sensitive=False),
 )
 @click.pass_context
 def main(ctx: click.Context, mode: str) -> None:
     """
     Run MADA.
 
-    MODE is one of 'gradio', 'cli', or 'openai-api' and will determine the interface.
+    MODE is one of 'gradio', 'cli', 'openai-api', or 'a2a' and will determine the interface.
 
     Examples:
 
@@ -161,6 +230,8 @@ def main(ctx: click.Context, mode: str) -> None:
       mada cli config.json
 
       mada openai-api --port 8000 config.json
+
+      mada a2a --port 8000 config.json
     """
     mode = mode.lower()
 
@@ -173,6 +244,8 @@ def main(ctx: click.Context, mode: str) -> None:
         _run_cli_from_args(remaining)
     elif mode == "openai-api":
         _run_openai_api_from_args(remaining)
+    elif mode == "a2a":
+        _run_a2a_from_args(remaining)
     else:
         # Protected by click.Choice, here just in case
         raise click.ClickException(f"Unsupported mode: {mode}")

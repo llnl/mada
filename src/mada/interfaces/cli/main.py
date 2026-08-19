@@ -280,7 +280,9 @@ class MADACLIInterface:
                 print("\nInitializing agents and MCP servers...")
                 try:
                     status, tools = await orchestrator.initialize_orchestrator(
-                        self.config.agents, self.config.mcp_servers
+                        self.config.agents,
+                        self.config.mcp_servers,
+                        getattr(self.config, "a2a_agents", {}),
                     )
                     print(f"Status: {status}")
                     print(f"Orchestration mode: {self.orchestration_config.mode}")
@@ -302,11 +304,8 @@ class MADACLIInterface:
                         f"\nWARNING: {len(eg.exceptions)} initialization error(s) occurred. Continuing with available agents..."
                     )
                 except Exception as e:
-                    print(f"\nWARNING: Initialization error: {e}")
-                    print("Continuing with available agents...")
-                    import traceback
-
-                    traceback.print_exc()
+                    print(f"\nERROR: Initialization failed: {e}")
+                    return
 
                 print("\nChat with the agents (type 'quit' to exit)")
                 print("-" * 50)

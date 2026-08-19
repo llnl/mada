@@ -7,4 +7,5 @@ User interfaces for MADA.
 This module provides different interfaces for interacting with the multi-agent orchestrator:
 - CLI interface for command-line interaction
 - Gradio interface for browser-based interaction
+- A2A interface for agent-to-agent HTTP interaction
 """

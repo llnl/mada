@@ -19,6 +19,59 @@ from mada.core.database import ChatSessionManager
 CollectMessageResponse = Callable[..., Awaitable[str]]
 
 
+def _parse_background_task_descriptor_payload(value: str) -> Any | None:
+    """
+    Parse JSON from a string, trying both the full string and the widest {...} substring.
+
+    Returns:
+        Parsed JSON object/array, or None if parsing fails.
+    """
+    value = value.strip()
+    if not value:
+        return None
+
+    # Try full string first
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting widest {...} substring
+    start = value.find("{")
+    end = value.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(value[start : end + 1])
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
+def is_background_task_start_ack(content: str) -> bool:
+    """
+    Return whether text is a background-task start acknowledgement.
+
+    Recognizes formats:
+    - "[task-123] Started in background."
+    - "[uuid-or-any-id] Started in background."
+    - "[task-123] Started background tool `tool_name`"
+    """
+    if not content.startswith("["):
+        return False
+
+    # Find closing bracket for task ID
+    bracket_end = content.find("]")
+    if bracket_end == -1:
+        return False
+
+    # Check for recognized ACK phrases after the ID
+    remainder = content[bracket_end + 1 :].strip()
+    return remainder.startswith("Started in background.") or remainder.startswith(
+        "Started background tool"
+    )
+
+
 class BackgroundTaskManager:
     """
     Manage interface background queries and MCP server-side background tools.
@@ -60,23 +113,28 @@ class BackgroundTaskManager:
         self._task_results: Dict[str, Dict[str, str]] = {}
         self._hidden_task_ids: Set[str] = set()
         self._background_tool_poll_tasks: Dict[str, asyncio.Task[None]] = {}
+        self._active_agent_queries = 0
 
     def start_background_tool_poll_from_reply_if_needed(
-        self, reply_text: str, session_id: str | None = None
+        self,
+        reply_text: str,
+        *,
+        persist_result: bool = True,
+        session_id: str | None = None,
     ) -> None:
         """
         Start polling when an assistant reply contains a running MCP task descriptor.
 
         MCP tools can return a JSON object containing `task_id`, `status`, and
         `tool_name`. When the status is `running`, this method registers a poller
-        task that waits for the server-side task result and persists the final
-        assistant message.
+        task that waits for the server-side task result. By default, the final
+        assistant message is persisted to the active chat session.
 
         Args:
             reply_text: Assistant reply text that may contain a background task
                 descriptor as JSON.
-            session_id: Optional chat session that should receive the final
-                background-tool result. Defaults to the current session.
+            persist_result: Whether to persist the final result to the active
+                chat session. Stateless interfaces should set this to False.
 
         Returns:
             None.
@@ -85,19 +143,7 @@ class BackgroundTaskManager:
             RuntimeError: If called without a running event loop while a poller
                 needs to be created.
         """
-        reply_text = reply_text.strip()
-        try:
-            descriptor = json.loads(reply_text)
-        except json.JSONDecodeError:
-            descriptor = None
-            start = reply_text.find("{")
-            end = reply_text.rfind("}")
-            if start != -1 and end > start:
-                try:
-                    descriptor = json.loads(reply_text[start : end + 1])
-                except json.JSONDecodeError:
-                    descriptor = None
-
+        descriptor = _parse_background_task_descriptor_payload(reply_text)
         if not isinstance(descriptor, dict) or not descriptor.get("task_id"):
             return
 
@@ -107,7 +153,9 @@ class BackgroundTaskManager:
         if status != "running" or task_id in self._background_tool_poll_tasks:
             return
 
-        session_id = session_id or self.session_manager.current_session_id
+        session_id = session_id or (
+            self.session_manager.current_session_id if persist_result else None
+        )
         poll_task = asyncio.create_task(
             self._poll_background_tool(task_id, tool_name, session_id)
         )
@@ -152,8 +200,8 @@ class BackgroundTaskManager:
             if next_entry.get("role") != "assistant":
                 continue
             content = next_entry.get("content", "")
-            if isinstance(content, str) and content.startswith("[task-"):
-                return "Started in background." in content
+            if isinstance(content, str) and is_background_task_start_ack(content):
+                return True
 
         return False
 
@@ -161,7 +209,7 @@ class BackgroundTaskManager:
         self,
         task_id: str,
         tool_name: str,
-        session_id: str,
+        session_id: str | None,
     ) -> None:
         """
         Poll a server-side MCP background tool until it finishes.
@@ -172,8 +220,8 @@ class BackgroundTaskManager:
         Args:
             task_id: Server-side MCP background task identifier.
             tool_name: Name of the MCP tool that started the task.
-            session_id: Chat session ID where the final result should be
-                persisted.
+            session_id: Optional chat session ID where the final result should
+                be persisted.
 
         Returns:
             None.
@@ -255,7 +303,10 @@ class BackgroundTaskManager:
                     f"[{task_id}] Background tool `{tool_name}` {status}:\n{output}"
                 )
 
-            self.session_manager.chat_db.add_message(session_id, "assistant", message)
+            if session_id is not None:
+                self.session_manager.chat_db.add_message(
+                    session_id, "assistant", message
+                )
             async with self._task_lock:
                 self._pending_tasks.pop(task_id, None)
             return
@@ -290,12 +341,17 @@ class BackgroundTaskManager:
             print("")
             return response
 
+        # Capture the chat before scheduling the task. An isolated follow-up
+        # can start after the interface has switched to another chat session.
+        originating_session_id = self.session_manager.current_session_id
+
         async with self._task_lock:
-            use_isolated_session = any(
+            use_isolated_session = self._active_agent_queries > 0 or any(
                 task.get("type") == "agent"
                 and task.get("status") in ("pending", "running")
                 for task in self._task_results.values()
             )
+            self._active_agent_queries += 1
 
         first_tool_call = asyncio.Event()
         first_tool_state = {}
@@ -304,10 +360,22 @@ class BackgroundTaskManager:
             self.collect_message_response(
                 user_input,
                 isolated_session=use_isolated_session,
+                persistence_session_id=(
+                    originating_session_id if use_isolated_session else None
+                ),
                 first_tool_call=first_tool_call,
                 first_tool_state=first_tool_state,
             )
         )
+
+        def _release_active_query(_: asyncio.Task[str]) -> None:
+            async def _release() -> None:
+                async with self._task_lock:
+                    self._active_agent_queries -= 1
+
+            asyncio.create_task(_release())
+
+        task.add_done_callback(_release_active_query)
         tool_waiter = asyncio.create_task(first_tool_call.wait())
         done, _ = await asyncio.wait(
             {task, tool_waiter},

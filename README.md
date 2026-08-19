@@ -295,9 +295,19 @@ Use Safari.
 
 #### SSL certificate errors
 
-If you encounter SSL errors (which sometimes surface as an "Agent error") update your certificate bundle:
+MADA now prefers the system trust store for both MCP HTTP connections and
+OpenAI-compatible model endpoints. If your site uses a custom CA bundle that is
+not installed system-wide, point `SSL_CERT_FILE` (or `REQUESTS_CA_BUNDLE`) at
+that bundle before starting MADA:
 
+```bash
+export SSL_CERT_FILE=/path/to/ca-bundle.pem
 ```
+
+As a fallback on older environments, you can still update Python's `certifi`
+bundle manually:
+
+```bash
 python_cert_path=$(python -c "import certifi; print(certifi.where())")
 cat /etc/ssl/certs/ca-bundle.crt >> "$python_cert_path"
 ```
@@ -323,3 +333,5 @@ See [LICENSE](./LICENSE), [COPYRIGHT](./COPYRIGHT), and [NOTICE](./NOTICE) for d
 SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 LLNL-CODE-2019927
+
+https://doi.org/10.11578/dc.20260630.1

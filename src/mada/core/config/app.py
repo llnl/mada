@@ -15,9 +15,16 @@ import json
 import logging
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List
 
 from mada.core.config.agents import AgentConfig
+from mada.core.config.a2a import (
+    A2AConfig,
+    RemoteA2AAgentConfig,
+    load_a2a_agents_config,
+    load_a2a_config,
+)
 from mada.core.config.database import DatabaseConfig, load_database_config
 from mada.core.config.interface import InterfaceConfig
 from mada.core.config.mcp_servers import MCPServerConfig
@@ -58,9 +65,15 @@ class AppConfig:
     mcp_servers: Dict[str, MCPServerConfig] = None  # MCP server configurations
     interface: InterfaceConfig = None  # Optional, used only by the Gradio app
     orchestration: OrchestrationConfig = field(default_factory=OrchestrationConfig)
+    a2a: A2AConfig = field(default_factory=A2AConfig)
+    a2a_agents: Dict[str, RemoteA2AAgentConfig] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> "AppConfig":
+    def from_dict(
+        cls,
+        config_dict: Dict[str, Any],
+        a2a_card_path_base: str | Path | None = None,
+    ) -> "AppConfig":
         """
         Create an AppConfig instance from a dictionary.
 
@@ -106,6 +119,13 @@ class AppConfig:
         )
         app_conf["orchestration"] = orchestration_cfg
 
+        a2a_self_config, a2a_agents_config = _get_a2a_config_blocks(config_dict)
+        app_conf["a2a"] = load_a2a_config(
+            a2a_self_config,
+            card_path_base=a2a_card_path_base,
+        )
+        app_conf["a2a_agents"] = load_a2a_agents_config(a2a_agents_config)
+
         # Load MCP servers configuration (optional)
         python_exe = config_dict.get("python_executable", sys.executable)
         mcp_servers_entry = config_dict.get("mcp_servers")
@@ -126,6 +146,25 @@ class AppConfig:
         return cls(**app_conf)
 
 
+def _get_a2a_config_blocks(
+    config_dict: Dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """
+    Return server-side and remote-agent A2A blocks from nested config.
+    """
+    if "a2a_self" in config_dict or "a2a_agents" in config_dict:
+        raise ValueError("Use 'a2a.self' and 'a2a.agents' for A2A configuration")
+
+    a2a_section = config_dict.get("a2a")
+    if a2a_section is None:
+        return None, None
+
+    if not isinstance(a2a_section, dict):
+        raise ValueError("'a2a' must be an object")
+
+    return a2a_section.get("self"), a2a_section.get("agents")
+
+
 def load_config_from_json(path: str) -> AppConfig:
     """
     Load application configuration from a JSON file.
@@ -136,7 +175,8 @@ def load_config_from_json(path: str) -> AppConfig:
     Returns:
         AppConfig: The parsed application configuration object.
     """
-    with open(path, "r") as f:
+    config_path = Path(path)
+    with open(config_path, "r") as f:
         config_dict = json.load(f)
 
-    return AppConfig.from_dict(config_dict)
+    return AppConfig.from_dict(config_dict, a2a_card_path_base=config_path.parent)

@@ -1,0 +1,31 @@
+{
+  "name": "GoogleADKAgent",
+  "description": "Column average specialist that can compute averages for numeric columns in a small built-in CSV table by calling its MCP average tool.",
+  "version": "0.1.0",
+  "supportedInterfaces": [
+    {
+      "url": "http://localhost:9002",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "capabilities": {
+    "streaming": false
+  },
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": [
+    {
+      "id": "column-average-tool",
+      "name": "CSV column averages",
+      "description": "Calculate averages for numeric columns in a built-in experiment CSV table.",
+      "tags": ["average", "mean", "columns", "csv", "mcp"]
+    },
+    {
+      "id": "google-adk-chat",
+      "name": "Google ADK chat",
+      "description": "Answer follow-up questions about column averages and table summaries.",
+      "tags": ["average", "table", "chat", "summary"]
+    }
+  ]
+}

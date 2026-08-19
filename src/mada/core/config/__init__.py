@@ -36,6 +36,12 @@ Modules:
 """
 
 from mada.core.config.agents import AgentConfig
+from mada.core.config.a2a import (
+    A2AConfig,
+    RemoteA2AAgentConfig,
+    load_a2a_agents_config,
+    load_a2a_config,
+)
 from mada.core.config.app import AppConfig, load_config_from_json
 from mada.core.config.database import (
     DatabaseConfig,
@@ -62,6 +68,7 @@ from mada.core.config.utils import expand_env_vars
 
 __all__ = [
     "AgentConfig",
+    "A2AConfig",
     "AppConfig",
     "BaseModelConfig",
     "BedrockModelConfig",
@@ -72,11 +79,14 @@ __all__ = [
     "OpenAIModelConfig",
     "OrchestrationConfig",
     "PostgreSQLConfig",
+    "RemoteA2AAgentConfig",
     "DEFAULT_ORCHESTRATION_MODE",
     "SUPPORTED_ORCHESTRATION_MODES",
     "SQLiteConfig",
     "expand_env_vars",
     "load_config_from_json",
+    "load_a2a_config",
+    "load_a2a_agents_config",
     "load_database_config",
     "load_model_config",
     "load_orchestration_config",

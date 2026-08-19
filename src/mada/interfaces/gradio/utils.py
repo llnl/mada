@@ -2,16 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import math
-from typing import Any, List
+from typing import Any, Dict, List
 
 import gradio as gr
 
-from mada.core.config import AgentConfig
+from mada.core.config import AgentConfig, RemoteA2AAgentConfig
 
 
 def create_agent_table(
     agents: List[AgentConfig],
     agent_dict: dict | None = None,
+    a2a_agents: Dict[str, RemoteA2AAgentConfig] | None = None,
 ) -> gr.Dataframe:
     """
     Create a Gradio Dataframe component for agent configuration.
@@ -21,6 +22,8 @@ def create_agent_table(
         agent_dict: An optional mapping from agent name to MCP server tool data
             produced by `cycle_through_tools` and is used to populate the MCP
             Server Tools column.
+        a2a_agents: Optional mapping of remote A2A agent names to configuration
+            values. These agents are displayed as A2A rows in the same table.
 
     Returns:
         The configured Gradio Dataframe component representing agents
@@ -29,6 +32,7 @@ def create_agent_table(
     # Headers for the agent table
     headers = [
         "Agent Name",
+        "Agent Type",
         "Description",
         "Domain",
         "MCP Servers",
@@ -41,6 +45,7 @@ def create_agent_table(
     for agent in agents:
         row = [
             agent.agent_name,
+            "local",
             agent.description,
             getattr(agent, "domain", ""),
             ", ".join(agent.mcp_servers) if agent.mcp_servers else "",
@@ -48,6 +53,18 @@ def create_agent_table(
             if agent_dict is None
             else str(agent_dict[agent.agent_name]),
             agent.instructions,
+        ]
+        table_rows.append(row)
+
+    for agent_name, agent_config in (a2a_agents or {}).items():
+        row = [
+            agent_name,
+            "a2a",
+            "",
+            "a2a",
+            "",
+            f"A2A endpoint: {agent_config.url}",
+            "",
         ]
         table_rows.append(row)
 
