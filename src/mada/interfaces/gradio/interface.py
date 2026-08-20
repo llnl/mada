@@ -120,6 +120,7 @@ class MADAMultiAgentGradioInterface:
             label="Chat",
             height=480,
             elem_id="mada-chatbot",
+            autoscroll=False,  # Disabled to prevent scroll-snap issue; custom JS handles scrolling
         )
 
         message_box = gr.Textbox(

@@ -120,6 +120,7 @@ class MADAOrchestrator(MCPAgentManager):
         self._a2a_clients_by_agent: Dict[str, RemoteA2AClient] = {}
         self._agent_descriptions = {}
         self._mcp_tool_count = 0
+        self._control_agent: Optional[Agent] = None
         self.orchestration = orchestration_config or OrchestrationConfig()
         self.orchestration_strategy = self._build_orchestration_strategy(
             self.orchestration.mode
@@ -228,6 +229,46 @@ class MADAOrchestrator(MCPAgentManager):
             if cfg.agent_name == "PlanningAgent":
                 return cfg
         return None
+
+    def _get_control_agent(self) -> Agent:
+        """
+        Return a tool-free agent for internal control turns.
+
+        Autonomy control prompts must never trigger tool calls, so they run
+        through a dedicated agent with no tools and no shared chat session.
+        """
+        if self._control_agent is not None:
+            return self._control_agent
+
+        instructions = (
+            "You are an internal control agent for the MADA orchestrator.\n"
+            "You MUST NOT call any tools. You will be given a control prompt "
+            "that requires outputting a strict key=value format. Follow it "
+            "exactly.\n"
+            "Do not include explanations or extra text."
+        )
+        self._control_agent = self.model_client.as_agent(
+            name="AutonomyControl",
+            instructions=instructions,
+            tools=[],
+        )
+        return self._control_agent
+
+    async def run_control_prompt(self, prompt: str) -> str:
+        """
+        Run a tool-free control prompt and return the aggregated text.
+
+        This is used for autonomy gating decisions and must not alter the
+        shared interactive planning session or the chat database.
+        """
+        agent = self._get_control_agent()
+        session = agent.create_session()
+        aggregated = ""
+        stream = agent.run(prompt, session=session, stream=True)
+        async for chunk in stream:
+            if getattr(chunk, "text", None):
+                aggregated += chunk.text
+        return aggregated
 
     async def _cleanup_http_client(self, http_client, context: str = ""):
         """

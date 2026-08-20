@@ -68,9 +68,73 @@
     });
   }
 
+  function initSmartAutoscroll(remainingAttempts = 50) {
+    const chatbot = document.getElementById("mada-chatbot");
+    if (!chatbot) {
+      if (remainingAttempts > 0) {
+        window.setTimeout(() => initSmartAutoscroll(remainingAttempts - 1), 200);
+      }
+      return;
+    }
+
+    // Find the scrollable container within the chatbot
+    const scrollContainer = chatbot.querySelector('.scroll-hide, .overflow-y-auto, [class*="overflow"]');
+    if (!scrollContainer) {
+      if (remainingAttempts > 0) {
+        window.setTimeout(() => initSmartAutoscroll(remainingAttempts - 1), 200);
+      }
+      return;
+    }
+
+    if (scrollContainer.dataset.madaScrollInit === "1") return;
+    scrollContainer.dataset.madaScrollInit = "1";
+
+    let userHasScrolledUp = false;
+    let lastScrollTop = scrollContainer.scrollTop;
+    let lastScrollHeight = scrollContainer.scrollHeight;
+
+    // Detect when user manually scrolls
+    scrollContainer.addEventListener('scroll', () => {
+      const scrollTop = scrollContainer.scrollTop;
+      const scrollHeight = scrollContainer.scrollHeight;
+      const clientHeight = scrollContainer.clientHeight;
+      const isAtBottom = Math.abs(scrollHeight - clientHeight - scrollTop) < 5;
+
+      // If user scrolled up manually (not due to content change)
+      if (scrollTop < lastScrollTop && scrollHeight === lastScrollHeight) {
+        userHasScrolledUp = true;
+      }
+
+      // If user scrolled back to bottom, re-enable auto-scroll
+      if (isAtBottom) {
+        userHasScrolledUp = false;
+      }
+
+      lastScrollTop = scrollTop;
+      lastScrollHeight = scrollHeight;
+    }, { passive: true });
+
+    // Observe content changes and auto-scroll only if user hasn't scrolled up
+    const observer = new MutationObserver(() => {
+      if (!userHasScrolledUp) {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      }
+    });
+
+    observer.observe(scrollContainer, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+  }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initResizableChat, { once: true });
+    document.addEventListener("DOMContentLoaded", () => {
+      initResizableChat();
+      initSmartAutoscroll();
+    }, { once: true });
   } else {
     initResizableChat();
+    initSmartAutoscroll();
   }
 })();

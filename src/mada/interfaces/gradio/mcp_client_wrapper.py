@@ -30,6 +30,7 @@ from mada.core.config import (
     MCPServerConfig,
     ModelConfig,
     OrchestrationConfig,
+    RemoteA2AAgentConfig,
 )
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
@@ -52,6 +53,7 @@ class MCPGradioClientSession:
         agents: List[AgentConfig],
         database_config: DatabaseConfig,
         mcp_servers: MCPServerConfig = None,
+        a2a_agents: Dict[str, RemoteA2AAgentConfig] = None,
         orchestration_config: OrchestrationConfig = None,
         blocking: bool = False,
     ):
@@ -61,6 +63,10 @@ class MCPGradioClientSession:
         Args:
             model_config: Model configuration for MADA
             agents: List of agent configurations
+            database_config: Database configuration for chat history
+            mcp_servers: Dictionary of MCP server configurations
+            a2a_agents: Dictionary of remote A2A agent configurations
+            orchestration_config: Orchestration mode configuration
             blocking: If True, wait for each response inline. If False,
                 submit queries in the background and return immediately.
         """
@@ -71,6 +77,7 @@ class MCPGradioClientSession:
         self.orchestrator = None
         self.initialized = False
         self.mcp_servers = mcp_servers or {}
+        self.a2a_agents = a2a_agents or {}
         self.orchestration_config = orchestration_config or OrchestrationConfig()
         self.session_manager = ChatSessionManager(database_config)
         self.session_bearer_token = None  # Store session bearer token
@@ -164,6 +171,7 @@ class MCPGradioClientSession:
             status_msg, tools = await self.orchestrator.initialize_orchestrator(
                 agent_configs=self.agents,  # Use provided agents
                 mcp_servers=self.mcp_servers,  # Placeholder for MCP server config, replace with real config when available
+                a2a_agents=self.a2a_agents,  # Remote A2A agent configurations
             )
             LOG.info("Orchestrator initialization complete!")
             status_msg = (
