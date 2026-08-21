@@ -10,6 +10,7 @@
 
 ### Fixed
 - OpenAI-compatible HTTP clients and streamable MCP HTTP clients now honor configured `verify` values when resolving TLS verification.
+- Specialist agents now honor agent-level extra settings, including default_options, matching the existing PlanningAgent behavior.
 
 ## 0.2.0 - 2026-07-07
 
