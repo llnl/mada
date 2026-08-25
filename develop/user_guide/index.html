@@ -2133,6 +2133,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2241,6 +2245,62 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../developer_guide/core/orchestration/magentic_strategy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    magentic_strategy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../developer_guide/core/orchestration/stream_events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stream_events
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2324,6 +2384,8 @@
       
         
           
+        
+      
         
       
         
@@ -2918,6 +2980,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../developer_guide/interfaces/startup_errors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    startup_errors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -3037,10 +3127,10 @@
 <h1 id="mada-user-guide">MADA User Guide</h1>
 <p>This user guide will cover <a href="installation/">installation</a>, <a href="configuration/">configuration</a>, and <a href="usage/">usage</a> of MADA.</p>
 <h2 id="what-is-mada">What is MADA?</h2>
-<p>MADA is a framework designed to facilitate collaboration between multiple specialized agents within a unified system. Built on top of the autogen framework, MADA orchestrates a <a href="configuration/#the-planning-agent">planning agent</a> that interprets user input and delegates tasks to relevant helper agents. These agents communicate within a group chat environment, enabling dynamic problem-solving and task execution. MADA provides an intuitive interface for users to interact with the agent group, either through the command-line interface or a Gradio-based web interface, streamlining complex workflows and enhancing automation capabilities.</p>
+<p>MADA is a framework designed to facilitate collaboration between multiple specialized agents within a unified system. Built on the Agent Framework, MADA supports multiple <a href="configuration/#optional-orchestration-configuration">orchestration modes</a> for coordinating how agents work together. MADA provides CLI, Gradio, and OpenAI-compatible interfaces for interacting with the configured agent team.</p>
 <h2 id="how-does-mada-work">How Does MADA Work?</h2>
-<p>MADA begins by reading your <a href="configuration/">configuration</a>, which specifies the <a href="configuration/#model-configuration">model</a> for the chat completion client and the <a href="configuration/#agent-configuration">agents</a> to include in the group chat. If you are using the <a href="usage/#gradio-mode-overview">Gradio run mode</a>, you can also provide <a href="configuration/#optional-gradio-interface-configuration">interface</a> settings for customizing the Gradio web application UI.</p>
-<p>After the group chat is established, MADA waits for user input. When a prompt is received, a <a href="configuration/#the-planning-agent">planning agent</a>—added to the group chat automatically—interprets the input and selects the appropriate helper agent to handle the request using an mcp tool call. The helper agent’s response is streamed back to the user through the chosen interface. This interactive process continues until the session ends, either after 10 messages or when the user enters "TERMINATE".</p>
+<p>MADA begins by reading your <a href="configuration/">configuration</a>, which specifies the <a href="configuration/#model-configuration">model</a>, the <a href="configuration/#agent-configuration">agents</a>, and the optional <a href="configuration/#optional-orchestration-configuration">orchestration mode</a>. If you are using the <a href="usage/#gradio-mode-overview">Gradio run mode</a>, you can also provide <a href="configuration/#optional-gradio-interface-configuration">interface</a> settings for customizing the Gradio web application UI.</p>
+<p>After orchestration is initialized, MADA waits for user input. The configured <a href="configuration/#optional-orchestration-configuration">orchestration mode</a> determines how specialists coordinate to process requests. Responses are streamed back through the chosen interface.</p>
 
 
 

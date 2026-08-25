@@ -2226,6 +2226,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2334,6 +2338,62 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer_guide/core/orchestration/magentic_strategy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    magentic_strategy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer_guide/core/orchestration/stream_events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stream_events
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2417,6 +2477,8 @@
       
         
           
+        
+      
         
       
         
@@ -3011,6 +3073,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer_guide/interfaces/startup_errors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    startup_errors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -3177,6 +3267,7 @@
 <li>Model: the value from <code>--model-name</code>, such as <code>mada-team</code></li>
 </ul>
 <p>Open WebUI sends the full chat history in each request. The MADA API mode rebuilds the conversation for each HTTP request so callers do not share state with the CLI or Gradio sessions.</p>
+<p>When <code>orchestration.mode</code> is <code>magentic</code>, MADA still keeps the same OpenAI-compatible request and response shapes. The server runs a fresh Magentic workflow for each request, rebuilds state from the supplied transcript, and returns only the final assistant text rather than internal planning or progress events.</p>
 
 
 
