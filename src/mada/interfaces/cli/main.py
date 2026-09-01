@@ -392,10 +392,10 @@ async def async_main(config_file: str, blocking: bool = False):
         blocking: If True, process one query at a time.
     """
     try:
-        setup_telemetry()
-
         # Load configuration
         config = load_config_from_json(config_file)
+
+        setup_telemetry(disabled=config.telemetry.disabled)
 
         # Run CLI
         cli = MADACLIInterface(config, blocking=blocking)

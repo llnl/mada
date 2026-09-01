@@ -4,6 +4,11 @@
 
 ### Added
 - DOI link to README
+- OpenTelemetry-based observability via Microsoft Agent Framework's built-in
+  instrumentation. Opt in by setting `OTEL_EXPORTER_OTLP_ENDPOINT` and
+  installing the new `telemetry` extra (`pip install --pre -e '.[telemetry]'`).
+  Disable via `telemetry.disabled: true` in the config file. See
+  `docs/user_guide/telemetry.md` for the Aspire Dashboard quickstart.
 
 ### Changed
 - OpenAI-compatible model configs and streamable MCP server configs now support a `verify` setting for TLS verification control.

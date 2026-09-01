@@ -24,6 +24,7 @@ from mada.core.config import (
     OpenAIModelConfig,
     OrchestrationConfig,
     SQLiteConfig,
+    TelemetryConfig,
 )
 from mada.interfaces.a2a.main import (
     MADAA2AService,
@@ -85,6 +86,7 @@ class DummyConfig:
         self.orchestration = OrchestrationConfig()
         self.a2a = A2AConfig()
         self.a2a_agents = {}
+        self.telemetry = TelemetryConfig()
 
 
 @pytest.fixture

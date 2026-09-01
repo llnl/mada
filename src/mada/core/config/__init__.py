@@ -64,6 +64,7 @@ from mada.core.config.orchestration import (
     SUPPORTED_ORCHESTRATION_MODES,
     load_orchestration_config,
 )
+from mada.core.config.telemetry import TelemetryConfig, load_telemetry_config
 from mada.core.config.utils import expand_env_vars
 
 __all__ = [
@@ -83,6 +84,7 @@ __all__ = [
     "DEFAULT_ORCHESTRATION_MODE",
     "SUPPORTED_ORCHESTRATION_MODES",
     "SQLiteConfig",
+    "TelemetryConfig",
     "expand_env_vars",
     "load_config_from_json",
     "load_a2a_config",
@@ -90,4 +92,5 @@ __all__ = [
     "load_database_config",
     "load_model_config",
     "load_orchestration_config",
+    "load_telemetry_config",
 ]

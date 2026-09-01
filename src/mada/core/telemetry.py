@@ -5,17 +5,20 @@
 
 Wraps Microsoft Agent Framework's built-in observability. Setting
 OTEL_EXPORTER_OTLP_ENDPOINT turns on export; see the README for the
-Aspire Dashboard quickstart. MADA_DISABLE_TELEMETRY=true skips setup.
+Aspire Dashboard quickstart. Disable via `telemetry.disabled: true`
+in the config file.
 """
 
 import logging
-import os
 
 LOG = logging.getLogger(__name__)
 
 
-def setup_telemetry() -> None:
-    if os.environ.get("MADA_DISABLE_TELEMETRY", "").lower() in ("1", "true", "yes"):
+def setup_telemetry(disabled: bool = False) -> None:
+    """
+    Configure OpenTelemetry providers unless disabled.
+    """
+    if disabled:
         return
 
     try:
