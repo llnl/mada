@@ -309,6 +309,7 @@ class BaseOrchestrationStrategy(ABC):
         stateless_session: bool = False,
         record_to_db: bool = True,
         background_poll_session_id: str | None = None,
+        persistence_message: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process one interactive user message for this orchestration mode.

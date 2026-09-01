@@ -925,6 +925,7 @@ Guidelines:
         stateless_session: bool = False,
         record_to_db: bool = True,
         background_poll_session_id: str | None = None,
+        persistence_message: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message through a fresh Magentic workflow.
@@ -996,7 +997,7 @@ Guidelines:
                         )
                 elif persistence_session_id is not None:
                     await orchestrator._persist_isolated_response(
-                        message,
+                        persistence_message or message,
                         aggregated_assistant_reply,
                         background_task_descriptors=background_task_descriptors,
                         session_id=persistence_session_id,
@@ -1006,7 +1007,7 @@ Guidelines:
             else:
                 await orchestrator._commit_completed_turn(
                     turn_id,
-                    message,
+                    persistence_message or message,
                     aggregated_assistant_reply,
                     run_session=None,
                     history_lengths={},

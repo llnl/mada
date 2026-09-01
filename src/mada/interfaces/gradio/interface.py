@@ -100,6 +100,7 @@ class MADAMultiAgentGradioInterface:
         agent_table: gr.Dataframe,
         autonomy_level: gr.Slider,
         show_autonomy_debug: gr.Checkbox,
+        session_list: gr.Radio,
     ) -> gr.Chatbot:
         """
         Create the chat message and input components.
@@ -137,7 +138,7 @@ class MADAMultiAgentGradioInterface:
                 autonomy_level,
                 show_autonomy_debug,
             ],
-            outputs=[message_box, chatbot],
+            outputs=[message_box, chatbot, session_list],
             show_progress="hidden",
         )
 
@@ -153,22 +154,49 @@ class MADAMultiAgentGradioInterface:
         Add the user message and stream the assistant response.
         """
         if not message or not message.strip():
-            yield gr.skip(), history
+            yield gr.skip(), history, gr.skip()
             return
 
         updated_history = list(history or [])
         updated_history.append({"role": "user", "content": message})
-        yield "", updated_history
+        yield "", updated_history, gr.skip()
 
         updated_history.append({"role": "assistant", "content": ""})
+        session_id = self.client.session_manager.current_session_id
+        stream_visible = True
         async for response in self.client.process_message(
             message, updated_history, *additional_inputs
         ):
+            current_session_id = self.client.session_manager.current_session_id
+            session_was_missing = session_id is None
+            if session_id is None:
+                session_id = current_session_id
+            elif current_session_id != session_id:
+                stream_visible = False
+                # Request cancellation when user switches sessions
+                if session_id:
+                    self.client._cancel_session_responses(session_id)
+            if not stream_visible:
+                continue
             updated_history[-1] = {
                 "role": "assistant",
                 "content": response,
             }
-            yield gr.skip(), updated_history
+            session_update = gr.skip()
+            if current_session_id and session_was_missing:
+                choices = self.client.get_session_choices()
+                session_update = gr.update(
+                    choices=choices,
+                    value=next(
+                        (
+                            choice
+                            for choice in choices
+                            if choice.endswith(f" | {current_session_id}")
+                        ),
+                        None,
+                    ),
+                )
+            yield gr.skip(), updated_history, session_update
 
     def create_interface(self) -> gr.Blocks:
         """
@@ -294,6 +322,7 @@ class MADAMultiAgentGradioInterface:
                         agent_table,
                         autonomy_level,
                         show_autonomy_debug,
+                        session_list,
                     )
 
             task_refresh.tick(

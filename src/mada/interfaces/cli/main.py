@@ -26,6 +26,7 @@ from mada.core.autonomy import (
 )
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
+from mada.core.orchestration.stream_events import apply_text_control
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -257,6 +258,12 @@ class MADACLIInterface:
         show_autonomy_debug: bool = False,
     ):
         """Run the interactive CLI session."""
+        if autonomy_level > 0 and not self.blocking:
+            raise ValueError(
+                "--autonomy-level requires --blocking because autonomous follow-ups "
+                "cannot be detached safely"
+            )
+
         print("MADA Multi-Agent Orchestrator")
         print("=" * 50)
 
@@ -315,6 +322,13 @@ class MADACLIInterface:
 
                 # Interactive chat loop
                 while True:
+                    # Initialize turn-local state before any operation that
+                    # can fail so the error path cannot reuse a prior turn.
+                    user_input = ""
+                    level = max(0, min(9, int(autonomy_level or 0)))
+                    assistant_buffer = ""
+                    assistant_reply = ""
+                    session_id = self.session_manager.current_session_id
                     try:
                         with patch_stdout():
                             user_input = (
@@ -332,12 +346,6 @@ class MADACLIInterface:
 
                         if not user_input:
                             continue
-
-                        level = int(autonomy_level or 0)
-                        if level < 0:
-                            level = 0
-                        if level > 9:
-                            level = 9
 
                         if not self.blocking and user_input.lower() == "tasks":
                             task_snapshot = (
@@ -371,52 +379,98 @@ class MADACLIInterface:
                         print("\nAgents:")
                         print("-" * 20)
 
-                        if level <= 0:
-                            await orchestrator.background_tasks.run_query(
-                                user_input,
-                                blocking=self.blocking,
-                            )
-                            continue
-
                         model_user_input = user_input
+                        had_pending_clarification = pending_clarification is not None
+                        turn_pending_clarification = pending_clarification
                         if pending_clarification:
-                            model_user_input = (
+                            clarification_context = (
                                 "Previous question you asked the user:\n"
                                 f"{pending_clarification}\n\n"
                                 "User answer:\n"
                                 f"{user_input}"
                             )
-                            pending_clarification = None
+                        else:
+                            clarification_context = model_user_input
+
+                        if level <= 0:
+                            query_kwargs = {"blocking": self.blocking}
+                            if had_pending_clarification:
+                                query_kwargs["persistence_user_input"] = user_input
+                            await orchestrator.background_tasks.run_query(
+                                clarification_context, **query_kwargs
+                            )
+                            if pending_clarification == turn_pending_clarification:
+                                pending_clarification = None
+                            continue
 
                         max_followups = max_autonomy_followups(level)
                         assistant_buffer = ""
+                        model_reply_buffer = ""
                         last_reply = ""
-                        self.session_manager.add_message("user", user_input)
-
+                        # Autonomy prompts are internal scaffolding; keep them
+                        # out of the shared provider session. The visible turn
+                        # is persisted by this interface after the loop.
+                        is_magentic = self.orchestration_config.mode == "magentic"
+                        isolated_session = True
                         autonomy_prompt = build_autonomy_enabled_prompt(
-                            model_user_input,
+                            clarification_context,
                             level=level,
                             followups_used=0,
                             followups_max=max_followups,
                         )
 
                         try:
+                            response_chunks: list[str] = []
+                            stream_terminal = False
+                            response_prefix = assistant_buffer
+                            session_id = self.session_manager.current_session_id
                             async for chunk in orchestrator.process_message(
                                 autonomy_prompt,
+                                isolated_session=isolated_session,
+                                persistence_session_id=session_id,
                                 record_to_db=False,
+                                background_poll_session_id=session_id,
                             ):
-                                last_reply += chunk
-                                assistant_buffer += chunk
-                                print(chunk, end="", flush=True)
-                        except KeyboardInterrupt:
+                                handled, terminal = apply_text_control(
+                                    response_chunks, chunk
+                                )
+                                if handled:
+                                    last_reply = "".join(response_chunks)
+                                    model_reply_buffer = last_reply
+                                    assistant_buffer = response_prefix + last_reply
+                                    # Print replacement/error text so terminal shows corrected output.
+                                    # In non-magentic mode, provisional chunks were already printed;
+                                    # we append the authoritative text so users see the final answer.
+                                    if not is_magentic:
+                                        print(last_reply, end="", flush=True)
+                                    if terminal:
+                                        stream_terminal = True
+                                        break
+                                    continue
+                                content = str(chunk)
+                                response_chunks.append(content)
+                                if not is_magentic:
+                                    last_reply += content
+                                    model_reply_buffer += content
+                                    assistant_buffer += content
+                                    print(content, end="", flush=True)
+                            if is_magentic:
+                                last_reply = "".join(response_chunks)
+                                model_reply_buffer = last_reply
+                                assistant_buffer += last_reply
+                                print(last_reply, end="", flush=True)
+                            if stream_terminal:
+                                max_followups = 0
+                        except asyncio.CancelledError:
                             marker = "\n\n---\n\n[Generation cancelled]\n"
                             print(marker, end="", flush=True)
                             assistant_buffer += marker
-                            if assistant_buffer.strip():
-                                self.session_manager.add_message(
-                                    "assistant",
-                                    assistant_buffer,
-                                )
+                            self.session_manager.add_message("user", user_input)
+                            self.session_manager.add_message(
+                                "assistant",
+                                model_reply_buffer or "[Generation cancelled]",
+                            )
+                            orchestrator.clear_deferred_background_polls(session_id)
                             print("\n")
                             continue
 
@@ -479,6 +533,9 @@ class MADACLIInterface:
                                 question_text = f"\n\n{question}\n"
                                 print(question_text, end="", flush=True)
                                 assistant_buffer += question_text
+                                model_reply_buffer = (
+                                    f"{model_reply_buffer}\n\n{question}".strip()
+                                )
                                 pending_clarification = question
                                 break
 
@@ -506,7 +563,7 @@ class MADACLIInterface:
 
                                 try:
                                     await asyncio.sleep(wait_seconds)
-                                except KeyboardInterrupt:
+                                except asyncio.CancelledError:
                                     interrupted = "\n\n[Autonomous wait interrupted]\n"
                                     print(interrupted, end="", flush=True)
                                     assistant_buffer += interrupted
@@ -528,14 +585,46 @@ class MADACLIInterface:
                                 followups_max=max_followups,
                             )
                             try:
+                                response_chunks = []
+                                followup_reply = ""
+                                stream_terminal = False
+                                response_prefix = assistant_buffer
                                 async for chunk in orchestrator.process_message(
                                     followup_prompt,
+                                    isolated_session=isolated_session,
+                                    persistence_session_id=session_id,
                                     record_to_db=False,
+                                    background_poll_session_id=session_id,
                                 ):
-                                    last_reply += chunk
-                                    assistant_buffer += chunk
-                                    print(chunk, end="", flush=True)
-                            except KeyboardInterrupt:
+                                    handled, terminal = apply_text_control(
+                                        response_chunks, chunk
+                                    )
+                                    if handled:
+                                        last_reply = "".join(response_chunks)
+                                        followup_reply = last_reply
+                                        assistant_buffer = response_prefix + last_reply
+                                        if not is_magentic:
+                                            print(last_reply, end="", flush=True)
+                                        if terminal:
+                                            stream_terminal = True
+                                            break
+                                        continue
+                                    content = str(chunk)
+                                    response_chunks.append(content)
+                                    if not is_magentic:
+                                        last_reply += content
+                                        followup_reply += content
+                                        assistant_buffer += content
+                                        print(content, end="", flush=True)
+                                if is_magentic:
+                                    last_reply = "".join(response_chunks)
+                                    followup_reply = last_reply
+                                    assistant_buffer += last_reply
+                                    print(last_reply, end="", flush=True)
+                                model_reply_buffer += followup_reply
+                                if stream_terminal:
+                                    followup_count = max_followups
+                            except asyncio.CancelledError:
                                 marker = "\n\n---\n\n[Generation cancelled]\n"
                                 print(marker, end="", flush=True)
                                 assistant_buffer += marker
@@ -543,14 +632,24 @@ class MADACLIInterface:
 
                             followup_count += 1
 
-                        if assistant_buffer.strip():
-                            self.session_manager.add_message(
-                                "assistant",
-                                assistant_buffer,
-                            )
+                        # Persist every autonomy turn, including empty model
+                        # completions, so the user's request remains in history.
+                        self.session_manager.add_message("user", user_input)
+                        self.session_manager.add_message(
+                            "assistant",
+                            model_reply_buffer or "[No response]",
+                        )
+                        orchestrator.start_deferred_background_polls(
+                            session_id,
+                            model_reply_buffer or "[No response]",
+                        )
+                        if pending_clarification == turn_pending_clarification:
+                            pending_clarification = None
                         print("\n")
 
                     except KeyboardInterrupt:
+                        if level > 0 and session_id:
+                            orchestrator.clear_deferred_background_polls(session_id)
                         print("\n\nGoodbye!")
                         break
                     except Exception as e:
@@ -558,6 +657,18 @@ class MADACLIInterface:
                         import traceback
 
                         traceback.print_exc()
+                        if level > 0 and user_input and session_id:
+                            error_msg = f"Error processing message: {e}"
+                            assistant_reply = (
+                                f"{model_reply_buffer}\n\n{error_msg}"
+                                if model_reply_buffer.strip()
+                                else error_msg
+                            )
+                            self.session_manager.add_message("user", user_input)
+                            self.session_manager.add_message(
+                                "assistant", assistant_reply
+                            )
+                            orchestrator.clear_deferred_background_polls(session_id)
 
         except BaseExceptionGroup as eg:
             print(

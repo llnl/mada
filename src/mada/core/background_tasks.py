@@ -311,7 +311,12 @@ class BackgroundTaskManager:
                 self._pending_tasks.pop(task_id, None)
             return
 
-    async def run_query(self, user_input: str, blocking: bool = True) -> str:
+    async def run_query(
+        self,
+        user_input: str,
+        blocking: bool = True,
+        persistence_user_input: str | None = None,
+    ) -> str:
         """
         Run a user query inline or as an interface background task.
 
@@ -336,7 +341,9 @@ class BackgroundTaskManager:
                 before the query is detached.
         """
         if blocking:
-            response = await self.collect_message_response(user_input)
+            response = await self.collect_message_response(
+                user_input, persistence_user_input=persistence_user_input
+            )
             print(response)
             print("")
             return response
@@ -365,6 +372,7 @@ class BackgroundTaskManager:
                 ),
                 first_tool_call=first_tool_call,
                 first_tool_state=first_tool_state,
+                persistence_user_input=persistence_user_input,
             )
         )
 

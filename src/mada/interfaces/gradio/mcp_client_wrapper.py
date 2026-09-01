@@ -10,6 +10,7 @@ for the Gradio interface, adapted to work with MADA's architecture.
 
 import asyncio
 import logging
+import threading
 import traceback
 from typing import Any, AsyncGenerator, Dict, List, Tuple
 
@@ -32,8 +33,10 @@ from mada.core.config import (
     OrchestrationConfig,
     RemoteA2AAgentConfig,
 )
+from mada.core.background_tasks import is_background_task_start_ack
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
+from mada.core.orchestration.stream_events import apply_text_control
 from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
 
 LOG = logging.getLogger("mada-gradio")
@@ -83,7 +86,19 @@ class MCPGradioClientSession:
         self.session_bearer_token = None  # Store session bearer token
         self._pending_clarifications: Dict[str, str] = {}
         self._autonomy_cancel_events: Dict[str, asyncio.Event] = {}
-        self._active_response_sessions: set[str] = set()
+        self._response_cancel_events: Dict[str, set[asyncio.Event]] = {}
+        self._cancelled_sessions: set[str] = set()
+        self._active_response_sessions: Dict[str, int] = {}
+        self._active_response_sessions_lock = threading.Lock()
+        self._session_locks: Dict[str, threading.RLock] = {}
+        self._session_locks_lock = threading.Lock()
+
+    def _get_session_lock(self, session_id: str) -> threading.RLock:
+        if not hasattr(self, "_session_locks"):
+            self._session_locks = {}
+            self._session_locks_lock = threading.Lock()
+        with self._session_locks_lock:
+            return self._session_locks.setdefault(session_id, threading.RLock())
 
     def _get_autonomy_cancel_event(self, session_id: str) -> asyncio.Event:
         event = self._autonomy_cancel_events.get(session_id)
@@ -91,6 +106,15 @@ class MCPGradioClientSession:
             event = asyncio.Event()
             self._autonomy_cancel_events[session_id] = event
         return event
+
+    def _cancel_session_responses(self, session_id: str) -> None:
+        """Cancel all responses currently running for a session."""
+        self._get_autonomy_cancel_event(session_id).set()
+        with self._active_response_sessions_lock:
+            for event in getattr(self, "_response_cancel_events", {}).get(
+                session_id, ()
+            ):
+                event.set()
 
     def _persist_turn_to_session(
         self, session_id: str, user_message: str, assistant_message: str
@@ -101,10 +125,19 @@ class MCPGradioClientSession:
         if not session_id or not assistant_message.strip():
             return
 
-        self.session_manager.add_message_to_session(session_id, "user", user_message)
-        self.session_manager.add_message_to_session(
-            session_id, "assistant", assistant_message
-        )
+        with self._get_session_lock(session_id):
+            if session_id in self._cancelled_sessions:
+                return
+            self.session_manager.add_message_to_session(
+                session_id, "user", user_message
+            )
+            self.session_manager.add_message_to_session(
+                session_id, "assistant", assistant_message
+            )
+            if self.orchestrator:
+                self.orchestrator.start_deferred_background_polls(
+                    session_id, assistant_message
+                )
 
     def request_stop(self, session_label: str | None) -> str:
         """
@@ -118,7 +151,7 @@ class MCPGradioClientSession:
         if not session_id:
             return "No active session selected."
 
-        self._get_autonomy_cancel_event(session_id).set()
+        self._cancel_session_responses(session_id)
         return "Stop requested."
 
     async def connect_servers(
@@ -196,7 +229,7 @@ class MCPGradioClientSession:
                 table_agent_dict = agent_dict
             self.initialized = True
             return gr.Button(status_msg, elem_id="green_btn"), create_agent_table(
-                table_agents, table_agent_dict
+                table_agents, table_agent_dict, self.a2a_agents
             )
 
         except BaseExceptionGroup as eg:
@@ -207,7 +240,9 @@ class MCPGradioClientSession:
             error_msg = f"Failed to connect to MCP servers: {e}"
             LOG.error(error_msg)
             LOG.error("Full traceback:", exc_info=True)
-            return gr.Button(error_msg, variant="stop"), create_agent_table(self.agents)
+            return gr.Button(error_msg, variant="stop"), create_agent_table(
+                self.agents, a2a_agents=self.a2a_agents
+            )
 
     def list_sessions(self) -> List[str]:
         """
@@ -250,12 +285,17 @@ class MCPGradioClientSession:
             A tuple containing a gradio update object for updating the
                 sessions list and an empty chat history.
         """
+        previous_id = self.session_manager.current_session_id
+        if previous_id:
+            self._cancel_session_responses(previous_id)
         new_id = self.session_manager.create_session_id()
         self.session_manager.create_new_session(new_id)
         self.session_manager.select_session(new_id)
+        self._cancelled_sessions.discard(new_id)
         self._pending_clarifications.pop(new_id, None)
         self._autonomy_cancel_events.pop(new_id, None)
-        self._active_response_sessions.discard(new_id)
+        self._response_cancel_events.pop(new_id, None)
+        self._active_response_sessions.pop(new_id, None)
         updated_sessions = self.list_sessions()
         return gr.update(
             choices=updated_sessions, value=None
@@ -293,6 +333,9 @@ class MCPGradioClientSession:
 
         # Extract session id from label
         session_id = self._extract_id_from_label(session_label)
+        previous_id = self.session_manager.current_session_id
+        if previous_id and previous_id != session_id:
+            self._cancel_session_responses(previous_id)
 
         history = self.session_manager.select_session(session_id)
 
@@ -316,10 +359,21 @@ class MCPGradioClientSession:
             return gr.update(choices=updated_sessions, value=None), []
 
         session_id = self._extract_id_from_label(session_label)
-        self.session_manager.delete_session(session_id)
+        self._cancelled_sessions.add(session_id)
+        with self._active_response_sessions_lock:
+            cancel_event = self._autonomy_cancel_events.get(session_id)
+            if cancel_event:
+                cancel_event.set()
+            for event in getattr(self, "_response_cancel_events", {}).get(
+                session_id, ()
+            ):
+                event.set()
+        with self._get_session_lock(session_id):
+            self.session_manager.delete_session(session_id)
+        if self.session_manager.current_session_id == session_id:
+            self.session_manager.current_session_id = None
         self._pending_clarifications.pop(session_id, None)
         self._autonomy_cancel_events.pop(session_id, None)
-        self._active_response_sessions.discard(session_id)
         updated_sessions = self.list_sessions()
         return gr.update(
             choices=updated_sessions, value=None
@@ -336,10 +390,21 @@ class MCPGradioClientSession:
         """
         try:
             LOG.info("Attempting to delete all sessions")
-            self.session_manager.delete_all_sessions(confirm=False)
+            with self._active_response_sessions_lock:
+                for event in self._autonomy_cancel_events.values():
+                    event.set()
+                for response_events in getattr(
+                    self, "_response_cancel_events", {}
+                ).values():
+                    for event in response_events:
+                        event.set()
+                self._cancelled_sessions.update(self._active_response_sessions)
+                self._cancelled_sessions.update(self._autonomy_cancel_events)
+                self.session_manager.delete_all_sessions(confirm=False)
+                self._autonomy_cancel_events.clear()
+                self._response_cancel_events.clear()
+                self._active_response_sessions.clear()
             self._pending_clarifications.clear()
-            self._autonomy_cancel_events.clear()
-            self._active_response_sessions.clear()
             LOG.info("Successfully deleted all sessions")
             return gr.update(choices=[], value=None), []
         except Exception as e:
@@ -389,60 +454,114 @@ class MCPGradioClientSession:
             session_id = self.session_manager.create_session_id()
             self.session_manager.create_new_session(session_id)
             self.session_manager.select_session(session_id)
-        self._active_response_sessions.add(session_id)
 
         try:
+            with self._active_response_sessions_lock:
+                self._active_response_sessions[session_id] = (
+                    self._active_response_sessions.get(session_id, 0) + 1
+                )
             level = int(autonomy_level or 0)
             if level < 0:
                 level = 0
             if level > 9:
                 level = 9
 
-            if level <= 0:
-                response = await self.orchestrator.background_tasks.run_query(
-                    message,
-                    blocking=self.blocking,
-                )
-                if (
-                    response.startswith("[task-")
-                    and "Started in background." in response
-                ):
-                    self._persist_turn_to_session(session_id, message, response)
-                yield response
-                return
-
             user_message = original_user_message
-            cancel_event = self._get_autonomy_cancel_event(session_id)
-            cancel_event.clear()
-
-            pending_clarification = self._pending_clarifications.pop(session_id, None)
+            # Keep the clarification available until this answer turn has
+            # completed successfully.  A failed or cancelled retry must be
+            # able to reuse the original question on the next attempt.
+            pending_clarification = self._pending_clarifications.get(session_id)
             if pending_clarification:
-                message = (
+                model_message = (
                     "Previous question you asked the user:\n"
                     f"{pending_clarification}\n\n"
                     "User answer:\n"
                     f"{user_message}"
                 )
+            else:
+                model_message = original_user_message
+
+            if level <= 0:
+                # Pass model_message (with clarification context) to the model,
+                # but persist original_user_message to avoid scaffolding in chat history
+                query_kwargs = {"blocking": self.blocking}
+                if pending_clarification:
+                    query_kwargs["persistence_user_input"] = original_user_message
+                response = await self.orchestrator.background_tasks.run_query(
+                    model_message, **query_kwargs
+                )
+                if not self.blocking and is_background_task_start_ack(response):
+                    self._persist_turn_to_session(
+                        session_id, original_user_message, response
+                    )
+                if (
+                    pending_clarification is not None
+                    and self._pending_clarifications.get(session_id)
+                    == pending_clarification
+                ):
+                    self._pending_clarifications.pop(session_id, None)
+                yield response
+                return
+
+            # Each overlapping response owns a token. Stop requests are
+            # fanned out to active tokens and are never cleared here.
+            with self._active_response_sessions_lock:
+                response_events = getattr(self, "_response_cancel_events", {})
+                active_count = self._active_response_sessions[session_id]
+                cancel_event = asyncio.Event()
+                if active_count == 1:
+                    session_event = self._get_autonomy_cancel_event(session_id)
+                    if not session_event.is_set():
+                        cancel_event = session_event
+                    else:
+                        self._autonomy_cancel_events[session_id] = cancel_event
+                response_events.setdefault(session_id, set()).add(cancel_event)
+                self._response_cancel_events = response_events
 
             max_followups = max_autonomy_followups(level)
+            # Autonomy prompts are internal scaffolding and must never be
+            # merged into the shared provider session. The visible turn is
+            # persisted below after the autonomy loop completes.
+            isolated_session = True
 
             last_reply = ""
+            model_reply_buffer = ""
             prompt_for_model = build_autonomy_enabled_prompt(
-                message,
+                model_message,
                 level=level,
                 followups_used=0,
                 followups_max=max_followups,
             )
+            response_chunks: list[str] = []
+            stream_terminal = False
             async for chunk in self.orchestrator.process_message(
                 prompt_for_model,
+                isolated_session=isolated_session,
+                persistence_session_id=session_id,
                 record_to_db=False,
                 background_poll_session_id=session_id,
             ):
-                last_reply += chunk
-                assistant_buffer += chunk
+                # Check for stop request during streaming
+                if cancel_event.is_set():
+                    break
+                handled, terminal = apply_text_control(response_chunks, chunk)
+                if handled:
+                    last_reply = "".join(response_chunks)
+                    model_reply_buffer = last_reply
+                    assistant_buffer = last_reply
+                    yield assistant_buffer
+                    if terminal:
+                        stream_terminal = True
+                        break
+                    continue
+                content = str(chunk)
+                response_chunks.append(content)
+                last_reply += content
+                model_reply_buffer += content
+                assistant_buffer += content
                 yield assistant_buffer
 
-            followup_count = 0
+            followup_count = max_followups if stream_terminal else 0
             while followup_count < max_followups:
                 if cancel_event.is_set():
                     assistant_buffer += "\n\n---\n\n[Autonomy stopped]\n"
@@ -459,7 +578,7 @@ class MCPGradioClientSession:
                     f"Autonomy level: {level} (0=off, 9=most autonomous)\n"
                     f"Follow-up safety cap used: {followup_count}/{max_followups}\n\n"
                     "User request:\n"
-                    f"{message}\n\n"
+                    f"{original_user_message}\n\n"
                     "Assistant reply:\n"
                     f"{(last_reply or '').strip()}\n\n"
                     "Assistant transcript so far (tail):\n"
@@ -526,6 +645,7 @@ class MCPGradioClientSession:
 
                 if decision == "ASK" and question:
                     assistant_buffer += f"\n\n{question}"
+                    model_reply_buffer = f"{model_reply_buffer}\n\n{question}".strip()
                     yield assistant_buffer
                     self._pending_clarifications[session_id] = question
                     break
@@ -567,28 +687,63 @@ class MCPGradioClientSession:
                 last_reply = ""
                 followup_prompt = build_autonomy_followup_prompt(
                     next_query,
-                    original_request=message,
+                    original_request=original_user_message,
                     last_reply=previous_reply,
                     assistant_buffer=assistant_buffer,
                     level=level,
                     followups_used=followup_count,
                     followups_max=max_followups,
                 )
+                response_chunks = []
+                followup_reply = ""
+                response_prefix = assistant_buffer
+                stream_terminal = False
                 async for chunk in self.orchestrator.process_message(
                     followup_prompt,
+                    isolated_session=isolated_session,
+                    persistence_session_id=session_id,
                     record_to_db=False,
                     background_poll_session_id=session_id,
                 ):
-                    last_reply += chunk
-                    assistant_buffer += chunk
+                    if cancel_event.is_set():
+                        break
+                    handled, terminal = apply_text_control(response_chunks, chunk)
+                    if handled:
+                        last_reply = "".join(response_chunks)
+                        followup_reply = last_reply
+                        assistant_buffer = response_prefix + last_reply
+                        yield assistant_buffer
+                        if terminal:
+                            stream_terminal = True
+                            break
+                        continue
+                    content = str(chunk)
+                    response_chunks.append(content)
+                    last_reply += content
+                    followup_reply += content
+                    assistant_buffer += content
                     yield assistant_buffer
 
+                model_reply_buffer += followup_reply
+                if cancel_event.is_set():
+                    assistant_buffer += "\n\n---\n\n[Autonomy stopped]\n"
+                    yield assistant_buffer
+                    break
+                if stream_terminal:
+                    break
                 followup_count += 1
 
-            if assistant_buffer.strip():
-                self._persist_turn_to_session(
-                    session_id, user_message, assistant_buffer
-                )
+            # Always persist when autonomy is enabled, even if buffer is empty,
+            # to ensure deferred background tasks are started
+            self._persist_turn_to_session(
+                session_id, user_message, model_reply_buffer or "[No response]"
+            )
+            if (
+                pending_clarification is not None
+                and self._pending_clarifications.get(session_id)
+                == pending_clarification
+            ):
+                self._pending_clarifications.pop(session_id, None)
 
         except asyncio.CancelledError:
             if session_id:
@@ -596,8 +751,11 @@ class MCPGradioClientSession:
             marker = "\n\n---\n\n[Generation cancelled]\n"
             assistant_buffer = (assistant_buffer or "") + marker
             if assistant_buffer.strip() and int(autonomy_level or 0) > 0:
+                self.orchestrator.clear_deferred_background_polls(session_id)
                 self._persist_turn_to_session(
-                    session_id, original_user_message, assistant_buffer
+                    session_id,
+                    original_user_message,
+                    locals().get("model_reply_buffer") or "[Generation cancelled]",
                 )
             yield assistant_buffer
             return
@@ -607,17 +765,32 @@ class MCPGradioClientSession:
             traceback.print_exc()
             if assistant_buffer.strip():
                 assistant_buffer += f"\n\n{error_msg}"
-                assistant_reply = assistant_buffer
-            else:
-                assistant_reply = error_msg
+            assistant_reply = assistant_buffer or error_msg
+            model_reply = locals().get("model_reply_buffer", "")
+            persisted_reply = (
+                f"{model_reply}\n\n{error_msg}" if model_reply.strip() else error_msg
+            )
             if int(autonomy_level or 0) > 0:
+                self.orchestrator.clear_deferred_background_polls(session_id)
                 self._persist_turn_to_session(
-                    session_id, original_user_message, assistant_reply
+                    session_id, original_user_message, persisted_reply
                 )
             yield assistant_reply
         finally:
             if session_id:
-                self._active_response_sessions.discard(session_id)
+                with self._active_response_sessions_lock:
+                    response_events = getattr(self, "_response_cancel_events", {}).get(
+                        session_id
+                    )
+                    if response_events:
+                        response_events.discard(locals().get("cancel_event"))
+                        if not response_events:
+                            self._response_cancel_events.pop(session_id, None)
+                    active_count = self._active_response_sessions.get(session_id, 0)
+                    if active_count <= 1:
+                        self._active_response_sessions.pop(session_id, None)
+                    else:
+                        self._active_response_sessions[session_id] = active_count - 1
 
     async def get_task_status_markdown(self) -> str:
         """
@@ -660,7 +833,7 @@ class MCPGradioClientSession:
         """
         task_status = await self.get_task_status_markdown()
         session_id = self.session_manager.current_session_id
-        if session_id and session_id in self._active_response_sessions:
+        if session_id and self._active_response_sessions.get(session_id, 0) > 0:
             return gr.skip(), task_status
         if (
             not self.orchestrator

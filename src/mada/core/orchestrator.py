@@ -116,6 +116,9 @@ class MADAOrchestrator(MCPAgentManager):
         self._next_turn_id = 1
         self._next_turn_commit_id = 1
         self._completed_turns: Dict[int, Dict[str, Any]] = {}
+        self._deferred_background_task_descriptors: Dict[
+            str, List[Tuple[str, List[str]]]
+        ] = {}
         self._mcp_tools_by_server: Dict[str, Any] = {}
         self._a2a_clients_by_agent: Dict[str, RemoteA2AClient] = {}
         self._agent_descriptions = {}
@@ -960,6 +963,7 @@ Guidelines:
         stateless_session: bool = False,
         record_to_db: bool = True,
         background_poll_session_id: Optional[str] = None,
+        persistence_message: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message using the configured strategy.
@@ -972,6 +976,7 @@ Guidelines:
             stateless_session=stateless_session,
             record_to_db=record_to_db,
             background_poll_session_id=background_poll_session_id,
+            persistence_message=persistence_message,
         ):
             yield chunk
 
@@ -1139,14 +1144,22 @@ Guidelines:
                     self.session_manager.current_session_id = previous_session_id
             return
 
-        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-            assistant_reply, session_id=background_poll_session_id
-        )
-        for descriptor in background_task_descriptors or []:
-            self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-                descriptor, session_id=background_poll_session_id
-            )
         if not record_to_db:
+            # The caller owns persistence for deferred turns. Polling must be
+            # started after it writes the user/assistant pair, otherwise a fast
+            # result can be inserted ahead of that turn.
+            deferred_session_id = background_poll_session_id
+            if not deferred_session_id and self.session_manager:
+                deferred_session_id = self.session_manager.current_session_id
+            if not deferred_session_id:
+                LOG.warning(
+                    "Cannot defer background task descriptors: no session ID available. "
+                    "Background tasks will not be polled."
+                )
+            else:
+                self._deferred_background_task_descriptors.setdefault(
+                    deferred_session_id, []
+                ).append((assistant_reply, list(background_task_descriptors or [])))
             return
 
         # Check if interface layer already persisted a background-start ACK
@@ -1166,12 +1179,80 @@ Guidelines:
                 self.session_manager.add_message("assistant", assistant_reply)
 
         self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-            assistant_reply
+            assistant_reply, session_id=background_poll_session_id
         )
         for descriptor in background_task_descriptors or []:
             self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-                descriptor
+                descriptor, session_id=background_poll_session_id
             )
+
+    def start_deferred_background_polls(
+        self, session_id: str, assistant_reply: str
+    ) -> None:
+        """Start deferred background pollers after the owning turn is stored."""
+        deferred_replies = self._deferred_background_task_descriptors.get(
+            session_id, []
+        )
+
+        def matches_persisted_reply(
+            deferred_reply: str, descriptors: List[str]
+        ) -> bool:
+            """Match a raw sub-response inside the UI's labeled transcript."""
+            expected = re.sub(r"\s+", " ", deferred_reply).strip()
+            if not expected:
+                return bool(descriptors) and assistant_reply.strip() == "[No response]"
+            # Only autonomy UI separators are structural. A plain Markdown
+            # horizontal rule is part of the model reply and must remain intact.
+            sections = re.split(
+                r"(?:^|\n)\s*---\s*\n(?=\s*\[(?:Autonomous|Autonomy|Generation cancelled)\b)",
+                assistant_reply,
+            )
+            for section in sections:
+                # Strip autonomy UI labels like [Autonomous follow-up] and [Autonomous query]
+                # before matching, as these are added for display but not in the deferred reply
+                stripped = re.sub(
+                    r"\[Autonomous (?:follow-up|wait|query|wait interrupted|stopped)\][^\n]*\n?",
+                    "",
+                    section,
+                    flags=re.IGNORECASE,
+                )
+                stripped = re.sub(r"\[Wait seconds\][^\n]*\n?", "", stripped)
+                actual = re.sub(r"\s+", " ", stripped).strip()
+                # Permit UI-generated tail text (clarifications/errors) while
+                # still requiring a boundary so short replies do not match
+                # merely because they are prefixes of unrelated text.
+                if actual == expected or actual.startswith(expected + " "):
+                    return True
+            return False
+
+        matching_replies = [
+            entry
+            for entry in deferred_replies
+            if matches_persisted_reply(entry[0], entry[1])
+        ]
+        if not matching_replies:
+            return
+        self._deferred_background_task_descriptors[session_id] = [
+            entry for entry in deferred_replies if entry not in matching_replies
+        ]
+        if not self._deferred_background_task_descriptors[session_id]:
+            self._deferred_background_task_descriptors.pop(session_id, None)
+        # Do not add a fallback here. If the deferred list is empty, there are
+        # no background tasks to poll. Reparsing assistant_reply creates phantom
+        # tasks when the reply contains JSON that resembles task descriptors.
+        for deferred_reply, descriptors in matching_replies:
+            if deferred_reply.strip():
+                self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                    deferred_reply, session_id=session_id
+                )
+            for descriptor in descriptors:
+                self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                    descriptor, session_id=session_id
+                )
+
+    def clear_deferred_background_polls(self, session_id: str) -> None:
+        """Clear deferred background task descriptors for a session (e.g., on error/cancellation)."""
+        self._deferred_background_task_descriptors.pop(session_id, None)
 
     async def _commit_completed_turn(
         self,
@@ -1320,15 +1401,19 @@ Guidelines:
         message = completed["message"]
         assistant_reply = completed["assistant_reply"]
         background_task_descriptors = completed.get("background_task_descriptors", [])
+        poll_session_id = completed.get("background_poll_session_id")
 
-        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-            assistant_reply, session_id=completed.get("background_poll_session_id")
-        )
-        for descriptor in background_task_descriptors:
-            self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-                descriptor, session_id=completed.get("background_poll_session_id")
-            )
-        if not completed.get("record_to_db", True):
+        record_to_db = completed.get("record_to_db", True)
+        if not record_to_db:
+            # The interface owns persistence for deferred turns. Queue polling
+            # until it has written the user/assistant pair.
+            deferred_session_id = poll_session_id
+            if not deferred_session_id and self.session_manager:
+                deferred_session_id = self.session_manager.current_session_id
+            if deferred_session_id:
+                self._deferred_background_task_descriptors.setdefault(
+                    deferred_session_id, []
+                ).append((assistant_reply, list(background_task_descriptors)))
             return
 
         # Check if interface layer already persisted a background-start ACK
@@ -1347,6 +1432,14 @@ Guidelines:
             if not (already_started and is_bg_ack):
                 self.session_manager.add_message("assistant", assistant_reply)
 
+        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+            assistant_reply, session_id=poll_session_id
+        )
+        for descriptor in background_task_descriptors:
+            self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                descriptor, session_id=poll_session_id
+            )
+
     async def collect_message_response(
         self,
         message: str,
@@ -1355,6 +1448,7 @@ Guidelines:
         stateless_session: bool = False,
         first_tool_call: Optional[asyncio.Event] = None,
         first_tool_state: Optional[Dict[str, str]] = None,
+        persistence_user_input: Optional[str] = None,
     ) -> str:
         """
         Collect a streamed assistant response into a single string.
@@ -1392,6 +1486,7 @@ Guidelines:
             isolated_session=isolated_session,
             persistence_session_id=persistence_session_id,
             stateless_session=stateless_session,
+            persistence_message=persistence_user_input,
         ):
             internal_tool_call_name = tool_call_name(response_chunk)
             if (
@@ -1438,6 +1533,7 @@ Guidelines:
             self._completed_turns.clear()
             self._next_turn_id = 1
             self._next_turn_commit_id = 1
+            self._deferred_background_task_descriptors.clear()
             self._mcp_tools_by_server.clear()
             for client in self._a2a_clients_by_agent.values():
                 await client.aclose()

@@ -39,7 +39,8 @@ def default_wait_seconds_from_user_message(message: str) -> int:
     if not match:
         return 20
     try:
-        return int(float(match.group(1)))
+        # Round to nearest second instead of flooring to support subsecond values
+        return max(1, round(float(match.group(1))))
     except (TypeError, ValueError):
         return 20
 

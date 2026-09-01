@@ -196,6 +196,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         stateless_session: bool = False,
         record_to_db: bool = True,
         background_poll_session_id: str | None = None,
+        persistence_message: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message through the planning agent.
@@ -259,7 +260,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                         )
                     return
                 await orchestrator._persist_isolated_response(
-                    message,
+                    persistence_message or message,
                     aggregated_assistant_reply,
                     background_task_descriptors=background_task_descriptors,
                     session_id=persistence_session_id,
@@ -270,7 +271,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
 
             await orchestrator._commit_completed_turn(
                 turn_id,
-                message,
+                persistence_message or message,
                 aggregated_assistant_reply,
                 run_session,
                 history_lengths,
