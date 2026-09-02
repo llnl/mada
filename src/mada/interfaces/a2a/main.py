@@ -17,10 +17,12 @@ through the `a2a.agents` configuration block.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import inspect
 import json
 import re
 import secrets
+import socket
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -46,6 +48,8 @@ from starlette.routing import Route
 
 from mada.core import load_config_from_json
 from mada.core.config import A2AConfig, AppConfig, OrchestrationConfig
+from mada.core.orchestration.stream_events import apply_text_control
+from mada.interfaces.startup_errors import format_startup_error_message
 from mada.core.telemetry import setup_telemetry
 
 if TYPE_CHECKING:
@@ -86,23 +90,6 @@ class A2AAuthMiddleware:
                 return
 
         await self.app(scope, receive, send)
-
-
-def _format_startup_error_message(exc: BaseException) -> str:
-    """
-    Convert orchestrator startup failures into user-facing A2A error text.
-    """
-    details = str(exc).strip() or exc.__class__.__name__
-    lowered = details.lower()
-
-    if "connect" in lowered or "connection" in lowered or "cancellederror" in lowered:
-        return (
-            "MADA could not connect to one or more MCP servers. "
-            "Check the MCP server processes and the URLs/commands in your config. "
-            f"Details: {details}"
-        )
-
-    return f"MADA failed to initialize the configured agent team. Details: {details}"
 
 
 class MADAA2AService:
@@ -158,7 +145,7 @@ class MADAA2AService:
                 await orchestrator.__aexit__(None, None, None)
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
-            raise A2AStartupError(_format_startup_error_message(exc)) from exc
+            raise A2AStartupError(format_startup_error_message(exc)) from exc
 
     async def ensure_started(self) -> None:
         """
@@ -291,26 +278,64 @@ class MADAA2AService:
     async def collect_response(self, message: str) -> str:
         """
         Collect a complete orchestrator response for a single A2A message.
+
+        Uses isolated sessions to avoid interference with the main orchestrator
+        session, but does not persist conversation history across A2A requests
+        by design (A2A protocol is stateless per-request).
         """
         if self.orchestrator is None:
             raise RuntimeError("Orchestrator not initialized")
         return await self.orchestrator.collect_message_response(
             message,
             isolated_session=True,
+            stateless_session=True,
         )
 
     async def stream_response(self, message: str) -> AsyncGenerator[str, None]:
         """
-        Stream orchestrator response chunks for a single A2A message.
+        Yield the authoritative orchestrator response for a single A2A message.
+
+        Magentic can emit replacement/error control chunks after provisional
+        text. A2A string streams have no retract operation, so Magentic output
+        is buffered and yielded only after its authoritative content is known.
+        Other orchestration modes stream chunks immediately.
+
+        Uses isolated sessions to avoid interference with the main orchestrator
+        session, but does not persist conversation history across A2A requests
+        by design (A2A protocol is stateless per-request).
         """
         if self.orchestrator is None:
             raise RuntimeError("Orchestrator not initialized")
 
+        orchestration_config = (
+            getattr(self.config, "orchestration", None) or OrchestrationConfig()
+        )
+        is_magentic = orchestration_config.mode == "magentic"
+        chunks: list[str] = []
         async for chunk in self.orchestrator.process_message(
             message,
             isolated_session=True,
+            stateless_session=True,
         ):
-            yield chunk
+            if not is_magentic:
+                content = str(chunk)
+                if content:
+                    yield content
+                continue
+
+            handled, terminal = apply_text_control(chunks, chunk)
+            if handled:
+                if terminal:
+                    break
+                continue
+
+            content = str(chunk)
+            if content:
+                chunks.append(content)
+
+        content = "".join(chunks)
+        if content:
+            yield content
 
 
 def _extract_message_text(value: Any) -> str:
@@ -485,7 +510,7 @@ def run_a2a(
     """
     Launch the A2A server.
     """
-    card_url = public_url or f"http://{host}:{port}"
+    card_url = _resolve_public_a2a_url(host, port, public_url)
     app = create_a2a_app(
         config=config,
         public_url=card_url,
@@ -493,6 +518,60 @@ def run_a2a(
         bearer_token=bearer_token,
     )
     uvicorn.run(app, host=host, port=port)
+
+
+def _resolve_public_a2a_url(
+    host: str,
+    port: int,
+    public_url: Optional[str] = None,
+) -> str:
+    """
+    Return the URL to advertise in the A2A agent card.
+    """
+    if public_url:
+        return public_url
+    advertised_host = _resolve_advertised_host(host)
+    if ":" in advertised_host and not advertised_host.startswith("["):
+        advertised_host = f"[{advertised_host}]"
+    return f"http://{advertised_host}:{port}"
+
+
+def _resolve_advertised_host(host: str) -> str:
+    """
+    Resolve wildcard bind hosts to a non-loopback local address for agent cards.
+
+    Deployments behind NAT or a reverse proxy should use ``--public-url`` to
+    advertise their externally routed URL.
+    """
+    if host not in {"0.0.0.0", "::"}:
+        return host
+
+    family = socket.AF_INET if host == "0.0.0.0" else socket.AF_INET6
+    try:
+        addresses = socket.getaddrinfo(
+            socket.gethostname(),
+            None,
+            family=family,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror:
+        addresses = []
+
+    for _, _, _, _, sockaddr in addresses:
+        address = sockaddr[0]
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if not (
+            parsed.is_loopback
+            or parsed.is_unspecified
+            or parsed.is_link_local
+            or parsed.is_multicast
+        ):
+            return address
+
+    return socket.getfqdn()
 
 
 def a2a_entrypoint(
@@ -510,7 +589,7 @@ def a2a_entrypoint(
         print(f"Loading configuration from {config_file}")
         config = load_config_from_json(config_file)
         setup_telemetry(disabled=config.telemetry.disabled)
-        card_url = public_url or f"http://{host}:{port}"
+        card_url = _resolve_public_a2a_url(host, port, public_url)
         print(f"Serving A2A API on {card_url}")
         run_a2a(
             config=config,

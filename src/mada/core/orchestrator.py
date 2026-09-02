@@ -4,9 +4,10 @@
 """
 Core orchestration logic for MADA multi-agent system.
 
-This module contains the main orchestration logic extracted from the interface layers.
-It manages MCP server connections, agent creation, and Agent Framework coordination
-using the Planning Agent + Agent-as-Tool pattern.
+This module contains the shared orchestration runtime extracted from the
+interface layers. It owns MCP server connections, agent creation, session
+persistence, and strategy selection. Mode-specific request handling lives in
+`mada.core.orchestration`.
 """
 
 import asyncio
@@ -45,6 +46,11 @@ from mada.core.database import ChatSessionManager
 from mada.core.orchestration import (
     AgentAsToolOrchestrationStrategy,
     BaseOrchestrationStrategy,
+    MagenticOrchestrationStrategy,
+)
+from mada.core.orchestration.stream_events import (
+    apply_text_control,
+    tool_call_name,
 )
 from mada.core.tls import resolve_httpx_verify_value
 
@@ -55,14 +61,16 @@ LOG = logging.getLogger(__name__)
 class MADAOrchestrator(MCPAgentManager):
     """
     Core orchestrator for MADA multi-agent system.
-    Manages MCP server connections, agent creation, and planning agent coordination
-    using the Agent Framework's Planning Agent + Agent-as-Tool pattern.
-    This class contains the core logic extracted from interface-specific implementations.
+
+    Manages MCP server connections, agent creation, shared session state, and
+    persistence. Concrete orchestration behavior is delegated to the configured
+    strategy so mode-specific logic stays out of this shared runtime.
 
     Attributes:
         exit_stack (AsyncExitStack): Context manager for server connections
         specialist_agents (List[Agent]): Specialist agents in the session
-        planning_agent (Agent): The planning/coordination agent that routes to specialists
+        planning_agent (Agent): Agent-as-tool planner, when that mode is active.
+        manager_agent (Agent): Hidden Magentic manager, when that mode is active.
         session: AgentSession for maintaining conversation state
         mcp_servers (Dict[str, MCPServerConfig]): A dictionary store of MCP server configurations
         session_manager (ChatSessionManager): The high-level API for interacting
@@ -99,6 +107,7 @@ class MADAOrchestrator(MCPAgentManager):
         self.exit_stack = AsyncExitStack()
         self.specialist_agents = []
         self.planning_agent = None
+        self.manager_agent = None
         self.mcp_servers = {}
         self.a2a_agents = {}
         self._a2a_agent_cards: Dict[str, Dict[str, Any]] = {}
@@ -152,6 +161,8 @@ class MADAOrchestrator(MCPAgentManager):
         """
         if mode == AgentAsToolOrchestrationStrategy.mode:
             return AgentAsToolOrchestrationStrategy()
+        if mode == MagenticOrchestrationStrategy.mode:
+            return MagenticOrchestrationStrategy()
 
         raise ValueError(f"unsupported orchestration mode: {mode}")
 
@@ -210,7 +221,8 @@ class MADAOrchestrator(MCPAgentManager):
               "instructions": "You are a planning agent that..."
             }
 
-        This entry is used to customize the planning agent created by the orchestrator.
+        This entry customizes the visible planner in `agent-as-tool` mode and
+        the hidden manager in `magentic` mode.
         """
         for cfg in agent_configs:
             if cfg.agent_name == "PlanningAgent":
@@ -728,11 +740,13 @@ Guidelines:
             return description
         return f"{description} Skills: {'; '.join(skill_lines)}"
 
-    async def _load_remote_a2a_agent_cards(self) -> None:
+    async def _load_remote_a2a_agent_cards(self) -> List[Dict[str, str]]:
         """
         Fetch remote A2A agent cards for planner routing context.
         """
         self._a2a_agent_cards.clear()
+        active_agents = {}
+        failed_agents = []
         for agent_name, agent_config in self.a2a_agents.items():
             client = self._a2a_clients_by_agent.get(agent_name)
             if client is None:
@@ -740,16 +754,33 @@ Guidelines:
                 self._a2a_clients_by_agent[agent_name] = client
             try:
                 card = await client.get_agent_card()
+                if not card:
+                    raise RuntimeError(agent_config.card_url or agent_config.url)
             except Exception as exc:
-                raise RuntimeError(
-                    f"Could not fetch A2A agent card for {agent_name}: {exc}"
-                ) from exc
-            if not card:
-                raise RuntimeError(
-                    f"Could not fetch A2A agent card for {agent_name}: "
-                    f"{agent_config.card_url or agent_config.url}"
+                LOG.warning(
+                    "Could not fetch A2A agent card for %s: %s",
+                    agent_name,
+                    exc,
                 )
+                failed_agents.append(
+                    {
+                        "agent": agent_name,
+                        "url": agent_config.card_url or agent_config.url,
+                        "error": str(exc),
+                    }
+                )
+                try:
+                    await client.aclose()
+                except Exception:
+                    LOG.debug("Error closing failed A2A client", exc_info=True)
+                self._a2a_clients_by_agent.pop(agent_name, None)
+                continue
+
             self._a2a_agent_cards[agent_name] = card
+            active_agents[agent_name] = agent_config
+
+        self.a2a_agents = active_agents
+        return failed_agents
 
     async def initialize_orchestrator(
         self,
@@ -821,21 +852,12 @@ Guidelines:
 
         return str(content)
 
-    def build_prompt_from_openai_messages(self, messages: List[Dict[str, Any]]) -> str:
+    def _normalize_transcript_messages(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, str]]:
         """
-        Flatten OpenAI-style chat messages into a single prompt.
-
-        Open WebUI sends the full conversation history on each request. The agent
-        framework session used by the CLI is not shared here; instead we rebuild the
-        transcript for each HTTP request to keep requests isolated.
-
-        Args:
-            messages: OpenAI-style chat messages. Each message is expected to
-                include at least a `role` and `content`.
-
-        Returns:
-            A single prompt string that contains the conversation transcript and
-            instructions to continue as the assistant.
+        Normalize OpenAI-style messages or persisted chat history into a shared
+        role/content transcript format.
         """
         transcript = []
         for message in messages:
@@ -844,7 +866,28 @@ Guidelines:
             content = self._stringify_openai_content(message.get("content")).strip()
             if not content:
                 continue
-            transcript.append(f"{role.upper()}:\n{content}")
+            transcript.append({"role": role, "content": content})
+
+        return transcript
+
+    def build_prompt_from_transcript(self, messages: List[Dict[str, Any]]) -> str:
+        """
+        Flatten a normalized transcript into a single prompt.
+
+        This is used both for OpenAI-style HTTP request messages and for
+        persisted interactive session history when rebuilding a fresh workflow.
+
+        Args:
+            messages: Transcript messages with `role` and `content` keys.
+
+        Returns:
+            A single prompt string that contains the conversation transcript and
+            instructions to continue as the assistant.
+        """
+        transcript = [
+            f"{message['role'].upper()}:\n{message['content']}"
+            for message in self._normalize_transcript_messages(messages)
+        ]
 
         if not transcript:
             return "USER:\nPlease introduce yourself."
@@ -861,125 +904,31 @@ Guidelines:
         messages: List[Dict[str, Any]],
     ) -> AsyncGenerator[str, None]:
         """
-        Process OpenAI-style chat messages without reusing the interactive session.
-
-        Each request gets a fresh Agent Framework session so HTTP callers do not
-        share state with the CLI, Gradio, or each other.
-
-        Args:
-            messages: OpenAI-style chat messages representing the full request
-                history.
-
-        Yields:
-            Response text chunks from the planning agent, plus bracketed tool
-            call notices when the underlying stream reports them.
+        Process OpenAI-style chat messages using the configured strategy.
         """
-        if not self.planning_agent:
-            yield "Error: Orchestrator not initialized."
-            return
-
-        prompt = self.build_prompt_from_openai_messages(messages)
-        request_session = self.planning_agent.create_session()
-
-        try:
-            response_started = False
-            stream = self.planning_agent.run(
-                prompt, session=request_session, stream=True
-            )
-            async for chunk in stream:
-                if chunk.text:
-                    response_started = True
-                    yield chunk.text
-                elif hasattr(chunk, "contents") and chunk.contents:
-                    for content in chunk.contents:
-                        if hasattr(content, "to_dict"):
-                            item = content.to_dict()
-                            if item.get("type") in (
-                                "function_call",
-                                "tool_call",
-                            ) and item.get("name"):
-                                yield f"\n[Calling: {item['name']}]\n"
-
-            if not response_started:
-                LOG.warning(
-                    "No text chunks received from planning agent for OpenAI API request"
-                )
-
-        except Exception as e:
-            error_msg = f"Error processing message: {e}"
-            LOG.error(error_msg)
-            traceback.print_exc()
-            yield error_msg
+        async for chunk in self.orchestration_strategy.process_openai_messages(
+            self, messages
+        ):
+            yield chunk
 
     async def process_message(
         self,
         message: str,
         isolated_session: bool = False,
+        persistence_session_id: Optional[str] = None,
+        stateless_session: bool = False,
     ) -> AsyncGenerator[str, None]:
         """
-        Process a user message through the planning agent.
-
-        The planning agent routes to specialist agents as needed using the
-        as_tool() pattern. Each request runs on a copy of the active session so
-        overlapping UI requests do not mutate shared chat state mid-stream.
-
-        Args:
-            message: User input message.
-            isolated_session: If True, use a fresh agent session instead of a
-                copy of the shared orchestrator session. This is used for
-                overlapping background work so concurrent queries do not share
-                or mutate the same agent conversation state while another turn
-                is still running. This is more conservative than append-only
-                transcript merging because `AgentSession` can contain
-                provider-specific state beyond messages, and an overlapping turn
-                cannot see the unfinished turn's eventual result.
-
-        Yields:
-            Response text chunks from the planning agent, plus bracketed tool
-            call notices when the underlying stream reports them.
+        Process a user message using the configured strategy.
         """
-        if not self.planning_agent:
-            yield "Error: Orchestrator not initialized. Call initialize_orchestrator() first."
-            return
-
-        aggregated_assistant_reply = ""
-        tool_calls = []
-        response_started = False
-
-        try:
-            turn_id, run_session, history_lengths = await self._create_run_session(
-                isolated_session
-            )
-
-            # Stream responses from the planning agent with conversation context
-            stream = self.planning_agent.run(message, session=run_session, stream=True)
-            async for chunk in stream:
-                if chunk.text:
-                    response_started = True
-                    aggregated_assistant_reply += chunk.text
-                    yield chunk.text
-                    continue
-
-                for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
-                    yield notice
-
-            if not response_started:
-                LOG.warning("No text chunks received from planning agent")
-
-            if isolated_session:
-                self._persist_isolated_response(message, aggregated_assistant_reply)
-                return
-
-            await self._commit_completed_turn(
-                turn_id,
-                message,
-                aggregated_assistant_reply,
-                run_session,
-                history_lengths,
-            )
-
-        except Exception as e:
-            yield self._process_message_error(e)
+        async for chunk in self.orchestration_strategy.process_message(
+            self,
+            message,
+            isolated_session=isolated_session,
+            persistence_session_id=persistence_session_id,
+            stateless_session=stateless_session,
+        ):
+            yield chunk
 
     @staticmethod
     def _process_message_error(error: Exception) -> str:
@@ -1065,6 +1014,24 @@ Guidelines:
 
         return turn_id, run_session, history_lengths
 
+    async def _load_history_for_session(self, session_id: str) -> List[Dict]:
+        """
+        Load chat history for a specific persisted session.
+
+        Args:
+            session_id: Chat session ID to read.
+
+        Returns:
+            Stored chat history for the session.
+        """
+        async with self._session_lock:
+            previous_session_id = self.session_manager.current_session_id
+            self.session_manager.current_session_id = session_id
+            try:
+                return self.session_manager.load_history()
+            finally:
+                self.session_manager.current_session_id = previous_session_id
+
     @staticmethod
     def _provider_message_lengths(session: AgentSession) -> Dict[str, int]:
         """
@@ -1084,48 +1051,12 @@ Guidelines:
                 history_lengths[provider_name] = len(provider_state["messages"])
         return history_lengths
 
-    @staticmethod
-    def _tool_call_notices_from_chunk(chunk: Any, tool_calls: List[Any]) -> List[str]:
-        """
-        Return tool-call notices for first appearances of tool calls in a chunk.
-
-        Args:
-            chunk: Streaming response chunk from the planning agent.
-            tool_calls: Mutable list of already reported tool call IDs or names.
-
-        Returns:
-            Formatted tool-call notices for new tool calls in the chunk.
-        """
-        if not hasattr(chunk, "contents") or not chunk.contents:
-            return []
-
-        notices = []
-        for content in chunk.contents:
-            if not hasattr(content, "to_dict"):
-                continue
-
-            item = content.to_dict()
-            if item.get("type") not in ("function_call", "tool_call"):
-                continue
-
-            name = item.get("name")
-            if not name:
-                continue
-
-            call_id = item.get("call_id")
-            call_key = call_id or name
-            if call_key in tool_calls:
-                continue
-
-            tool_calls.append(call_key)
-            notices.append(f"\n[Calling: {name}]\n")
-
-        return notices
-
-    def _persist_isolated_response(
+    async def _persist_isolated_response(
         self,
         message: str,
         assistant_reply: str,
+        background_task_descriptors: Optional[List[str]] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         """
         Persist a response produced from an isolated agent session.
@@ -1133,6 +1064,11 @@ Guidelines:
         Args:
             message: User message for the isolated turn.
             assistant_reply: Aggregated assistant response text.
+            background_task_descriptors: Optional hidden MCP background task
+                descriptors that should start polling but not be stored as
+                assistant-visible text.
+            session_id: Optional chat session that should receive the isolated
+                turn. When omitted, the current session is used.
 
         Returns:
             None.
@@ -1140,24 +1076,52 @@ Guidelines:
         Raises:
             Exception: Propagates database persistence failures.
         """
-        if not self.background_tasks.user_message_already_started_background_task(
-            message
-        ):
+        if session_id is not None:
+            async with self._session_lock:
+                previous_session_id = self.session_manager.current_session_id
+                self.session_manager.current_session_id = session_id
+                try:
+                    await self._persist_isolated_response(
+                        message,
+                        assistant_reply,
+                        background_task_descriptors=background_task_descriptors,
+                    )
+                finally:
+                    self.session_manager.current_session_id = previous_session_id
+            return
+
+        # Check if interface layer already persisted a background-start ACK
+        already_started = (
+            self.background_tasks.user_message_already_started_background_task(message)
+        )
+
+        if not already_started:
             self.session_manager.add_message("user", message)
+
+        # Skip persisting duplicate background ACKs
         if assistant_reply.strip():
-            self.session_manager.add_message("assistant", assistant_reply)
+            from mada.core.background_tasks import is_background_task_start_ack
+
+            is_bg_ack = is_background_task_start_ack(assistant_reply)
+            if not (already_started and is_bg_ack):
+                self.session_manager.add_message("assistant", assistant_reply)
 
         self.background_tasks.start_background_tool_poll_from_reply_if_needed(
             assistant_reply
         )
+        for descriptor in background_task_descriptors or []:
+            self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                descriptor
+            )
 
     async def _commit_completed_turn(
         self,
         turn_id: Optional[int],
         message: str,
         assistant_reply: str,
-        run_session: AgentSession,
+        run_session: Optional[AgentSession],
         history_lengths: Dict[str, int],
+        background_task_descriptors: Optional[List[str]] = None,
     ) -> None:
         """
         Queue and commit a completed shared-session turn in turn order.
@@ -1168,6 +1132,9 @@ Guidelines:
             assistant_reply: Aggregated assistant response text.
             run_session: Agent session used to process the turn.
             history_lengths: Provider message counts captured before streaming.
+            background_task_descriptors: Optional hidden MCP background task
+                descriptors that should start polling but not be stored as
+                assistant-visible text.
 
         Returns:
             None.
@@ -1180,44 +1147,71 @@ Guidelines:
             raise RuntimeError("Cannot commit an isolated turn to shared session.")
 
         async with self._session_lock:
-            if self.session is None:
-                raise RuntimeError("Orchestrator session not initialized.")
+            # Validate session for agent-as-tool mode
+            # In magentic mode: both run_session and self.session are None
+            # In agent-as-tool mode: both should be non-None
+            if run_session is not None and self.session is None:
+                raise RuntimeError("Orchestrator session not initialized")
 
             self._completed_turns[turn_id] = {
                 "message": message,
                 "assistant_reply": assistant_reply,
                 "run_session": run_session,
                 "history_lengths": history_lengths,
+                "background_task_descriptors": background_task_descriptors or [],
             }
 
-            while self._next_turn_commit_id in self._completed_turns:
-                completed = self._completed_turns.pop(self._next_turn_commit_id)
-                self._merge_completed_session(
-                    completed["run_session"], completed["history_lengths"]
-                )
-                self._persist_completed_turn(completed)
+            self._drain_completed_turns_locked()
+
+    async def _retire_failed_turn(self, turn_id: int) -> None:
+        """
+        Mark a reserved turn as complete without persisting it.
+        """
+        async with self._session_lock:
+            if turn_id < self._next_turn_commit_id:
+                return
+            self._completed_turns[turn_id] = {"skip": True}
+            self._drain_completed_turns_locked()
+
+    def _drain_completed_turns_locked(self) -> None:
+        """
+        Persist queued turns in order.
+
+        The caller must hold `_session_lock`.
+        """
+        while self._next_turn_commit_id in self._completed_turns:
+            completed = self._completed_turns.pop(self._next_turn_commit_id)
+            if completed.get("skip"):
                 self._next_turn_commit_id += 1
+                continue
+
+            self._merge_completed_session(
+                completed["run_session"], completed["history_lengths"]
+            )
+            self._persist_completed_turn(completed)
+            self._next_turn_commit_id += 1
 
     def _merge_completed_session(
         self,
-        completed_session: AgentSession,
+        completed_session: Optional[AgentSession],
         history_lengths: Dict[str, int],
     ) -> None:
         """
         Merge one completed run session into the shared orchestrator session.
 
         Args:
-            completed_session: Agent session used by the completed turn.
+            completed_session: Agent session used by the completed turn, or None
+                if the strategy doesn't use session merging (e.g., magentic mode).
             history_lengths: Provider message counts captured before streaming.
 
         Returns:
             None.
 
-        Raises:
-            RuntimeError: If the shared orchestrator session is not initialized.
         """
-        if self.session is None:
-            raise RuntimeError("Orchestrator session not initialized.")
+        # Skip merging if orchestrator session not initialized (magentic mode)
+        # or if no completed session provided
+        if self.session is None or completed_session is None:
+            return
 
         for provider_name, source_state in completed_session.state.items():
             if not isinstance(source_state, dict):
@@ -1262,22 +1256,38 @@ Guidelines:
         """
         message = completed["message"]
         assistant_reply = completed["assistant_reply"]
+        background_task_descriptors = completed.get("background_task_descriptors", [])
 
-        if not self.background_tasks.user_message_already_started_background_task(
-            message
-        ):
+        # Check if interface layer already persisted a background-start ACK
+        already_started = (
+            self.background_tasks.user_message_already_started_background_task(message)
+        )
+
+        if not already_started:
             self.session_manager.add_message("user", message)
+
+        # Skip persisting duplicate background ACKs
         if assistant_reply.strip():
-            self.session_manager.add_message("assistant", assistant_reply)
+            from mada.core.background_tasks import is_background_task_start_ack
+
+            is_bg_ack = is_background_task_start_ack(assistant_reply)
+            if not (already_started and is_bg_ack):
+                self.session_manager.add_message("assistant", assistant_reply)
 
         self.background_tasks.start_background_tool_poll_from_reply_if_needed(
             assistant_reply
         )
+        for descriptor in background_task_descriptors:
+            self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                descriptor
+            )
 
     async def collect_message_response(
         self,
         message: str,
         isolated_session: bool = False,
+        persistence_session_id: Optional[str] = None,
+        stateless_session: bool = False,
         first_tool_call: Optional[asyncio.Event] = None,
         first_tool_state: Optional[Dict[str, str]] = None,
     ) -> str:
@@ -1285,7 +1295,7 @@ Guidelines:
         Collect a streamed assistant response into a single string.
 
         Args:
-            message: User message to process through the planning agent.
+            message: User message to process through the configured strategy.
             isolated_session: If True, process the message with a fresh agent
                 session instead of the shared orchestrator session. This is used
                 for overlapping background work so concurrent queries do not
@@ -1295,6 +1305,10 @@ Guidelines:
                 provider-specific state beyond messages, and an overlapping turn
                 cannot include another unfinished turn's eventual result in its
                 context.
+            persistence_session_id: Optional chat session where isolated
+                request output should be persisted.
+            stateless_session: If True, isolated processing starts with no chat
+                history and does not persist output.
             first_tool_call: Optional event set when the streamed response first
                 reports a tool call.
             first_tool_state: Optional mutable mapping populated with the first
@@ -1311,15 +1325,33 @@ Guidelines:
         async for response_chunk in self.process_message(
             message,
             isolated_session=isolated_session,
+            persistence_session_id=persistence_session_id,
+            stateless_session=stateless_session,
         ):
-            response_chunks.append(response_chunk)
+            internal_tool_call_name = tool_call_name(response_chunk)
             if (
                 first_tool_call
                 and first_tool_state is not None
-                and response_chunk.startswith("\n[Calling:")
+                and internal_tool_call_name
+            ):
+                first_tool_state["name"] = internal_tool_call_name
+                first_tool_call.set()
+                continue
+
+            handled, terminal = apply_text_control(response_chunks, response_chunk)
+            if handled:
+                if terminal:
+                    break
+                continue
+
+            response_chunks.append(str(response_chunk))
+            if (
+                first_tool_call
+                and first_tool_state is not None
+                and str(response_chunk).startswith("\n[Calling:")
             ):
                 first_tool_state["name"] = (
-                    response_chunk.strip()[len("[Calling:") :].rstrip("]").strip()
+                    str(response_chunk).strip()[len("[Calling:") :].rstrip("]").strip()
                 )
                 first_tool_call.set()
         return "".join(response_chunks)
@@ -1336,6 +1368,7 @@ Guidelines:
             await self.exit_stack.aclose()
             self.specialist_agents.clear()
             self.planning_agent = None
+            self.manager_agent = None
             self.session = None
             self._completed_turns.clear()
             self._next_turn_id = 1

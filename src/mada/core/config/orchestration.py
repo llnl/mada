@@ -16,7 +16,12 @@ from mada.core.config.utils import expand_env_vars
 
 
 DEFAULT_ORCHESTRATION_MODE = "agent-as-tool"
-SUPPORTED_ORCHESTRATION_MODES = frozenset({DEFAULT_ORCHESTRATION_MODE})
+SUPPORTED_ORCHESTRATION_MODES = frozenset(
+    {
+        DEFAULT_ORCHESTRATION_MODE,
+        "magentic",
+    }
+)
 
 
 @dataclass
@@ -26,8 +31,7 @@ class OrchestrationConfig:
 
     Attributes:
         mode:
-            Internal orchestration pattern to use. Only `agent-as-tool` is
-            supported in this release.
+            Internal orchestration pattern to use.
         participants:
             Optional ordered list of specialist agent names to include in the
             orchestration pattern. When omitted, all non-`PlanningAgent`

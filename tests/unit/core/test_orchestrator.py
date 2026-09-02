@@ -3,8 +3,57 @@
 
 import pytest
 
-from mada.core.config import AgentConfig, MCPServerConfig, OpenAIModelConfig
+from mada.core.config import (
+    AgentConfig,
+    MCPServerConfig,
+    OpenAIModelConfig,
+    RemoteA2AAgentConfig,
+)
+from mada.core.coordinator import MCPAgentManager
+from mada.core.orchestration.stream_events import InternalError
 from mada.core.orchestrator import MADAOrchestrator
+
+
+@pytest.mark.asyncio
+async def test_create_chat_agent_passes_agent_extra_to_as_agent(monkeypatch):
+    captured = {}
+    created_agent = object()
+
+    class DummyClient:
+        def as_agent(self, **kwargs):
+            captured.update(kwargs)
+            return created_agent
+
+    monkeypatch.setattr(
+        "mada.core.coordinator.chat_client_factory.create",
+        lambda _: DummyClient(),
+    )
+
+    manager = MCPAgentManager(
+        model_config=OpenAIModelConfig(
+            provider="openai",
+            model="gpt-4.1-mini",
+            api_key="sk-test",
+            base_url="https://example.invalid/v1",
+        )
+    )
+
+    agent = await manager.create_chat_agent(
+        AgentConfig(
+            agent_name="TestAgent",
+            description="Test agent",
+            instructions="You are a test agent.",
+            mcp_servers=[],
+            extra={"default_options": {"store": False}},
+        ),
+        tools=["test-tool"],
+    )
+
+    assert agent is created_agent
+    assert captured["name"] == "TestAgent"
+    assert captured["instructions"] == "You are a test agent."
+    assert captured["tools"] == ["test-tool"]
+    assert captured["default_options"] == {"store": False}
 
 
 @pytest.mark.asyncio
@@ -88,3 +137,83 @@ async def test_connect_agent_passes_verify_to_httpx(monkeypatch):
 
     assert captured["resolve_verify_arg"] is False
     assert captured["async_client_verify"] is False
+
+
+@pytest.mark.asyncio
+async def test_load_remote_a2a_agent_cards_skips_unavailable_agents(monkeypatch):
+    closed_clients = []
+
+    class DummyRemoteA2AClient:
+        def __init__(self, name, config):
+            self.name = name
+            self.config = config
+
+        async def get_agent_card(self):
+            if self.name == "bad":
+                raise RuntimeError("offline")
+            return {"description": "Ready"}
+
+        async def aclose(self):
+            closed_clients.append(self.name)
+
+    monkeypatch.setattr(
+        "mada.core.orchestrator.RemoteA2AClient",
+        DummyRemoteA2AClient,
+    )
+    monkeypatch.setattr(
+        "mada.core.coordinator.chat_client_factory.create",
+        lambda _: object(),
+    )
+
+    orchestrator = MADAOrchestrator(
+        model_config=OpenAIModelConfig(
+            provider="openai",
+            model="gpt-4.1-mini",
+            api_key="sk-test",
+            base_url="https://example.invalid/v1",
+        ),
+        session_manager=object(),
+    )
+    orchestrator.a2a_agents = {
+        "good": RemoteA2AAgentConfig(url="https://good.example/a2a"),
+        "bad": RemoteA2AAgentConfig(url="https://bad.example/a2a"),
+    }
+
+    failed_agents = await orchestrator._load_remote_a2a_agent_cards()
+
+    assert orchestrator.a2a_agents == {
+        "good": RemoteA2AAgentConfig(url="https://good.example/a2a")
+    }
+    assert orchestrator._a2a_agent_cards == {"good": {"description": "Ready"}}
+    assert set(orchestrator._a2a_clients_by_agent) == {"good"}
+    assert closed_clients == ["bad"]
+    assert failed_agents == [
+        {
+            "agent": "bad",
+            "url": "https://bad.example/a2a",
+            "error": "offline",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_collect_message_response_surfaces_internal_error(monkeypatch):
+    orchestrator = MADAOrchestrator(
+        model_config=OpenAIModelConfig(
+            provider="openai",
+            model="gpt-4.1-mini",
+            api_key="sk-test",
+            base_url="https://example.invalid/v1",
+        ),
+        session_manager=object(),
+    )
+
+    async def process_message(*args, **kwargs):
+        yield "partial"
+        yield InternalError("Error processing message: boom")
+
+    monkeypatch.setattr(orchestrator, "process_message", process_message)
+
+    response = await orchestrator.collect_message_response("hello")
+
+    assert response == "Error processing message: boom"

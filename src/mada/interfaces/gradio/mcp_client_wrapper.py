@@ -22,6 +22,7 @@ from mada.core.config import (
     OrchestrationConfig,
     RemoteA2AAgentConfig,
 )
+from mada.core.background_tasks import is_background_task_start_ack
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
 from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
@@ -323,7 +324,7 @@ class MCPGradioClientSession:
             response = await self.orchestrator.background_tasks.run_query(
                 message, blocking=self.blocking
             )
-            if response.startswith("[task-") and "Started in background." in response:
+            if is_background_task_start_ack(response):
                 self.session_manager.add_message("user", message)
                 self.session_manager.add_message("assistant", response)
             yield response

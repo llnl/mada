@@ -6,22 +6,14 @@ Agent-as-tool orchestration strategy implementation.
 """
 
 import logging
-import sys
 import traceback
-from typing import TYPE_CHECKING, Dict, List, Tuple
-
-from agent_framework import MCPStdioTool
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Tuple
 
 from mada.core.config import AgentConfig, MCPServerConfig, RemoteA2AAgentConfig
 from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
 
 if TYPE_CHECKING:
     from mada.core.orchestrator import MADAOrchestrator
-
-try:
-    BaseExceptionGroup
-except NameError:
-    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
 
 
 LOG = logging.getLogger(__name__)
@@ -38,182 +30,6 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
 
     mode = "agent-as-tool"
 
-    async def _initialize_participants(
-        self,
-        orchestrator: "MADAOrchestrator",
-        participant_configs: List[AgentConfig],
-    ) -> Tuple[List[str], List[Dict[str, str]], List[str]]:
-        """
-        Initialize each configured specialist agent for this orchestration run.
-
-        Agents are connected through named MCP servers when available, fall back
-        to the legacy `server_path` mode when configured, or are created as
-        model-only agents when no tools are defined.
-        """
-        all_tools = []
-        failed_servers = []
-        failed_agents = []
-
-        for config in participant_configs:
-            if not config.agent_name:
-                continue
-
-            if config.mcp_servers and orchestrator.mcp_servers:
-                await self._connect_configured_agent(
-                    orchestrator,
-                    config,
-                    all_tools,
-                    failed_servers,
-                    failed_agents,
-                )
-                continue
-
-            if config.server_path:
-                await self._connect_legacy_agent(
-                    orchestrator, config, all_tools, failed_agents
-                )
-                continue
-
-            if not config.mcp_servers:
-                await self._connect_agent_without_tools(
-                    orchestrator, config, failed_agents
-                )
-                continue
-
-            LOG.warning(f"Agent {config.agent_name} has no MCP servers configured")
-
-        return all_tools, failed_servers, failed_agents
-
-    async def _connect_configured_agent(
-        self,
-        orchestrator: "MADAOrchestrator",
-        config: AgentConfig,
-        all_tools: List[str],
-        failed_servers: List[Dict[str, str]],
-        failed_agents: List[str],
-    ) -> None:
-        """
-        Connect one agent through its named MCP server definitions.
-
-        Successful tool names are appended to `all_tools`, while partial or full
-        connection failures are recorded in `failed_servers` and `failed_agents`.
-        """
-        try:
-            (
-                agent,
-                mcp_tools,
-                tool_names,
-                agent_failed_servers,
-            ) = await orchestrator.connect_agent(config, orchestrator.mcp_servers)
-            orchestrator.specialist_agents.append(agent)
-            orchestrator._mcp_tool_count += len(mcp_tools)
-            all_tools.extend([f"{config.agent_name}: {tool}" for tool in tool_names])
-
-            for failed_server in agent_failed_servers or []:
-                failed_servers.append(
-                    {
-                        "agent": config.agent_name,
-                        "server": failed_server["name"],
-                        "url": failed_server["url"],
-                        "error": failed_server["error"],
-                    }
-                )
-
-            if tool_names:
-                LOG.info(
-                    f"Connected agent {config.agent_name} with {len(tool_names)} MCP tools"
-                )
-                return
-
-            LOG.warning(
-                f"Agent {config.agent_name} connected but no MCP servers available"
-            )
-            if config.mcp_servers:
-                failed_agents.append(config.agent_name)
-        except BaseExceptionGroup as eg:
-            LOG.error(
-                f"Multiple errors connecting agent {config.agent_name} ({len(eg.exceptions)} errors)"
-            )
-            failed_agents.append(config.agent_name)
-        except Exception as e:
-            LOG.error(f"Failed to connect agent {config.agent_name}: {e}")
-            traceback.print_exc()
-            failed_agents.append(config.agent_name)
-
-    async def _connect_legacy_agent(
-        self,
-        orchestrator: "MADAOrchestrator",
-        config: AgentConfig,
-        all_tools: List[str],
-        failed_agents: List[str],
-    ) -> None:
-        """
-        Connect one legacy agent directly from its configured `server_path`.
-
-        This preserves backward compatibility for older single-script MCP server
-        definitions that predate the shared `mcp_servers` configuration block.
-        """
-        try:
-            is_python = config.server_path.endswith(".py")
-            command = sys.executable if is_python else "node"
-            args = ["-u", config.server_path] if is_python else [config.server_path]
-            mcp_tool = MCPStdioTool(
-                name=f"{config.agent_name}_mcp",
-                command=command,
-                args=args,
-            )
-
-            mcp_tool = await orchestrator.exit_stack.enter_async_context(mcp_tool)
-            orchestrator._agent_descriptions[config.agent_name] = config.description
-
-            agent = await orchestrator.create_chat_agent(
-                config,
-                tools=[mcp_tool],
-            )
-
-            orchestrator.specialist_agents.append(agent)
-            orchestrator._mcp_tool_count += 1
-            all_tools.append(f"{config.agent_name}: {config.server_path}")
-            LOG.info(f"Connected legacy agent {config.agent_name} with 1 MCP tool")
-        except Exception as e:
-            LOG.error(f"Failed to connect legacy agent {config.agent_name}: {e}")
-            failed_agents.append(config.agent_name)
-
-    async def _connect_agent_without_tools(
-        self,
-        orchestrator: "MADAOrchestrator",
-        config: AgentConfig,
-        failed_agents: List[str],
-    ) -> None:
-        """
-        Create an agent that relies only on the model client and no MCP tools.
-        """
-        LOG.info(f"Creating agent {config.agent_name} without MCP tools")
-        try:
-            orchestrator._agent_descriptions[config.agent_name] = config.description
-            agent = await orchestrator.create_chat_agent(config, tools=[])
-            orchestrator.specialist_agents.append(agent)
-        except Exception as e:
-            LOG.error(f"Failed to create agent {config.agent_name}: {e}")
-            failed_agents.append(config.agent_name)
-
-    def _resolve_active_participant_configs(
-        self,
-        orchestrator: "MADAOrchestrator",
-        participant_configs: List[AgentConfig],
-    ) -> List[AgentConfig]:
-        """
-        Return configs for specialists that were successfully initialized.
-        """
-        active_specialist_names = {
-            agent.name for agent in orchestrator.specialist_agents
-        }
-        return [
-            config
-            for config in participant_configs
-            if config.agent_name in active_specialist_names
-        ]
-
     def _initialize_planning_agent(
         self,
         orchestrator: "MADAOrchestrator",
@@ -228,41 +44,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
             participant_configs=active_participant_configs,
         )
         orchestrator.session = orchestrator.planning_agent.create_session()
-
-    def _build_status(
-        self,
-        orchestrator: "MADAOrchestrator",
-        failed_servers: List[Dict[str, str]],
-        failed_agents: List[str],
-    ) -> str:
-        """
-        Build a user-facing initialization summary for the current run.
-        """
-        status_parts = [
-            (
-                "Connection Successful: Orchestrator initialized with "
-                f"{orchestrator._mcp_tool_count} MCP Servers and "
-                f"{len(orchestrator.a2a_agents)} remote A2A agents and "
-                f"{len(orchestrator.specialist_agents) + 1} agents"
-            )
-        ]
-
-        if failed_servers:
-            status_parts.append(
-                f"\nWARNING: {len(failed_servers)} MCP server(s) failed to connect:"
-            )
-            for failed_server in failed_servers:
-                status_parts.append(
-                    f"  • {failed_server['agent']}/{failed_server['server']} at {failed_server['url']}"
-                )
-                status_parts.append(f"    Error: {failed_server['error']}")
-
-        if failed_agents:
-            status_parts.append(
-                f"\nERROR: {len(failed_agents)} agent(s) failed to initialize: {', '.join(failed_agents)}"
-            )
-
-        return "\n".join(status_parts)
+        orchestrator.manager_agent = None
 
     def _remote_a2a_tool_labels(self, orchestrator: "MADAOrchestrator") -> List[str]:
         """
@@ -273,6 +55,66 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
             card = orchestrator._a2a_agent_cards.get(agent_name, {})
             labels.append(f"A2A: {agent_name} - {card['description']}")
         return labels
+
+    @staticmethod
+    def _tool_call_notices_from_chunk(chunk: Any, tool_calls: List[Any]) -> List[str]:
+        """
+        Return tool-call notices for first appearances of tool calls in a chunk.
+        """
+        if not hasattr(chunk, "contents") or not chunk.contents:
+            return []
+
+        notices = []
+        for content in chunk.contents:
+            if not hasattr(content, "to_dict"):
+                continue
+
+            item = content.to_dict()
+            if item.get("type") not in ("function_call", "tool_call"):
+                continue
+
+            name = item.get("name")
+            if not name:
+                continue
+
+            call_id = item.get("call_id")
+            call_key = call_id or name
+            if call_key in tool_calls:
+                continue
+
+            tool_calls.append(call_key)
+            notices.append(f"\n[Calling: {name}]\n")
+
+        return notices
+
+    async def _stream_response(
+        self,
+        orchestrator: "MADAOrchestrator",
+        prompt: str,
+        *,
+        session,
+        include_tool_notices: bool,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream output from the reusable planning-agent runtime.
+        """
+        response_started = False
+        tool_calls = []
+        stream = orchestrator.planning_agent.run(prompt, session=session, stream=True)
+        async for chunk in stream:
+            if chunk.text:
+                response_started = True
+                yield chunk.text
+                continue
+
+            if not include_tool_notices:
+                continue
+
+            for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
+                yield notice
+
+        if not response_started:
+            LOG.warning("No text chunks received from planning agent")
 
     async def initialize(
         self,
@@ -290,10 +132,11 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         """
         orchestrator.specialist_agents = []
         orchestrator._mcp_tool_count = 0
+        orchestrator._agent_descriptions = {}
         participant_configs = orchestrator.resolve_participant_configs(agent_configs)
         orchestrator.mcp_servers = mcp_servers or {}
         orchestrator.a2a_agents = a2a_agents or {}
-        await orchestrator._load_remote_a2a_agent_cards()
+        failed_a2a_agents = await orchestrator._load_remote_a2a_agent_cards()
         all_tools, failed_servers, failed_agents = await self._initialize_participants(
             orchestrator, participant_configs
         )
@@ -304,7 +147,130 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         self._initialize_planning_agent(
             orchestrator, agent_configs, active_participant_configs
         )
-        status = self._build_status(orchestrator, failed_servers, failed_agents)
+        status = self._build_status(
+            orchestrator,
+            failed_servers,
+            failed_agents,
+            failed_a2a_agents,
+        )
         LOG.info(status)
 
         return status, all_tools
+
+    async def process_openai_messages(
+        self,
+        orchestrator: "MADAOrchestrator",
+        messages: List[Dict[str, Any]],
+    ) -> AsyncGenerator[str, None]:
+        """
+        Process OpenAI-style chat messages without shared session reuse.
+        """
+        if not orchestrator.planning_agent:
+            yield "Error: Orchestrator not initialized."
+            return
+
+        transcript_messages = orchestrator._normalize_transcript_messages(messages)
+        prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
+        request_session = orchestrator.planning_agent.create_session()
+
+        try:
+            async for chunk in self._stream_response(
+                orchestrator,
+                prompt,
+                session=request_session,
+                include_tool_notices=True,
+            ):
+                yield chunk
+        except Exception as e:
+            error_msg = f"Error processing message: {e}"
+            LOG.error(error_msg)
+            traceback.print_exc()
+            yield error_msg
+
+    async def process_message(
+        self,
+        orchestrator: "MADAOrchestrator",
+        message: str,
+        isolated_session: bool = False,
+        persistence_session_id: str | None = None,
+        stateless_session: bool = False,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Process a user message through the planning agent.
+        """
+        if not orchestrator.planning_agent:
+            yield "Error: Orchestrator not initialized. Call initialize_orchestrator() first."
+            return
+
+        aggregated_assistant_reply = ""
+        tool_calls = []
+        background_task_descriptors = []
+        response_started = False
+
+        try:
+            (
+                turn_id,
+                run_session,
+                history_lengths,
+            ) = await orchestrator._create_run_session(isolated_session)
+
+            prompt = message
+            if (
+                isolated_session
+                and persistence_session_id is not None
+                and not stateless_session
+            ):
+                history = await orchestrator._load_history_for_session(
+                    persistence_session_id
+                )
+                transcript_messages = orchestrator._normalize_transcript_messages(
+                    [*history, {"role": "user", "content": message}]
+                )
+                prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
+
+            stream = orchestrator.planning_agent.run(
+                prompt, session=run_session, stream=True
+            )
+            async for chunk in stream:
+                if chunk.text:
+                    response_started = True
+                    aggregated_assistant_reply += chunk.text
+                    yield chunk.text
+                    continue
+
+                for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
+                    yield notice
+
+            if not response_started:
+                LOG.warning("No text chunks received from planning agent")
+
+            if isolated_session:
+                if stateless_session:
+                    orchestrator.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                        aggregated_assistant_reply,
+                        persist_result=False,
+                    )
+                    for descriptor in background_task_descriptors:
+                        orchestrator.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                            descriptor,
+                            persist_result=False,
+                        )
+                    return
+                await orchestrator._persist_isolated_response(
+                    message,
+                    aggregated_assistant_reply,
+                    background_task_descriptors=background_task_descriptors,
+                    session_id=persistence_session_id,
+                )
+                return
+
+            await orchestrator._commit_completed_turn(
+                turn_id,
+                message,
+                aggregated_assistant_reply,
+                run_session,
+                history_lengths,
+                background_task_descriptors=background_task_descriptors,
+            )
+        except Exception as e:
+            yield orchestrator._process_message_error(e)
