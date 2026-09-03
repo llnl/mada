@@ -43,6 +43,7 @@ from mada.core.config import (
 )
 from mada.core.coordinator import MCPAgentManager
 from mada.core.database import ChatSessionManager
+from mada.core.skills.skill_registry import SkillRegistry
 from mada.core.orchestration import (
     AgentAsToolOrchestrationStrategy,
     BaseOrchestrationStrategy,
@@ -54,6 +55,10 @@ from mada.core.orchestration.stream_events import (
 )
 from mada.core.tls import resolve_httpx_verify_value
 
+try:
+    BaseExceptionGroup
+except NameError:
+    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
 
 LOG = logging.getLogger(__name__)
 
@@ -73,8 +78,9 @@ class MADAOrchestrator(MCPAgentManager):
         manager_agent (Agent): Hidden Magentic manager, when that mode is active.
         session: AgentSession for maintaining conversation state
         mcp_servers (Dict[str, MCPServerConfig]): A dictionary store of MCP server configurations
-        session_manager (ChatSessionManager): The high-level API for interacting
-            with the database.
+        session_manager (ChatSessionManager): The high-level API for interacting with the database.
+        skill_registry: Registry of manifest-based skills to advertise to the planner.
+        skill_tools: Runtime tools to inject into created agents.
         background_tasks (BackgroundTaskManager): Manager for non-blocking user
             queries and MCP server-side background task polling.
     """
@@ -84,6 +90,8 @@ class MADAOrchestrator(MCPAgentManager):
         model_config: Optional[ModelConfig] = None,
         database_config: Optional[DatabaseConfig] = None,
         session_manager: ChatSessionManager = None,
+        skill_registry: Optional[SkillRegistry] = None,
+        skill_tools: Optional[List[Any]] = None,
         orchestration_config: Optional[OrchestrationConfig] = None,
         bearer_token: Optional[str] = None,
         timeout: int = 86400,
@@ -99,11 +107,16 @@ class MADAOrchestrator(MCPAgentManager):
             bearer_token: Optional token forwarded to streamable HTTP MCP
                 servers as `X-Token`.
             timeout: Timeout in seconds for server operations.
+            skill_registry: Registry of manifest-based skills to advertise to
+                the planning agent.
+            skill_tools: Runtime tools for loading skills and running skill
+                scripts.
 
         Raises:
             Exception: Propagates session manager initialization failures.
         """
-        super().__init__(model_config, timeout)
+        super().__init__(model_config, timeout, skill_tools=skill_tools)
+        self.skill_registry = skill_registry or SkillRegistry()
         self.exit_stack = AsyncExitStack()
         self.specialist_agents = []
         self.planning_agent = None
@@ -546,6 +559,7 @@ class MADAOrchestrator(MCPAgentManager):
         """
         team_description = self._generate_team_description(participant_configs)
         remote_a2a_description = self._generate_remote_a2a_description()
+        skill_advertisement = self._format_skill_advertisement()
 
         # Convert each specialist agent to a tool using as_tool()
         agent_tools = []
@@ -562,6 +576,7 @@ class MADAOrchestrator(MCPAgentManager):
             agent_tools.append(agent_tool)
 
         agent_tools.extend(self._create_remote_a2a_agent_tools())
+        agent_tools.extend(self.skill_tools)
 
         # Try to get a user defined planning agent config
         planning_cfg = self._get_planning_agent_config(agent_configs)
@@ -583,6 +598,13 @@ class MADAOrchestrator(MCPAgentManager):
 Your specialist agents (available as tools) can be delegated tasks.
 """
 
+        skill_guidance = ""
+        if skill_advertisement:
+            skill_guidance = f"""
+Manifest-based skills available via runtime tools:
+{skill_advertisement}
+"""
+
         # Always append up to date team description and guidelines so the planning
         # agent knows how to use the tools.
         instructions = f"""{base_instructions}
@@ -592,6 +614,7 @@ Your specialist agents (available as tools):
 
 Remote A2A agents (available as tools):
 {remote_a2a_description}
+{skill_guidance}
 
 Guidelines:
 - Delegate to specialist agents when the request matches their expertise
@@ -704,6 +727,21 @@ Guidelines:
         if not lines:
             return "    (no specialist agents configured)"
         return "\n".join(lines)
+
+    def _format_skill_advertisement(self) -> str:
+        """
+        Return compact manifest skill summaries for planner instructions.
+
+        Returns:
+            Indented one-line summaries of each discovered skill, or an empty
+            string when no skills are configured.
+        """
+        if not self.skill_registry.has_skills():
+            return ""
+
+        return "\n".join(
+            f"    {summary}" for summary in self.skill_registry.skill_summaries()
+        )
 
     def _generate_remote_a2a_description(self) -> str:
         """

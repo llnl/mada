@@ -12,13 +12,19 @@ import asyncio
 import sys
 
 import click
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from mada.core.config import AppConfig, OrchestrationConfig, load_config_from_json
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
+from mada.core.skills.skill_registry import SkillRegistry
+from mada.core.skills.skill_setup import initialize_skill_state
 from mada.core.telemetry import setup_telemetry
 
+try:
+    BaseExceptionGroup
+except NameError:
+    BaseExceptionGroup = Exception  # fallback for type checkers/runtime
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
 
@@ -31,7 +37,13 @@ class MADACLIInterface:
     providing a clean separation between UI and core functionality.
     """
 
-    def __init__(self, config: AppConfig, blocking: bool = False):
+    def __init__(
+        self,
+        config: AppConfig,
+        blocking: bool = False,
+        skill_registry: SkillRegistry = None,
+        skill_tools: List[Any] = None,
+    ):
         """
         Initialize the CLI with configuration.
 
@@ -39,11 +51,17 @@ class MADACLIInterface:
             config: Application configuration
             blocking: If True, wait for each response inline. If False,
                 submit queries in the background and return to the prompt.
+            skill_registry: Registry of manifest-based skills to advertise to
+                the planning agent. An empty registry is used when omitted.
+            skill_tools: Runtime tools for loading skills and running skill
+                scripts.
         """
         self.config = config
         self.blocking = blocking
         self.orchestrator = None
         self.session_manager = ChatSessionManager(config.database)
+        self.skill_registry = skill_registry or SkillRegistry()
+        self.skill_tools = list(skill_tools or [])
 
     @property
     def orchestration_config(self) -> OrchestrationConfig:
@@ -260,6 +278,8 @@ class MADACLIInterface:
                 model_config=self.config.model,
                 database_config=self.config.database,
                 session_manager=self.session_manager,
+                skill_registry=self.skill_registry,
+                skill_tools=self.skill_tools,
                 orchestration_config=self.orchestration_config,
             ) as orchestrator:
                 self.orchestrator = orchestrator
@@ -395,10 +415,20 @@ async def async_main(config_file: str, blocking: bool = False):
         # Load configuration
         config = load_config_from_json(config_file)
 
+        # Setup telemetry if enabled
         setup_telemetry(enabled=config.telemetry.enabled)
 
+        # Initialize manifest-based skills
+        skill_registry, skill_tools = initialize_skill_state(config)
+
         # Run CLI
-        cli = MADACLIInterface(config, blocking=blocking)
+        cli = MADACLIInterface(
+            config,
+            blocking=blocking,
+            skill_registry=skill_registry,
+            skill_tools=skill_tools,
+        )
+
         await cli.run()
 
     except FileNotFoundError:

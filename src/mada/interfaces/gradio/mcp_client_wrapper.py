@@ -26,6 +26,7 @@ from mada.core.background_tasks import is_background_task_start_ack
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
 from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
+from mada.core.skills.skill_registry import SkillRegistry
 
 LOG = logging.getLogger("mada-gradio")
 
@@ -44,6 +45,8 @@ class MCPGradioClientSession:
         agents: List[AgentConfig],
         database_config: DatabaseConfig,
         mcp_servers: MCPServerConfig = None,
+        skill_registry: SkillRegistry = None,
+        skill_tools: List[Any] = None,
         a2a_agents: Dict[str, RemoteA2AAgentConfig] = None,
         orchestration_config: OrchestrationConfig = None,
         blocking: bool = False,
@@ -52,8 +55,17 @@ class MCPGradioClientSession:
         Initialize the MCP client session.
 
         Args:
-            model_config: Model configuration for MADA
-            agents: List of agent configurations
+            model_config: Model configuration for MADA.
+            agents: List of agent configurations.
+            database_config: Configuration for the chat history database.
+            mcp_servers: MCP server configurations available to the agents.
+            skill_registry: Registry of manifest-based skills to advertise to
+                the planning agent. An empty registry is used when omitted.
+            skill_tools: Runtime tools for loading skills and running skill
+                scripts.
+            a2a_agents: Remote A2A agent configurations available to the
+                planning agent.
+            orchestration_config: Orchestration mode and participant settings.
             blocking: If True, wait for each response inline. If False,
                 submit queries in the background and return immediately.
         """
@@ -68,6 +80,8 @@ class MCPGradioClientSession:
         self.orchestration_config = orchestration_config or OrchestrationConfig()
         self.session_manager = ChatSessionManager(database_config)
         self.session_bearer_token = None  # Store session bearer token
+        self.skill_registry = skill_registry or SkillRegistry()
+        self.skill_tools = list(skill_tools or [])
 
     async def connect_servers(
         self, agent_table: gr.Dataframe, request: gr.Request
@@ -104,6 +118,8 @@ class MCPGradioClientSession:
                     self.model_config,
                     self.database_config,
                     session_manager=self.session_manager,
+                    skill_registry=self.skill_registry,
+                    skill_tools=self.skill_tools,
                     orchestration_config=self.orchestration_config,
                     bearer_token=self.session_bearer_token,
                 )

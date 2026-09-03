@@ -42,7 +42,10 @@ class MCPAgentManager:
     """
 
     def __init__(
-        self, model_config: Optional[ModelConfig] = None, timeout: int = 86400
+        self,
+        model_config: Optional[ModelConfig] = None,
+        timeout: int = 86400,
+        skill_tools: Optional[List[Any]] = None,
     ):
         """
         Initialize the MCP agent manager.
@@ -50,9 +53,11 @@ class MCPAgentManager:
         Args:
             model_config: Configuration for the model client. If None, uses environment variables.
             timeout: Timeout in seconds for server operations.
+            skill_tools: Additional runtime tools to register on created agents.
         """
         self.model_config = model_config or ModelConfig()
         self.timeout = timeout
+        self.skill_tools = list(skill_tools or [])
         self.model_client = self._setup_model_client()
 
     def _setup_model_client(self) -> BaseChatClient:
@@ -81,12 +86,14 @@ class MCPAgentManager:
         Returns:
             The created Agent.
         """
+        agent_tools = list(tools or [])
+        agent_tools.extend(self.skill_tools)
         agent_kwargs = dict(agent_config.extra or {})
         agent_kwargs.update(kwargs)
 
         return self.model_client.as_agent(
             name=agent_config.agent_name,
             instructions=agent_config.instructions,
-            tools=tools or [],
+            tools=agent_tools,
             **agent_kwargs,
         )
