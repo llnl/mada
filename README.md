@@ -126,6 +126,46 @@ These are referenced in the config file using environment variable expansion:
 }
 ```
 
+### Telemetry
+
+MADA can record a timeline of every agent run — which agent was invoked, which tools it called, how long each step took, how many tokens each LLM call used, and (optionally) the exact prompts and responses. Useful for debugging odd agent behavior, watching token cost, and finding slow steps.
+
+The OpenTelemetry SDK isn't installed by default. Add the `telemetry` extra:
+
+```bash
+pip install --pre -e '.[telemetry]'
+```
+
+Then enable telemetry in your config:
+
+```json
+{
+  "telemetry": { "enabled": true }
+}
+```
+
+To view traces locally, run [Aspire Dashboard](https://learn.microsoft.com/dotnet/aspire/fundamentals/dashboard/standalone) in Docker:
+
+```bash
+docker run --rm -it -p 18888:18888 -p 4317:18889 \
+  -e DASHBOARD__OTLP__AUTHMODE=Unsecured \
+  -e DASHBOARD__FRONTEND__AUTHMODE=Unsecured \
+  mcr.microsoft.com/dotnet/aspire-dashboard:9.0
+```
+
+Then point MADA at it and run as normal:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+mada-cli configs/example_helpful_critic.json
+```
+
+Open http://localhost:18888 and click **Traces** to see each run.
+
+Aspire is just one option — MADA emits OTLP via [Microsoft Agent Framework](https://github.com/microsoft/agent-framework)'s built-in support, so any OTLP receiver works if you'd rather use something else.
+
+Prompt and response text is not captured by default. Set `ENABLE_SENSITIVE_DATA=true` to include it.
+
 ### MCP Server Setup
 
 Ensure MCP servers are running on the expected ports. From the mada-tools directory:

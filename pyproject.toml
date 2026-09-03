@@ -84,8 +84,14 @@ a2a-examples = [
     "litellm",
 ]
 
+# OpenTelemetry export (opt-in; only needed if you set OTEL_EXPORTER_OTLP_ENDPOINT)
+telemetry = [
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp",
+]
+
 # All requirements
-all = ["mada[tests, docs, a2a-examples]"]
+all = ["mada[tests, docs, a2a-examples, telemetry]"]
 
 [project.scripts]
 mada = "mada.main:main"

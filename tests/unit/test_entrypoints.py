@@ -28,6 +28,7 @@ from mada.core.config import (
     OrchestrationConfig,
     SkillsConfig,
     SQLiteConfig,
+    TelemetryConfig,
 )
 from mada.core.orchestration.stream_events import (
     InternalError,
@@ -88,6 +89,7 @@ class DummyConfig:
         self.orchestration = OrchestrationConfig()
         self.a2a = A2AConfig()
         self.a2a_agents = {}
+        self.telemetry = TelemetryConfig()
 
 
 @pytest.fixture

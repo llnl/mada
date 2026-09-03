@@ -17,9 +17,9 @@ from typing import Any, Dict, List
 from mada.core.config import AppConfig, OrchestrationConfig, load_config_from_json
 from mada.core.database import ChatSessionManager
 from mada.core.orchestrator import MADAOrchestrator
-
 from mada.core.skills.skill_registry import SkillRegistry
 from mada.core.skills.skill_setup import initialize_skill_state
+from mada.core.telemetry import setup_telemetry
 
 try:
     BaseExceptionGroup
@@ -414,6 +414,9 @@ async def async_main(config_file: str, blocking: bool = False):
     try:
         # Load configuration
         config = load_config_from_json(config_file)
+
+        # Setup telemetry if enabled
+        setup_telemetry(enabled=config.telemetry.enabled)
 
         # Initialize manifest-based skills
         skill_registry, skill_tools = initialize_skill_state(config)

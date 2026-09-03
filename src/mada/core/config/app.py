@@ -37,6 +37,7 @@ from mada.core.config.skills import (
     SkillsConfig,
     load_skills_config,
 )
+from mada.core.config.telemetry import TelemetryConfig, load_telemetry_config
 
 LOG = logging.getLogger("mada-interface")
 
@@ -71,6 +72,7 @@ class AppConfig:
     orchestration: OrchestrationConfig = field(default_factory=OrchestrationConfig)
     a2a: A2AConfig = field(default_factory=A2AConfig)
     a2a_agents: Dict[str, RemoteA2AAgentConfig] = field(default_factory=dict)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
     @classmethod
     def from_dict(
@@ -123,6 +125,8 @@ class AppConfig:
             [agent.agent_name for agent in agent_cfgs]
         )
         app_conf["orchestration"] = orchestration_cfg
+
+        app_conf["telemetry"] = load_telemetry_config(config_dict.get("telemetry"))
 
         a2a_self_config, a2a_agents_config = _get_a2a_config_blocks(config_dict)
         app_conf["a2a"] = load_a2a_config(
