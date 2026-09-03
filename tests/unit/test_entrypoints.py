@@ -26,6 +26,7 @@ from mada.core.config import (
     MCPServerConfig,
     OpenAIModelConfig,
     OrchestrationConfig,
+    SkillsConfig,
     SQLiteConfig,
 )
 from mada.core.orchestration.stream_events import (
@@ -83,6 +84,7 @@ class DummyConfig:
         self.agents = ["a1", "a2"]
         self.mcp_servers = {"s1": MCPServerConfig(transport="stdio")}
         self.database = database
+        self.skills = SkillsConfig()
         self.orchestration = OrchestrationConfig()
         self.a2a = A2AConfig()
         self.a2a_agents = {}
@@ -352,7 +354,9 @@ class TestMADAGradioCmd:
                 gradio_entrypoint(port=None, share=False, config_file="config.json")
 
                 mock_load.assert_called_once_with("config.json")
-                mock_run.assert_called_once_with(config)
+                mock_run.assert_called_once_with(
+                    config, skill_registry=ANY, skill_tools=ANY
+                )
                 # Should not call sys.exit on success
                 mock_exit.assert_not_called()
                 # Port / share unchanged when no overrides
@@ -383,7 +387,9 @@ class TestMADAGradioCmd:
                 assert config.interface.port == 9999
                 assert config.interface.share is True
 
-                mock_run.assert_called_once_with(config)
+                mock_run.assert_called_once_with(
+                    config, skill_registry=ANY, skill_tools=ANY
+                )
                 mock_exit.assert_not_called()
 
         def test_gradio_entrypoint_exits_if_no_interface_config(
@@ -491,6 +497,8 @@ class TestMADAGradioCmd:
                     agents=["a1", "a2"],
                     database_config=db_config,
                     mcp_servers={"s1": MCPServerConfig(transport="stdio")},
+                    skill_registry=None,
+                    skill_tools=None,
                     a2a_agents={},
                     orchestration_config=OrchestrationConfig(),
                 )
@@ -1647,7 +1655,12 @@ class TestMADACLICmd:
                 await async_main("config.json")
 
                 mock_load.assert_called_once_with("config.json")
-                mock_cli_class.assert_called_once_with(dummy_config, blocking=False)
+                mock_cli_class.assert_called_once_with(
+                    dummy_config,
+                    blocking=False,
+                    skill_registry=ANY,
+                    skill_tools=ANY,
+                )
                 mock_cli_instance.run.assert_awaited_once()
                 # Should not call sys.exit on success
                 mock_exit.assert_not_called()

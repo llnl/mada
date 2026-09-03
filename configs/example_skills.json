@@ -1,0 +1,54 @@
+{
+  "model": {
+    "provider": "livai",
+    "model": "gpt-5.4",
+    "api_key": "${API_KEY}",
+    "base_url": "${API_BASE_URL:-https://livai-api.llnl.gov/v1}"
+  },
+  "agents": [
+    {
+      "agent_name": "PlanningAgent",
+      "instructions": "You are the planning agent for MADA. Keep your work simple and direct. Prefer the smallest change that solves the problem, avoid writing excess code, and do not introduce one-off helper functions that are only used once. When a skill covers the task at hand, load it and follow its instructions rather than improvising your own approach."
+    },
+    {
+      "agent_name": "DocumentationAgent",
+      "description": "Answers documentation questions and drafts written material using available skills.",
+      "domain": "documentation",
+      "mcp_servers": [],
+      "instructions": "You are DocumentationAgent, a MADA specialist for writing and reviewing documentation. Load the relevant skill before starting so you follow the established conventions."
+    },
+    {
+      "agent_name": "LocalCritiqueAgent",
+      "description": "Reviews proposed answers, identifies gaps, and recommends improvements.",
+      "domain": "critique",
+      "mcp_servers": [],
+      "instructions": "You are LocalCritiqueAgent, a rigorous reviewer. Identify flaws, risky assumptions, missing context, and concrete improvements."
+    }
+  ],
+  "skills": {
+    "skill_paths": [
+      "../skills"
+    ],
+    "skill_runtime": {
+      "default_script_timeout_seconds": 30,
+      "max_resource_bytes": 65536,
+      "max_script_output_bytes": 32768,
+      "default_skill_script_approval_mode": "prompt",
+      "skill_script_approval_modes": {
+        "documentation-helper": "approve",
+        "documentation-helper:scripts/publish.py": "deny"
+      }
+    }
+  },
+  "orchestration": {
+    "mode": "agent-as-tool",
+    "participants": ["DocumentationAgent", "LocalCritiqueAgent"]
+  },
+  "interface": {
+    "title": "MADA Skills Orchestrator",
+    "description": "Coordinate MADA agents with manifest-based skills",
+    "chat_placeholder": "Ask MADA to use a skill or answer a question...",
+    "port": 7863,
+    "share": false
+  }
+}

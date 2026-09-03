@@ -3,9 +3,10 @@
 *.egg-info/
 **/my_job_*.out
 **/*.core
-venv/
+**/venv/
 .jeds/
 livai_models.py
 **/sandbox-config.yaml
 **/.claude
 **/.codex
+.venv/

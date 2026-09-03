@@ -313,3 +313,110 @@ class TestAppA2AConfig:
             match="Use 'a2a.self' and 'a2a.agents' for A2A configuration",
         ):
             AppConfig.from_dict(config_dict)
+
+
+@pytest.mark.unit
+class TestSkillsConfig:
+    def _base_config(self):
+        return {
+            "model": {
+                "provider": "openai",
+                "model": "gpt-test",
+                "api_key": "test-key",
+                "base_url": "https://llm.example/v1",
+            },
+            "agents": [
+                {
+                    "agent_name": "WorkerAgent",
+                    "description": "Does work",
+                    "domain": "test",
+                    "mcp_servers": [],
+                    "instructions": "Help with tests.",
+                }
+            ],
+        }
+
+    def test_skills_defaults_when_omitted(self):
+        """Test that omitting the skills block yields empty defaults."""
+        config = AppConfig.from_dict(self._base_config())
+
+        assert config.skills.skill_paths == []
+        assert (
+            config.skills.skill_runtime.default_skill_script_approval_mode == "prompt"
+        )
+
+    def test_skills_block_is_parsed(self, tmp_path: Path):
+        """Test that a nested skills block populates paths and runtime settings."""
+        config_dict = self._base_config()
+        config_dict["skills"] = {
+            "skill_paths": ["./skills"],
+            "skill_runtime": {
+                "default_script_timeout_seconds": 60,
+                "default_skill_script_approval_mode": "deny",
+                "skill_script_approval_modes": {"demo-skill": "approve"},
+            },
+        }
+
+        config = AppConfig.from_dict(config_dict, config_dir=tmp_path)
+
+        assert config.skills.skill_paths == [(tmp_path / "skills").resolve()]
+        assert config.skills.skill_runtime.default_script_timeout_seconds == 60
+        assert config.skills.skill_runtime.default_skill_script_approval_mode == "deny"
+        assert config.skills.skill_runtime.skill_script_approval_modes == {
+            "demo-skill": "approve"
+        }
+
+    @pytest.mark.parametrize("legacy_key", ["skill_paths", "skill_runtime"])
+    def test_legacy_top_level_keys_rejected(self, legacy_key):
+        """Test that the old top-level keys are rejected with a clear message."""
+        config_dict = self._base_config()
+        config_dict[legacy_key] = {}
+
+        with pytest.raises(ValueError, match="Use 'skills.skill_paths'"):
+            AppConfig.from_dict(config_dict)
+
+    @pytest.mark.parametrize("invalid_value", ["nope", 5, []])
+    def test_non_object_skills_block_rejected(self, invalid_value):
+        """Test that a non-object skills block is rejected."""
+        config_dict = self._base_config()
+        config_dict["skills"] = invalid_value
+
+        with pytest.raises(ValueError, match="'skills' must be an object"):
+            AppConfig.from_dict(config_dict)
+
+    def test_skill_paths_must_be_a_list(self):
+        """Test that a non-list skill_paths value is rejected."""
+        config_dict = self._base_config()
+        config_dict["skills"] = {"skill_paths": "./skills"}
+
+        with pytest.raises(ValueError, match="must be a list of paths"):
+            AppConfig.from_dict(config_dict)
+
+    def test_empty_skill_path_entry_rejected(self):
+        """Test that blank entries in skill_paths are rejected."""
+        config_dict = self._base_config()
+        config_dict["skills"] = {"skill_paths": ["  "]}
+
+        with pytest.raises(ValueError, match="must be a non-empty path"):
+            AppConfig.from_dict(config_dict)
+
+    def test_relative_skill_paths_resolve_against_config_dir(self, tmp_path: Path):
+        """Test that relative skill paths resolve against the config directory."""
+        config_dict = self._base_config()
+        config_dict["skills"] = {"skill_paths": ["./skills", "../shared-skills"]}
+
+        config = AppConfig.from_dict(config_dict, config_dir=tmp_path)
+
+        assert config.skills.skill_paths == [
+            (tmp_path / "skills").resolve(),
+            (tmp_path.parent / "shared-skills").resolve(),
+        ]
+
+    def test_absolute_skill_paths_are_preserved(self, tmp_path: Path):
+        """Test that absolute skill paths are left as-is."""
+        config_dict = self._base_config()
+        config_dict["skills"] = {"skill_paths": [str(tmp_path / "skills")]}
+
+        config = AppConfig.from_dict(config_dict, config_dir="/somewhere/else")
+
+        assert config.skills.skill_paths == [(tmp_path / "skills").resolve()]
