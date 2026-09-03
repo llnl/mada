@@ -262,20 +262,20 @@ hidden Magentic manager. Otherwise MADA uses its built-in manager instructions.
 
 ## (Optional) Telemetry Configuration
 
-MADA can emit OpenTelemetry data for agent runs. If you want to disable
-telemetry explicitly in your config, add a top-level `telemetry` block.
+MADA can emit OpenTelemetry data for agent runs. Telemetry is opt-in — add
+a top-level `telemetry` block to turn it on.
 
 ### Fields
 
 | Field Name | Description | Required? | Default |
 | ---------- | ----------- | --------- | ------- |
-| `disabled` | Disables telemetry setup even if OTel environment variables are set. | No | `false` |
+| `enabled` | Enables telemetry setup. Also requires the `telemetry` extra to be installed and `OTEL_EXPORTER_OTLP_ENDPOINT` to be set for data to actually be exported. | No | `false` |
 
 ### Example
 
 ```json
 "telemetry": {
-    "disabled": true
+    "enabled": true
 }
 ```
 

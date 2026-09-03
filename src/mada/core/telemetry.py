@@ -3,10 +3,9 @@
 
 """OpenTelemetry setup.
 
-Wraps Microsoft Agent Framework's built-in observability. Setting
-OTEL_EXPORTER_OTLP_ENDPOINT turns on export; see the README for the
-Aspire Dashboard quickstart. Disable via `telemetry.disabled: true`
-in the config file.
+Wraps Microsoft Agent Framework's built-in observability. Telemetry is
+opt-in: install the `telemetry` extra and set `telemetry.enabled: true`
+in the config file. See the README for the Aspire Dashboard quickstart.
 """
 
 import logging
@@ -14,11 +13,11 @@ import logging
 LOG = logging.getLogger(__name__)
 
 
-def setup_telemetry(disabled: bool = False) -> None:
+def setup_telemetry(enabled: bool = False) -> None:
     """
-    Configure OpenTelemetry providers unless disabled.
+    Configure OpenTelemetry providers when enabled.
     """
-    if disabled:
+    if not enabled:
         return
 
     try:

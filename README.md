@@ -136,6 +136,14 @@ The OpenTelemetry SDK isn't installed by default. Add the `telemetry` extra:
 pip install --pre -e '.[telemetry]'
 ```
 
+Then enable telemetry in your config:
+
+```json
+{
+  "telemetry": { "enabled": true }
+}
+```
+
 To view traces locally, run [Aspire Dashboard](https://learn.microsoft.com/dotnet/aspire/fundamentals/dashboard/standalone) in Docker:
 
 ```bash
@@ -156,13 +164,7 @@ Open http://localhost:18888 and click **Traces** to see each run.
 
 Aspire is just one option — MADA emits OTLP via [Microsoft Agent Framework](https://github.com/microsoft/agent-framework)'s built-in support, so any OTLP receiver works if you'd rather use something else.
 
-Prompt and response text is not captured by default. Set `ENABLE_SENSITIVE_DATA=true` to include it. To skip telemetry setup entirely, add a top-level `telemetry` block to your config alongside `model` and `agents`:
-
-```json
-{
-  "telemetry": { "disabled": true }
-}
-```
+Prompt and response text is not captured by default. Set `ENABLE_SENSITIVE_DATA=true` to include it.
 
 ### MCP Server Setup
 

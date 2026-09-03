@@ -582,7 +582,7 @@ def openai_api_entrypoint(
     try:
         print(f"Loading configuration from {config_file}")
         config = load_config_from_json(config_file)
-        setup_telemetry(disabled=config.telemetry.disabled)
+        setup_telemetry(enabled=config.telemetry.enabled)
         print(f"Serving OpenAI-compatible API on http://{host}:{port}/v1")
         run_openai_api(
             config=config,

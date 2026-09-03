@@ -19,6 +19,16 @@ The OpenTelemetry SDK is not part of MADA's default install. Add the
 pip install --pre -e '.[telemetry]'
 ```
 
+Then enable telemetry in your config:
+
+```json
+{
+  "telemetry": {
+    "enabled": true
+  }
+}
+```
+
 ## Run Aspire Dashboard
 
 ```bash
@@ -56,19 +66,9 @@ them. Any other standard OTel env var (`OTEL_SERVICE_NAME`,
 
 ## Disabling telemetry
 
-Add a top-level `telemetry` block to your config alongside `model` and
-`agents`:
-
-```json
-{
-  "telemetry": {
-    "disabled": true
-  }
-}
-```
-
-With `disabled: true`, `setup_telemetry()` returns before touching MSAF, so
-`OTEL_EXPORTER_OTLP_ENDPOINT` is ignored even if set.
+Remove the `telemetry` block from your config, or set `"enabled": false`.
+With telemetry disabled, `setup_telemetry()` returns before touching MSAF,
+so `OTEL_EXPORTER_OTLP_ENDPOINT` is ignored even if set.
 
 ## Other backends
 

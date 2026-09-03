@@ -588,7 +588,7 @@ def a2a_entrypoint(
     try:
         print(f"Loading configuration from {config_file}")
         config = load_config_from_json(config_file)
-        setup_telemetry(disabled=config.telemetry.disabled)
+        setup_telemetry(enabled=config.telemetry.enabled)
         card_url = _resolve_public_a2a_url(host, port, public_url)
         print(f"Serving A2A API on {card_url}")
         run_a2a(

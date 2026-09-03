@@ -19,11 +19,12 @@ class TelemetryConfig:
     Configuration for MADA's telemetry wrapper.
 
     Attributes:
-        disabled: When True, `setup_telemetry()` returns without calling
-            MSAF's `configure_otel_providers()`. Defaults to False.
+        enabled: When True, `setup_telemetry()` calls MSAF's
+            `configure_otel_providers()`. Defaults to False — telemetry is
+            opt-in and also requires the `telemetry` extra to be installed.
     """
 
-    disabled: bool = False
+    enabled: bool = False
 
 
 def load_telemetry_config(entry: Optional[Dict[str, Any]]) -> TelemetryConfig:
@@ -34,11 +35,12 @@ def load_telemetry_config(entry: Optional[Dict[str, Any]]) -> TelemetryConfig:
         return TelemetryConfig()
     if not isinstance(entry, dict):
         raise ValueError("'telemetry' must be an object")
-    disabled = entry.get("disabled", False)
-    if not isinstance(disabled, bool):
-        # Reject truthy strings like "false" that would silently disable telemetry.
+    enabled = entry.get("enabled", False)
+    if not isinstance(enabled, bool):
+        # Reject values like the string "true" or int 1 that would look
+        # truthy but aren't the bool we expect.
         raise ValueError(
-            f"'telemetry.disabled' must be a bool, got "
-            f"{type(disabled).__name__}: {disabled!r}"
+            f"'telemetry.enabled' must be a bool, got "
+            f"{type(enabled).__name__}: {enabled!r}"
         )
-    return TelemetryConfig(disabled=disabled)
+    return TelemetryConfig(enabled=enabled)

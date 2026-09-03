@@ -154,7 +154,7 @@ def gradio_entrypoint(port: int | None, share: bool, config_file: str):
         print(f"Loading configuration from {config_file}")
         config = load_config_from_json(config_file)
 
-        setup_telemetry(disabled=config.telemetry.disabled)
+        setup_telemetry(enabled=config.telemetry.enabled)
 
         if not config.interface:
             print(

@@ -395,7 +395,7 @@ async def async_main(config_file: str, blocking: bool = False):
         # Load configuration
         config = load_config_from_json(config_file)
 
-        setup_telemetry(disabled=config.telemetry.disabled)
+        setup_telemetry(enabled=config.telemetry.enabled)
 
         # Run CLI
         cli = MADACLIInterface(config, blocking=blocking)
