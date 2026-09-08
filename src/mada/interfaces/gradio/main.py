@@ -18,6 +18,7 @@ import click
 import gradio as gr
 
 from mada.core.config import AppConfig, OrchestrationConfig, load_config_from_json
+from mada.core.telemetry import setup_telemetry
 from mada.interfaces.gradio.interface import MADAMultiAgentGradioInterface
 from mada.interfaces.gradio.mcp_client_wrapper import MCPGradioClientSession
 
@@ -170,6 +171,8 @@ def gradio_entrypoint(port: int | None, share: bool, config_file: str):
         print(f"Loading configuration from {config_file}")
         config = load_config_from_json(config_file)
         skill_registry, skill_tools = initialize_skill_state(config)
+
+        setup_telemetry(enabled=config.telemetry.enabled)
 
         if not config.interface:
             print(

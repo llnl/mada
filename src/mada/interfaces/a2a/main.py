@@ -50,6 +50,7 @@ from mada.core import load_config_from_json
 from mada.core.config import A2AConfig, AppConfig, OrchestrationConfig
 from mada.core.orchestration.stream_events import apply_text_control
 from mada.interfaces.startup_errors import format_startup_error_message
+from mada.core.telemetry import setup_telemetry
 
 if TYPE_CHECKING:
     from mada.core.orchestrator import MADAOrchestrator
@@ -587,6 +588,7 @@ def a2a_entrypoint(
     try:
         print(f"Loading configuration from {config_file}")
         config = load_config_from_json(config_file)
+        setup_telemetry(enabled=config.telemetry.enabled)
         card_url = _resolve_public_a2a_url(host, port, public_url)
         print(f"Serving A2A API on {card_url}")
         run_a2a(

@@ -12,6 +12,7 @@ Additionally, there are optional configuration options:
 - [Gradio Interface Configuration](#optional-gradio-interface-configuration)
 - [Orchestration Configuration](#optional-orchestration-configuration)
 - [A2A Configuration](#optional-a2a-configuration)
+- [Telemetry Configuration](#optional-telemetry-configuration)
 - [Skills Configuration](#optional-skills-configuration)
 
 ## Agent Configuration
@@ -259,6 +260,28 @@ hidden Magentic manager. Otherwise MADA uses its built-in manager instructions.
     "participants": ["JobManagementAgent", "InverseDesignAgent"]
 }
 ```
+
+## (Optional) Telemetry Configuration
+
+MADA can emit OpenTelemetry data for agent runs. Telemetry is opt-in — add
+a top-level `telemetry` block to turn it on.
+
+### Fields
+
+| Field Name | Description | Required? | Default |
+| ---------- | ----------- | --------- | ------- |
+| `enabled` | Enables telemetry setup. Also requires the `telemetry` extra to be installed and `OTEL_EXPORTER_OTLP_ENDPOINT` to be set for data to actually be exported. | No | `false` |
+
+### Example
+
+```json
+"telemetry": {
+    "enabled": true
+}
+```
+
+For telemetry setup, supported environment variables, and backend details, see
+the dedicated [Telemetry](./telemetry.md) guide.
 
 ## (Optional) A2A Configuration
 

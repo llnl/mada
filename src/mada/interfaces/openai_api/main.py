@@ -58,6 +58,7 @@ from mada.core.orchestration.stream_events import (  # noqa: E402
     response_replacement,
 )
 from mada.interfaces.startup_errors import format_startup_error_message  # noqa: E402
+from mada.core.telemetry import setup_telemetry  # noqa: E402
 
 if TYPE_CHECKING:
     from mada.core.orchestrator import MADAOrchestrator
@@ -581,6 +582,7 @@ def openai_api_entrypoint(
     try:
         print(f"Loading configuration from {config_file}")
         config = load_config_from_json(config_file)
+        setup_telemetry(enabled=config.telemetry.enabled)
         print(f"Serving OpenAI-compatible API on http://{host}:{port}/v1")
         run_openai_api(
             config=config,
