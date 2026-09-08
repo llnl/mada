@@ -2,9 +2,8 @@
 """
 This script helps update the version for this repository.
 
-The files that track version are:
+The files updated by this script are:
 - pyproject.toml
-- src/mada/__init__.py
 - CHANGELOG.md
 
 Usage:
@@ -32,7 +31,6 @@ from datetime import date
 from pathlib import Path
 
 VERSION_RE = re.compile(r'(?m)^(version\s*=\s*")([^"]+)(")')
-INIT_RE = re.compile(r'(?m)^(__version__\s*=\s*")([^"]+)(")')
 
 
 def update_file(path: Path, pattern: re.Pattern[str], new_version: str) -> bool:
@@ -184,11 +182,6 @@ def main() -> None:
         help="Path to pyproject.toml",
     )
     parser.add_argument(
-        "--init",
-        default=Path("src") / "mada" / "__init__.py",
-        help="Path to __init__.py",
-    )
-    parser.add_argument(
         "--changelog",
         default=Path("CHANGELOG.md"),
         help="Optional path to CHANGELOG.md",
@@ -196,16 +189,12 @@ def main() -> None:
     args = parser.parse_args()
 
     pyproject = Path(args.pyproject)
-    init_file = Path(args.init)
     changelog = Path(args.changelog)
 
     changed_pyproject = update_file(pyproject, VERSION_RE, args.version)
-    changed_init = update_file(init_file, INIT_RE, args.version)
 
     if not changed_pyproject:
         print(f"Warning: did not find version in {pyproject}")
-    if not changed_init:
-        print(f"Warning: did not find __version__ in {init_file}")
 
     prepend_changelog_section(changelog, args.version)
 
