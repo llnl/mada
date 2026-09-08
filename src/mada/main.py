@@ -11,6 +11,7 @@ import asyncio
 
 import click
 
+from mada import __version__
 from mada.interfaces.cli.main import async_main as cli_async_main
 from mada.interfaces.gradio.main import gradio_entrypoint
 
@@ -232,6 +233,7 @@ def _run_a2a_from_args(args: list[str]):
         "allow_extra_args": True,
     }
 )
+@click.version_option(__version__, "-v", "--version")
 @click.argument(
     "mode",
     type=click.Choice(["gradio", "cli", "openai-api", "a2a"], case_sensitive=False),
