@@ -3717,10 +3717,10 @@
 </span></code></pre></div>
 <p>This script will:</p>
 <ol>
-<li>Update the version in <code>src/mada/__init__.py</code></li>
 <li>Update the version in <code>pyproject.toml</code></li>
 <li>Tag the "Unreleased" section of the <code>CHANGELOG.md</code> file with a version number and date, trim empty sections, and create a new, blank "Unreleased" section at the top of the file</li>
 </ol>
+<p><code>src/mada/__init__.py</code> now reads the package version from installed metadata first and falls back to <code>pyproject.toml</code> in a source checkout, so <code>pyproject.toml</code> is the only version value you should edit directly.</p>
 <h2 id="stable-releases">Stable releases</h2>
 <p>Stable releases are prepared from a dedicated release branch so that final release changes are isolated from ongoing development work.</p>
 <ol>
