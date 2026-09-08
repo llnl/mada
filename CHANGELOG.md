@@ -3,6 +3,17 @@
 ## Unreleased
 
 ### Added
+-
+
+### Changed
+-
+
+### Fixed
+-
+
+## 0.3.0 - 2026-09-08
+
+### Added
 - DOI link to README
 - Magentic Orchestration Functionality
 - Safeguards for the orchestration switching and database consistency for async functionality
