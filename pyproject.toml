@@ -23,7 +23,7 @@ dependencies = [
     "agent-framework-orchestrations",
     "fastapi",
     "gradio>=6.2.0",
-    "httpx",
+    "httpx2",
     "openai",
     "prompt_toolkit",
     "python-dotenv",
@@ -76,7 +76,7 @@ docs = [
 
 # Example A2A agent requirements
 a2a-examples = [
-    "fastmcp",
+    "fastmcp>=4.0.0",
     "google-adk",
     "langchain-core",
     "langchain-mcp-adapters",

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
+import httpx2
 from a2a.client import A2ACardResolver
 from a2a.server.request_handlers.response_helpers import agent_card_to_dict
 from a2a.types import AgentCard
@@ -39,7 +39,7 @@ class RemoteA2AClient:
         self._headers = dict(config.headers)
         if config.api_key:
             self._headers["x-api-key"] = config.api_key
-        self._client = httpx.AsyncClient(headers=self._headers, timeout=config.timeout)
+        self._client = httpx2.AsyncClient(headers=self._headers, timeout=config.timeout)
         self._agent_card: AgentCard | None = None
 
     async def send_message(self, task: str) -> str:

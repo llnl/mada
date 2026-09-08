@@ -18,8 +18,8 @@ import traceback
 from types import TracebackType
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Type
 from contextlib import AsyncExitStack
-import httpx
-import httpcore
+import httpcore2
+import httpx2
 
 from agent_framework import (
     Agent,
@@ -403,7 +403,7 @@ class MADAOrchestrator(MCPAgentManager):
                     headers["X-Token"] = self.bearer_token
 
                 # MCPStreamableHTTPTool requires an http_client with custom headers, not a headers parameter
-                http_client = httpx.AsyncClient(
+                http_client = httpx2.AsyncClient(
                     headers=headers,
                     timeout=180.0,
                     verify=resolve_httpx_verify_value(verify=server_config.verify),
@@ -445,7 +445,7 @@ class MADAOrchestrator(MCPAgentManager):
                     )
                 )
                 continue
-            except (httpx.ConnectError, httpcore.ConnectError):
+            except (httpx2.ConnectError, httpcore2.ConnectError):
                 # Connection failed - properly close the tool to cleanup async generators
                 await self._cleanup_failed_tool(mcp_tool, http_client_to_cleanup)
                 failed_servers.append(
@@ -459,10 +459,10 @@ class MADAOrchestrator(MCPAgentManager):
                 )
                 continue
             except (
-                httpx.TimeoutException,
-                httpcore.ReadTimeout,
-                httpcore.WriteTimeout,
-                httpcore.PoolTimeout,
+                httpx2.TimeoutException,
+                httpcore2.ReadTimeout,
+                httpcore2.WriteTimeout,
+                httpcore2.PoolTimeout,
             ):
                 # Connection timed out - properly close the tool to cleanup async generators
                 await self._cleanup_failed_tool(mcp_tool, http_client_to_cleanup)
