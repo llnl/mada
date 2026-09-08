@@ -6,28 +6,28 @@
       
       
       
-        <link rel="prev" href="../telemetry/">
+        <link rel="prev" href="../configuration/">
       
       
-        <link rel="next" href="../../coordinator/">
+        <link rel="next" href="../models/">
       
       
         
       
       
-      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-ProperDocs 1.6.7, mkdocs-material-9.7.7">
     
     
       
-        <title>utils - MADA</title>
+        <title>Telemetry - MADA</title>
       
     
     
-      <link rel="stylesheet" href="../../../../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
-        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -46,15 +46,15 @@
       
     
     
-      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
     
     
-  <link href="../../../../assets/stylesheets/glightbox.min.css" rel="stylesheet"><script src="../../../../assets/javascripts/glightbox.min.js"></script><style id="glightbox-style">
+  <link href="../../assets/stylesheets/glightbox.min.css" rel="stylesheet"><script src="../../assets/javascripts/glightbox.min.js"></script><style id="glightbox-style">
             html.glightbox-open { overflow: initial; height: 100%; }
             .gslide-title { margin-top: 0px; user-select: text; }
             .gslide-desc { color: #666; user-select: text; }
@@ -83,7 +83,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#core.config.utils" class="md-skip">
+        <a href="#telemetry" class="md-skip">
           Skip to content
         </a>
       
@@ -103,7 +103,7 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../../.." title="MADA" class="md-header__button md-logo" aria-label="MADA" data-md-component="logo">
+    <a href="../.." title="MADA" class="md-header__button md-logo" aria-label="MADA" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
@@ -123,7 +123,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              utils
+              Telemetry
             
           </span>
         </div>
@@ -218,7 +218,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../../.." class="md-tabs__link">
+      <a href="../.." class="md-tabs__link">
         
   
   
@@ -235,11 +235,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../../../user_guide/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
           
   
   
@@ -257,13 +259,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../../" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../developer_guide/" class="md-tabs__link">
           
   
   
@@ -305,7 +305,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../../.." title="MADA" class="md-nav__button md-logo" aria-label="MADA" data-md-component="logo">
+    <a href="../.." title="MADA" class="md-nav__button md-logo" aria-label="MADA" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
@@ -323,7 +323,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -347,6 +347,8 @@
       
   
   
+    
+  
   
   
     
@@ -370,18 +372,21 @@
     
     
       
+        
+        
+      
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked="">
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../../user_guide/" class="md-nav__link ">
+            <a href="../" class="md-nav__link ">
               
   
   
@@ -399,13 +404,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -425,7 +430,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../user_guide/installation/" class="md-nav__link">
+      <a href="../installation/" class="md-nav__link">
         
   
   
@@ -453,7 +458,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../user_guide/configuration/" class="md-nav__link">
+      <a href="../configuration/" class="md-nav__link">
         
   
   
@@ -478,10 +483,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../../../user_guide/telemetry/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -497,6 +529,92 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#install-the-optional-dependency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install the optional dependency
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-aspire-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run Aspire Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#point-mada-at-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Point MADA at it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#disabling-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disabling telemetry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-backends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other backends
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -536,7 +654,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../../user_guide/models/" class="md-nav__link ">
+            <a href="../models/" class="md-nav__link ">
               
   
   
@@ -580,7 +698,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../user_guide/models/openai/" class="md-nav__link">
+      <a href="../models/openai/" class="md-nav__link">
         
   
   
@@ -608,7 +726,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../user_guide/models/livai/" class="md-nav__link">
+      <a href="../models/livai/" class="md-nav__link">
         
   
   
@@ -636,7 +754,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../user_guide/models/bedrock/" class="md-nav__link">
+      <a href="../models/bedrock/" class="md-nav__link">
         
   
   
@@ -699,7 +817,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../../user_guide/usage/" class="md-nav__link ">
+            <a href="../usage/" class="md-nav__link ">
               
   
   
@@ -743,7 +861,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../user_guide/usage/cli/" class="md-nav__link">
+      <a href="../usage/cli/" class="md-nav__link">
         
   
   
@@ -771,7 +889,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../user_guide/usage/gradio/" class="md-nav__link">
+      <a href="../usage/gradio/" class="md-nav__link">
         
   
   
@@ -799,7 +917,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../user_guide/usage/openai-api/" class="md-nav__link">
+      <a href="../usage/openai-api/" class="md-nav__link">
         
   
   
@@ -839,8 +957,6 @@
       
   
   
-    
-  
   
   
     
@@ -864,21 +980,18 @@
     
     
       
-        
-        
-      
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked="">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3">
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../" class="md-nav__link ">
+            <a href="../../developer_guide/" class="md-nav__link ">
               
   
   
@@ -896,13 +1009,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -922,7 +1035,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../architecture/" class="md-nav__link">
+      <a href="../../developer_guide/architecture/" class="md-nav__link">
         
   
   
@@ -950,7 +1063,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../testing/" class="md-nav__link">
+      <a href="../../developer_guide/testing/" class="md-nav__link">
         
   
   
@@ -978,7 +1091,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../docs_deployment/" class="md-nav__link">
+      <a href="../../developer_guide/docs_deployment/" class="md-nav__link">
         
   
   
@@ -1006,7 +1119,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../releases/" class="md-nav__link">
+      <a href="../../developer_guide/releases/" class="md-nav__link">
         
   
   
@@ -1031,10 +1144,8 @@
                 
   
   
-    
   
   
-  
     
     
       
@@ -1053,11 +1164,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6" checked="">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6">
         
           
           <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="0">
@@ -1078,7 +1189,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_6_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_6_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1119,7 +1230,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../common/" class="md-nav__link ">
+            <a href="../../developer_guide/common/" class="md-nav__link ">
               
   
   
@@ -1163,7 +1274,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../common/exceptions/" class="md-nav__link">
+      <a href="../../developer_guide/common/exceptions/" class="md-nav__link">
         
   
   
@@ -1196,8 +1307,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1236,15 +1345,15 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_2" checked="">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_2">
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../" class="md-nav__link ">
+            <a href="../../developer_guide/core/" class="md-nav__link ">
               
   
   
@@ -1268,7 +1377,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_6_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_6_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_6_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1288,7 +1397,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2a_client/" class="md-nav__link">
+      <a href="../../developer_guide/core/a2a_client/" class="md-nav__link">
         
   
   
@@ -1316,7 +1425,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../background_tasks/" class="md-nav__link">
+      <a href="../../developer_guide/core/background_tasks/" class="md-nav__link">
         
   
   
@@ -1375,7 +1484,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../chat_clients/" class="md-nav__link ">
+            <a href="../../developer_guide/core/chat_clients/" class="md-nav__link ">
               
   
   
@@ -1419,7 +1528,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../chat_clients/bedrock_adapter/" class="md-nav__link">
+      <a href="../../developer_guide/core/chat_clients/bedrock_adapter/" class="md-nav__link">
         
   
   
@@ -1447,7 +1556,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../chat_clients/chat_client_factory/" class="md-nav__link">
+      <a href="../../developer_guide/core/chat_clients/chat_client_factory/" class="md-nav__link">
         
   
   
@@ -1475,7 +1584,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../chat_clients/livai_adapter/" class="md-nav__link">
+      <a href="../../developer_guide/core/chat_clients/livai_adapter/" class="md-nav__link">
         
   
   
@@ -1503,7 +1612,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../chat_clients/openai_adapter/" class="md-nav__link">
+      <a href="../../developer_guide/core/chat_clients/openai_adapter/" class="md-nav__link">
         
   
   
@@ -1531,7 +1640,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../chat_clients/provider_adapter/" class="md-nav__link">
+      <a href="../../developer_guide/core/chat_clients/provider_adapter/" class="md-nav__link">
         
   
   
@@ -1564,8 +1673,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1604,15 +1711,15 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_2_5" checked="">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_6_2_5">
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../" class="md-nav__link ">
+            <a href="../../developer_guide/core/config/" class="md-nav__link ">
               
   
   
@@ -1636,7 +1743,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_6_2_5_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_3_6_2_5_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_6_2_5">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1656,7 +1763,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../a2a/" class="md-nav__link">
+      <a href="../../developer_guide/core/config/a2a/" class="md-nav__link">
         
   
   
@@ -1684,7 +1791,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../agents/" class="md-nav__link">
+      <a href="../../developer_guide/core/config/agents/" class="md-nav__link">
         
   
   
@@ -1712,7 +1819,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../app/" class="md-nav__link">
+      <a href="../../developer_guide/core/config/app/" class="md-nav__link">
         
   
   
@@ -1740,7 +1847,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../database/" class="md-nav__link">
+      <a href="../../developer_guide/core/config/database/" class="md-nav__link">
         
   
   
@@ -1768,7 +1875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../interface/" class="md-nav__link">
+      <a href="../../developer_guide/core/config/interface/" class="md-nav__link">
         
   
   
@@ -1796,7 +1903,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../mcp_servers/" class="md-nav__link">
+      <a href="../../developer_guide/core/config/mcp_servers/" class="md-nav__link">
         
   
   
@@ -1824,7 +1931,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../models/" class="md-nav__link">
+      <a href="../../developer_guide/core/config/models/" class="md-nav__link">
         
   
   
@@ -1852,7 +1959,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../orchestration/" class="md-nav__link">
+      <a href="../../developer_guide/core/config/orchestration/" class="md-nav__link">
         
   
   
@@ -1880,7 +1987,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../skills/" class="md-nav__link">
+      <a href="../../developer_guide/core/config/skills/" class="md-nav__link">
         
   
   
@@ -1908,7 +2015,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../telemetry/" class="md-nav__link">
+      <a href="../../developer_guide/core/config/telemetry/" class="md-nav__link">
         
   
   
@@ -1933,35 +2040,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    utils
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../developer_guide/core/config/utils/" class="md-nav__link">
         
   
   
@@ -1977,46 +2059,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
-      
-        <li class="md-nav__item">
-  <a href="#core.config.utils" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        utils
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#core.config.utils.expand_env_vars" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        expand_env_vars
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2037,7 +2079,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../coordinator/" class="md-nav__link">
+      <a href="../../developer_guide/core/coordinator/" class="md-nav__link">
         
   
   
@@ -2096,7 +2138,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../database/" class="md-nav__link ">
+            <a href="../../developer_guide/core/database/" class="md-nav__link ">
               
   
   
@@ -2140,7 +2182,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../database/base_db/" class="md-nav__link">
+      <a href="../../developer_guide/core/database/base_db/" class="md-nav__link">
         
   
   
@@ -2168,7 +2210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../database/db_factory/" class="md-nav__link">
+      <a href="../../developer_guide/core/database/db_factory/" class="md-nav__link">
         
   
   
@@ -2196,7 +2238,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../database/postgresql/" class="md-nav__link">
+      <a href="../../developer_guide/core/database/postgresql/" class="md-nav__link">
         
   
   
@@ -2224,7 +2266,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../database/session_manager/" class="md-nav__link">
+      <a href="../../developer_guide/core/database/session_manager/" class="md-nav__link">
         
   
   
@@ -2252,7 +2294,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../database/sqlite/" class="md-nav__link">
+      <a href="../../developer_guide/core/database/sqlite/" class="md-nav__link">
         
   
   
@@ -2317,7 +2359,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../orchestration/" class="md-nav__link ">
+            <a href="../../developer_guide/core/orchestration/" class="md-nav__link ">
               
   
   
@@ -2361,7 +2403,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../orchestration/agent_as_tool_strategy/" class="md-nav__link">
+      <a href="../../developer_guide/core/orchestration/agent_as_tool_strategy/" class="md-nav__link">
         
   
   
@@ -2389,7 +2431,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../orchestration/base_strategy/" class="md-nav__link">
+      <a href="../../developer_guide/core/orchestration/base_strategy/" class="md-nav__link">
         
   
   
@@ -2417,7 +2459,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../orchestration/magentic_strategy/" class="md-nav__link">
+      <a href="../../developer_guide/core/orchestration/magentic_strategy/" class="md-nav__link">
         
   
   
@@ -2445,7 +2487,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../orchestration/stream_events/" class="md-nav__link">
+      <a href="../../developer_guide/core/orchestration/stream_events/" class="md-nav__link">
         
   
   
@@ -2481,7 +2523,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../orchestrator/" class="md-nav__link">
+      <a href="../../developer_guide/core/orchestrator/" class="md-nav__link">
         
   
   
@@ -2544,7 +2586,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../skills/" class="md-nav__link ">
+            <a href="../../developer_guide/core/skills/" class="md-nav__link ">
               
   
   
@@ -2588,7 +2630,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skills/skill_approval/" class="md-nav__link">
+      <a href="../../developer_guide/core/skills/skill_approval/" class="md-nav__link">
         
   
   
@@ -2616,7 +2658,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skills/skill_manifest/" class="md-nav__link">
+      <a href="../../developer_guide/core/skills/skill_manifest/" class="md-nav__link">
         
   
   
@@ -2644,7 +2686,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skills/skill_registry/" class="md-nav__link">
+      <a href="../../developer_guide/core/skills/skill_registry/" class="md-nav__link">
         
   
   
@@ -2672,7 +2714,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skills/skill_runtime/" class="md-nav__link">
+      <a href="../../developer_guide/core/skills/skill_runtime/" class="md-nav__link">
         
   
   
@@ -2700,7 +2742,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skills/skill_setup/" class="md-nav__link">
+      <a href="../../developer_guide/core/skills/skill_setup/" class="md-nav__link">
         
   
   
@@ -2728,7 +2770,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skills/skill_tools/" class="md-nav__link">
+      <a href="../../developer_guide/core/skills/skill_tools/" class="md-nav__link">
         
   
   
@@ -2756,7 +2798,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skills/utils/" class="md-nav__link">
+      <a href="../../developer_guide/core/skills/utils/" class="md-nav__link">
         
   
   
@@ -2792,7 +2834,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../telemetry/" class="md-nav__link">
+      <a href="../../developer_guide/core/telemetry/" class="md-nav__link">
         
   
   
@@ -2820,7 +2862,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../tls/" class="md-nav__link">
+      <a href="../../developer_guide/core/tls/" class="md-nav__link">
         
   
   
@@ -2887,7 +2929,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../interfaces/" class="md-nav__link ">
+            <a href="../../developer_guide/interfaces/" class="md-nav__link ">
               
   
   
@@ -2954,7 +2996,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../interfaces/a2a/" class="md-nav__link ">
+            <a href="../../developer_guide/interfaces/a2a/" class="md-nav__link ">
               
   
   
@@ -2998,7 +3040,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../interfaces/a2a/main/" class="md-nav__link">
+      <a href="../../developer_guide/interfaces/a2a/main/" class="md-nav__link">
         
   
   
@@ -3057,7 +3099,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../interfaces/cli/" class="md-nav__link ">
+            <a href="../../developer_guide/interfaces/cli/" class="md-nav__link ">
               
   
   
@@ -3101,7 +3143,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../interfaces/cli/main/" class="md-nav__link">
+      <a href="../../developer_guide/interfaces/cli/main/" class="md-nav__link">
         
   
   
@@ -3168,7 +3210,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../interfaces/gradio/" class="md-nav__link ">
+            <a href="../../developer_guide/interfaces/gradio/" class="md-nav__link ">
               
   
   
@@ -3212,7 +3254,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../interfaces/gradio/assets/" class="md-nav__link">
+      <a href="../../developer_guide/interfaces/gradio/assets/" class="md-nav__link">
         
   
   
@@ -3240,7 +3282,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../interfaces/gradio/interface/" class="md-nav__link">
+      <a href="../../developer_guide/interfaces/gradio/interface/" class="md-nav__link">
         
   
   
@@ -3268,7 +3310,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../interfaces/gradio/main/" class="md-nav__link">
+      <a href="../../developer_guide/interfaces/gradio/main/" class="md-nav__link">
         
   
   
@@ -3296,7 +3338,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../interfaces/gradio/mcp_client_wrapper/" class="md-nav__link">
+      <a href="../../developer_guide/interfaces/gradio/mcp_client_wrapper/" class="md-nav__link">
         
   
   
@@ -3324,7 +3366,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../interfaces/gradio/utils/" class="md-nav__link">
+      <a href="../../developer_guide/interfaces/gradio/utils/" class="md-nav__link">
         
   
   
@@ -3383,7 +3425,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../interfaces/openai_api/" class="md-nav__link ">
+            <a href="../../developer_guide/interfaces/openai_api/" class="md-nav__link ">
               
   
   
@@ -3427,7 +3469,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../interfaces/openai_api/main/" class="md-nav__link">
+      <a href="../../developer_guide/interfaces/openai_api/main/" class="md-nav__link">
         
   
   
@@ -3463,7 +3505,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../interfaces/startup_errors/" class="md-nav__link">
+      <a href="../../developer_guide/interfaces/startup_errors/" class="md-nav__link">
         
   
   
@@ -3499,7 +3541,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../main/" class="md-nav__link">
+      <a href="../../developer_guide/main/" class="md-nav__link">
         
   
   
@@ -3552,6 +3594,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -3560,10 +3604,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
       
         <li class="md-nav__item">
-  <a href="#core.config.utils" class="md-nav__link">
+  <a href="#install-the-optional-dependency" class="md-nav__link">
     <span class="md-ellipsis">
       
-        utils
+        Install the optional dependency
       
     </span>
   </a>
@@ -3571,10 +3615,54 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#core.config.utils.expand_env_vars" class="md-nav__link">
+  <a href="#run-aspire-dashboard" class="md-nav__link">
     <span class="md-ellipsis">
       
-        expand_env_vars
+        Run Aspire Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#point-mada-at-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Point MADA at it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#disabling-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disabling telemetry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-backends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other backends
       
     </span>
   </a>
@@ -3598,183 +3686,72 @@
 
 
 
-  <h1>utils</h1>
-
-<div class="doc doc-object doc-module">
-
-
-
-<a id="core.config.utils"></a>
-    <div class="doc doc-contents first">
-
-        <p>Utility functions for configuration-related modules.</p>
-
-
-
-
-
-
-
-
-
-
-<div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-<div class="doc doc-object doc-function">
-
-
-<h2 id="core.config.utils.expand_env_vars" class="doc doc-heading">
-            <code class="highlight language-python"><span class="n">expand_env_vars</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></code>
-
-</h2>
-
-
-    <div class="doc doc-contents ">
-
-        <p>Expand environment variable references in configuration values.</p>
-<p>Supports formats:
-- ${VAR_NAME} - expands to os.getenv("VAR_NAME")
-- ${VAR_NAME:-default} - expands with default value if not set</p>
-
-
-<p><span class="doc-section-title">Parameters:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Description</th>
-          <th>Default</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td>
-                <code>value</code>
-            </td>
-            <td>
-                  <code><span title="str">str</span> | None</code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>String that may contain environment variable references
-or None.</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-      </tbody>
-    </table>
-
-
-    <p><span class="doc-section-title">Returns:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Type</th>
-          <th>Description</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td>
-                  <code><span title="str">str</span> | None</code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>String with environment variables expanded or None.</p>
-              </div>
-            </td>
-          </tr>
-      </tbody>
-    </table>
-
-
-            <details class="mkdocstrings-source">
-              <summary>Source code in <code>src/mada/core/config/utils.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tbody><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-12">12</a></span>
-<span class="normal"><a href="#__codelineno-0-13">13</a></span>
-<span class="normal"><a href="#__codelineno-0-14">14</a></span>
-<span class="normal"><a href="#__codelineno-0-15">15</a></span>
-<span class="normal"><a href="#__codelineno-0-16">16</a></span>
-<span class="normal"><a href="#__codelineno-0-17">17</a></span>
-<span class="normal"><a href="#__codelineno-0-18">18</a></span>
-<span class="normal"><a href="#__codelineno-0-19">19</a></span>
-<span class="normal"><a href="#__codelineno-0-20">20</a></span>
-<span class="normal"><a href="#__codelineno-0-21">21</a></span>
-<span class="normal"><a href="#__codelineno-0-22">22</a></span>
-<span class="normal"><a href="#__codelineno-0-23">23</a></span>
-<span class="normal"><a href="#__codelineno-0-24">24</a></span>
-<span class="normal"><a href="#__codelineno-0-25">25</a></span>
-<span class="normal"><a href="#__codelineno-0-26">26</a></span>
-<span class="normal"><a href="#__codelineno-0-27">27</a></span>
-<span class="normal"><a href="#__codelineno-0-28">28</a></span>
-<span class="normal"><a href="#__codelineno-0-29">29</a></span>
-<span class="normal"><a href="#__codelineno-0-30">30</a></span>
-<span class="normal"><a href="#__codelineno-0-31">31</a></span>
-<span class="normal"><a href="#__codelineno-0-32">32</a></span>
-<span class="normal"><a href="#__codelineno-0-33">33</a></span>
-<span class="normal"><a href="#__codelineno-0-34">34</a></span>
-<span class="normal"><a href="#__codelineno-0-35">35</a></span>
-<span class="normal"><a href="#__codelineno-0-36">36</a></span>
-<span class="normal"><a href="#__codelineno-0-37">37</a></span>
-<span class="normal"><a href="#__codelineno-0-38">38</a></span>
-<span class="normal"><a href="#__codelineno-0-39">39</a></span>
-<span class="normal"><a href="#__codelineno-0-40">40</a></span>
-<span class="normal"><a href="#__codelineno-0-41">41</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="k">def</span><span class="w"> </span><span class="nf">expand_env_vars</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">    </span><span class="sd">"""</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="sd">    Expand environment variable references in configuration values.</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="sd">    Supports formats:</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="sd">    - ${VAR_NAME} - expands to os.getenv("VAR_NAME")</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="sd">    - ${VAR_NAME:-default} - expands with default value if not set</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="sd">    Args:</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="sd">        value:</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="sd">            String that may contain environment variable references</span>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="sd">            or None.</span>
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a>
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="sd">    Returns:</span>
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="sd">        String with environment variables expanded or None.</span>
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="sd">    """</span>
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a>    <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a>        <span class="k">return</span>
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a>
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">replace_env_var</span><span class="p">(</span><span class="n">match</span><span class="p">):</span>
-</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a>        <span class="n">var_expr</span> <span class="o">=</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a>        <span class="k">if</span> <span class="s2">":-"</span> <span class="ow">in</span> <span class="n">var_expr</span><span class="p">:</span>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a>            <span class="n">var_name</span><span class="p">,</span> <span class="n">default_value</span> <span class="o">=</span> <span class="n">var_expr</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">":-"</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a>            <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="n">var_name</span><span class="p">,</span> <span class="n">default_value</span><span class="p">)</span>
-</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a>            <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="n">var_expr</span><span class="p">,</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>  <span class="c1"># Return original if not found</span>
-</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a>
-</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a>    <span class="c1"># Pattern matches ${VAR_NAME} or ${VAR_NAME:-default}</span>
-</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a>    <span class="n">pattern</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">"\$\{([^}]+)\}"</span>
-</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a>    <span class="k">return</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="n">pattern</span><span class="p">,</span> <span class="n">replace_env_var</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
-</span></code></pre></div></td></tr></tbody></table></div>
-            </details>
-    </div>
-
-</div>
-
-
-
-  </div>
-
-    </div>
-
-</div>
+<h1 id="telemetry">Telemetry</h1>
+<p>MADA can record a timeline of every agent run — which agent was invoked, which
+tools it called, how long each step took, how many tokens each LLM call used,
+and (optionally) the exact prompts and responses. Useful for debugging odd
+agent behavior, watching token cost, and finding slow steps.</p>
+<p>Under the hood MADA emits OpenTelemetry (OTLP) via
+<a href="https://github.com/microsoft/agent-framework">Microsoft Agent Framework</a>'s
+built-in instrumentation, so any OTLP-compatible dashboard works. The
+recommended local option is Microsoft's own Aspire Dashboard.</p>
+<h2 id="install-the-optional-dependency">Install the optional dependency</h2>
+<p>The OpenTelemetry SDK is not part of MADA's default install. Add the
+<code>telemetry</code> extra:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--pre<span class="w"> </span>-e<span class="w"> </span><span class="s1">'.[telemetry]'</span>
+</span></code></pre></div>
+<p>Then enable telemetry in your config:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">"telemetry"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">"enabled"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">}</span>
+</span></code></pre></div>
+<h2 id="run-aspire-dashboard">Run Aspire Dashboard</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-it<span class="w"> </span>-p<span class="w"> </span><span class="m">18888</span>:18888<span class="w"> </span>-p<span class="w"> </span><span class="m">4317</span>:18889<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-e<span class="w"> </span><span class="nv">DASHBOARD__OTLP__AUTHMODE</span><span class="o">=</span>Unsecured<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-e<span class="w"> </span><span class="nv">DASHBOARD__FRONTEND__AUTHMODE</span><span class="o">=</span>Unsecured<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>mcr.microsoft.com/dotnet/aspire-dashboard:9.0
+</span></code></pre></div>
+<p>The two <code>AUTHMODE=Unsecured</code> flags are only appropriate for localhost dev —
+they turn off the login screen and the OTLP bearer-token requirement.</p>
+<h2 id="point-mada-at-it">Point MADA at it</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OTEL_EXPORTER_OTLP_ENDPOINT</span><span class="o">=</span>http://localhost:4317
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>mada-cli<span class="w"> </span>configs/example_helpful_critic.json
+</span></code></pre></div>
+<p>Open <a href="http://localhost:18888">http://localhost:18888</a> and click <strong>Traces</strong> to
+see each run. Expand a trace to see the delegation chain
+(orchestrator → sub-agents → LLM calls → tool invocations) with per-span
+timing and attributes.</p>
+<h2 id="environment-variables">Environment variables</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OTEL_EXPORTER_OTLP_ENDPOINT</code></td>
+<td>Where to send traces/metrics/logs. Unset = no export.</td>
+</tr>
+<tr>
+<td><code>ENABLE_SENSITIVE_DATA</code></td>
+<td>Set to <code>true</code> to include prompt/response text in spans. Off by default.</td>
+</tr>
+</tbody>
+</table>
+<p>Both are read by Microsoft Agent Framework directly; MADA does not shadow
+them. Any other standard OTel env var (<code>OTEL_SERVICE_NAME</code>,
+<code>OTEL_RESOURCE_ATTRIBUTES</code>, etc.) is also honored.</p>
+<h2 id="disabling-telemetry">Disabling telemetry</h2>
+<p>Remove the <code>telemetry</code> block from your config, or set <code>"enabled": false</code>.
+With telemetry disabled, <code>setup_telemetry()</code> returns before touching MSAF,
+so <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> is ignored even if set.</p>
+<h2 id="other-backends">Other backends</h2>
+<p>Aspire is one option; any OTLP receiver works. Point
+<code>OTEL_EXPORTER_OTLP_ENDPOINT</code> at whatever you already run.</p>
 
 
 
@@ -3847,10 +3824,10 @@ or None.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../../..", "features": ["header.autohide", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.instant", "navigation.indexes", "search.suggest", "search.highlight", "content.code.annotate", "content.code.copy"], "search": "../../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["header.autohide", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.instant", "navigation.indexes", "search.suggest", "search.highlight", "content.code.annotate", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
     
     
-      <script src="../../../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   
