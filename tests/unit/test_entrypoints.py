@@ -11,6 +11,7 @@ Tests for the following entry point modules:
 
 import asyncio
 import json
+import tomllib
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ import pytest
 import httpx
 from click.testing import CliRunner
 
+from mada import __version__
 from mada.core.config import (
     A2AConfig,
     MCPServerConfig,
@@ -142,6 +144,22 @@ def _asgi_test_client(app):
 @pytest.mark.unit
 class TestMADAOrchestratorCmd:
     class TestMADAOrchestratorMain:
+        @pytest.mark.parametrize("flag", ["-v", "--version"])
+        def test_main_prints_version(self, runner, flag):
+            """
+            Test that the top-level MADA command prints its version and exits.
+            """
+            repo_root = Path(__file__).resolve().parents[2]
+            expected_version = tomllib.loads(
+                (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+            )["project"]["version"]
+
+            result = runner.invoke(main, [flag])
+
+            assert result.exit_code == 0
+            assert __version__ == expected_version
+            assert expected_version in result.output
+
         def test_main_dispatches_to_gradio(self, runner):
             """
             Test that the main entry point correctly dispatches to the Gradio interface

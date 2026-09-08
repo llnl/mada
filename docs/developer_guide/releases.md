@@ -20,9 +20,10 @@ python bump_version.py <version number>
 
 This script will:
 
-1. Update the version in `src/mada/__init__.py`
-2. Update the version in `pyproject.toml`
-3. Tag the "Unreleased" section of the `CHANGELOG.md` file with a version number and date, trim empty sections, and create a new, blank "Unreleased" section at the top of the file
+1. Update the version in `pyproject.toml`
+2. Tag the "Unreleased" section of the `CHANGELOG.md` file with a version number and date, trim empty sections, and create a new, blank "Unreleased" section at the top of the file
+
+`src/mada/__init__.py` now reads the package version from installed metadata first and falls back to `pyproject.toml` in a source checkout, so `pyproject.toml` is the only version value you should edit directly.
 
 ## Stable releases
 

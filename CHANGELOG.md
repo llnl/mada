@@ -8,6 +8,7 @@
 - Safeguards for the orchestration switching and database consistency for async functionality
 - Test coverage for Magentic orchestration
 - OpenTelemetry-based observability
+- Ability to check version via `mada -v` or `mada --version`
 
 ### Changed
 - OpenAI-compatible model configs and streamable MCP server configs now support a `verify` setting for TLS verification control.
