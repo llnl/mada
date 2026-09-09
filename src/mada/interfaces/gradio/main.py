@@ -62,7 +62,9 @@ def setup_logging():
 
     # Reduce noise from other libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpcore2").setLevel(logging.WARNING)
     logging.getLogger("gradio").setLevel(logging.WARNING)
 
     print(f"Logging configured at {log_level} level")

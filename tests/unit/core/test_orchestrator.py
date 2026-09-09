@@ -57,7 +57,7 @@ async def test_create_chat_agent_passes_agent_extra_to_as_agent(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_connect_agent_passes_verify_to_httpx(monkeypatch):
+async def test_connect_agent_passes_verify_to_httpx2(monkeypatch):
     captured = {}
 
     class DummyAsyncClient:
@@ -97,7 +97,7 @@ async def test_connect_agent_passes_verify_to_httpx(monkeypatch):
         "mada.core.coordinator.chat_client_factory.create",
         lambda _: object(),
     )
-    monkeypatch.setattr("mada.core.orchestrator.httpx.AsyncClient", DummyAsyncClient)
+    monkeypatch.setattr("mada.core.orchestrator.httpx2.AsyncClient", DummyAsyncClient)
     monkeypatch.setattr(
         "mada.core.orchestrator.MCPStreamableHTTPTool",
         DummyMCPTool,
