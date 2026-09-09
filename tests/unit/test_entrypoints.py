@@ -19,7 +19,7 @@ from typing import Callable
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
-import httpx
+import httpx2
 from click.testing import CliRunner
 
 from mada import __version__
@@ -135,8 +135,8 @@ def runner():
 
 
 def _asgi_test_client(app):
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
+    return httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app),
         base_url="http://testserver",
     )
 
@@ -1056,8 +1056,8 @@ class TestMADAOpenAIApiCmd:
             assert events[-1] == "data: [DONE]\n\n"
 
     @pytest.mark.skipif(
-        not hasattr(httpx, "ASGITransport"),
-        reason="httpx ASGI transport is not installed",
+        not hasattr(httpx2, "ASGITransport"),
+        reason="httpx2 ASGI transport is not installed",
     )
     class TestCreateOpenAIApiApp:
         @pytest.mark.asyncio
@@ -1497,8 +1497,8 @@ class TestMADAA2ACmd:
             assert chunks == ["first", " second"]
 
     @pytest.mark.skipif(
-        not hasattr(httpx, "ASGITransport"),
-        reason="httpx ASGI transport is not installed",
+        not hasattr(httpx2, "ASGITransport"),
+        reason="httpx2 ASGI transport is not installed",
     )
     class TestCreateA2AApp:
         @pytest.mark.asyncio

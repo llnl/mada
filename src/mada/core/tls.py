@@ -22,7 +22,7 @@ def resolve_httpx_verify_value(
     *, verify: bool | ssl.SSLContext | str = True
 ) -> bool | ssl.SSLContext | str:
     """
-    Return the verify value to pass to ``httpx`` clients.
+    Return the verify value to pass to ``httpx2`` clients.
 
     Explicit ``verify`` values other than ``True`` are returned unchanged.
     Resolution order for ``verify=True`` is:

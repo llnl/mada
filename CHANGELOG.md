@@ -12,6 +12,7 @@
 
 ### Changed
 - OpenAI-compatible model configs and streamable MCP server configs now support a `verify` setting for TLS verification control.
+- MADA now depends on `httpx2` for its direct HTTP client usage, and A2A examples target `fastmcp>=4.0.0` for MCP 2 compatibility.
 
 ### Fixed
 - OpenAI-compatible HTTP clients and streamable MCP HTTP clients now honor configured `verify` values when resolving TLS verification.
@@ -19,6 +20,7 @@
 - Wrong task planning from multi-turn conversations
 - Tool call detection in nested Agent Framework event structures (including typed records)
 - Incomplete streaming when final result differs from accumulated chunks
+- MCP server initialization now shims the legacy `InitializeResult.protocolVersion` attribute expected by current Agent Framework releases when running against MCP 2.x.
 
 ## 0.2.0 - 2026-07-07
 
