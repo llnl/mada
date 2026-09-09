@@ -5,11 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mada"
 description = "Multi-agent orchestration system for MADA workflows"
-version = "0.2.0"
-requires-python = ">=3.10"
+version = "0.3.0"
+requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [
     # Can't use basic `agent-framework` install since hyperlight breaks install on HPCs
+    "a2a-sdk>=1.1.0",
+    "grpcio",
     "agent-framework-core>=1.0.1",
     "agent-framework-a2a",
     "agent-framework-ag-ui",
@@ -21,10 +23,13 @@ dependencies = [
     "agent-framework-orchestrations",
     "fastapi",
     "gradio>=6.2.0",
+    "httpx2",
     "openai",
+    "prompt_toolkit",
     "python-dotenv",
     "psycopg2",
     "tiktoken",
+    "truststore",
     "uvicorn",
     "click"
 ]
@@ -69,14 +74,31 @@ docs = [
     "mike",
 ]
 
+# Example A2A agent requirements
+a2a-examples = [
+    "fastmcp>=4.0.0",
+    "google-adk",
+    "langchain-core",
+    "langchain-mcp-adapters",
+    "langchain-openai",
+    "litellm",
+]
+
+# OpenTelemetry export (opt-in; only needed if you set OTEL_EXPORTER_OTLP_ENDPOINT)
+telemetry = [
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp",
+]
+
 # All requirements
-all = ["mada[tests, docs]"]
+all = ["mada[tests, docs, a2a-examples, telemetry]"]
 
 [project.scripts]
 mada = "mada.main:main"
 mada-gradio = "mada.interfaces.gradio.main:main"
 mada-cli = "mada.interfaces.cli.main:main"
 mada-openai-api = "mada.interfaces.openai_api.main:main"
+mada-a2a = "mada.interfaces.a2a.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

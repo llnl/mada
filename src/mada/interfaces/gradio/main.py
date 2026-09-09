@@ -17,9 +17,13 @@ import importlib.resources
 import click
 import gradio as gr
 
-from mada.core.config import AppConfig, load_config_from_json
+from mada.core.config import AppConfig, OrchestrationConfig, load_config_from_json
+from mada.core.telemetry import setup_telemetry
 from mada.interfaces.gradio.interface import MADAMultiAgentGradioInterface
 from mada.interfaces.gradio.mcp_client_wrapper import MCPGradioClientSession
+
+from mada.core.skills.skill_registry import SkillRegistry
+from mada.core.skills.skill_setup import initialize_skill_state
 
 
 def _load_asset_text(filename: str) -> str:
@@ -33,6 +37,10 @@ def _load_asset_text(filename: str) -> str:
 
 _GRADIO_CSS = _load_asset_text("gradio.css")
 _GRADIO_JS = _load_asset_text("gradio.js")
+
+
+def _get_orchestration_config(config: AppConfig) -> OrchestrationConfig:
+    return getattr(config, "orchestration", None) or OrchestrationConfig()
 
 
 def setup_logging():
@@ -54,18 +62,28 @@ def setup_logging():
 
     # Reduce noise from other libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpcore2").setLevel(logging.WARNING)
     logging.getLogger("gradio").setLevel(logging.WARNING)
 
     print(f"Logging configured at {log_level} level")
 
 
-def run_gradio(config: AppConfig):
+def run_gradio(
+    config: AppConfig,
+    skill_registry: SkillRegistry = None,
+    skill_tools: list = None,
+):
     """
     Launch the Gradio web interface using the provided configuration.
 
     Args:
-        config: The full application configuration object
+        config: The full application configuration object.
+        skill_registry: Registry of manifest-based skills to advertise to the
+            planning agent.
+        skill_tools: Runtime tools for loading skills and running skill
+            scripts.
     """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -76,6 +94,10 @@ def run_gradio(config: AppConfig):
         agents=config.agents,
         database_config=config.database,
         mcp_servers=config.mcp_servers,
+        skill_registry=skill_registry,
+        skill_tools=skill_tools,
+        a2a_agents=getattr(config, "a2a_agents", {}),
+        orchestration_config=_get_orchestration_config(config),
     )
     gradio_interface = MADAMultiAgentGradioInterface(
         config.interface, config.agents, client
@@ -112,11 +134,17 @@ def create_gradio_app(config_path: str) -> gr.Blocks:
         Gradio Blocks interface
     """
     config = load_config_from_json(config_path)
+    skill_registry, skill_tools = initialize_skill_state(config)
+
     client = MCPGradioClientSession(
         model_config=config.model,
         agents=config.agents,
         database_config=config.database,
         mcp_servers=config.mcp_servers,
+        skill_registry=skill_registry,
+        skill_tools=skill_tools,
+        a2a_agents=getattr(config, "a2a_agents", {}),
+        orchestration_config=_get_orchestration_config(config),
     )
     gradio_interface = MADAMultiAgentGradioInterface(
         config.interface, config.agents, client
@@ -144,6 +172,9 @@ def gradio_entrypoint(port: int | None, share: bool, config_file: str):
     try:
         print(f"Loading configuration from {config_file}")
         config = load_config_from_json(config_file)
+        skill_registry, skill_tools = initialize_skill_state(config)
+
+        setup_telemetry(enabled=config.telemetry.enabled)
 
         if not config.interface:
             print(
@@ -157,7 +188,8 @@ def gradio_entrypoint(port: int | None, share: bool, config_file: str):
             config.interface.share = True
 
         print(f"Launching on port {config.interface.port}")
-        run_gradio(config)
+        run_gradio(config, skill_registry=skill_registry, skill_tools=skill_tools)
+
     except Exception as e:
         print(f"Error launching Gradio interface: {e}")
         sys.exit(1)

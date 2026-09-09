@@ -60,6 +60,8 @@ Click the "Connect to MCP Servers" button to start the MCP servers for your agen
 
 Now that your agents are connected, you're free to start entering prompts into the chat box!
 
+If your configuration uses `magentic` orchestration, the Gradio interface still shows the active specialist agents in the table. The hidden Magentic manager is not displayed as a participant, and only the final assistant answer is streamed back into the chat UI.
+
 ## Managing Chat Histories
 
 When you chat with agents, the history for that chat session is stored in a configurable database (see [Database Configuration](../configuration.md#optional-database-configuration)).

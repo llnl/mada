@@ -14,15 +14,30 @@ a JSON file.
 import json
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List
+from pathlib import Path
 
 from mada.core.config.agents import AgentConfig
+from mada.core.config.a2a import (
+    A2AConfig,
+    RemoteA2AAgentConfig,
+    load_a2a_agents_config,
+    load_a2a_config,
+)
 from mada.core.config.database import DatabaseConfig, load_database_config
 from mada.core.config.interface import InterfaceConfig
 from mada.core.config.mcp_servers import MCPServerConfig
 from mada.core.config.models import ModelConfig, load_model_config
-
+from mada.core.config.orchestration import (
+    OrchestrationConfig,
+    load_orchestration_config,
+)
+from mada.core.config.skills import (
+    SkillsConfig,
+    load_skills_config,
+)
+from mada.core.config.telemetry import TelemetryConfig, load_telemetry_config
 
 LOG = logging.getLogger("mada-interface")
 
@@ -32,15 +47,20 @@ class AppConfig:
     """
     Top-level configuration for the MADA multi-agent application.
 
-    This configuration aggregates model settings, interface layout
-    settings, and agent definitions. It can be loaded from a JSON file
-    using the `from_dict` method.
+    This configuration aggregates model settings, agent definitions, named MCP
+    server definitions, database settings, orchestration settings, and optional
+    interface layout settings. It can be loaded from a JSON file using the
+    `from_dict` method.
 
     Attributes:
         model (ModelConfig): Provider-specific configuration for the model backend.
-        agents (List[AgentConfig]): List of agent definitions including server paths and descriptions.
+        agents (List[AgentConfig]): List of specialist agent definitions,
+            including descriptions, optional named MCP server references, and
+            legacy `server_path` entries.
         database (DatabaseConfig): Configuration for the database connection.
+        mcp_servers (Dict[str, MCPServerConfig]): Named MCP server definitions.
         interface (InterfaceConfig): Configuration for the Gradio interface layout and options.
+        orchestration (OrchestrationConfig): Mode and participant selection.
     """
 
     model: ModelConfig
@@ -48,9 +68,18 @@ class AppConfig:
     database: DatabaseConfig
     mcp_servers: Dict[str, MCPServerConfig] = None  # MCP server configurations
     interface: InterfaceConfig = None  # Optional, used only by the Gradio app
+    skills: SkillsConfig = field(default_factory=SkillsConfig)
+    orchestration: OrchestrationConfig = field(default_factory=OrchestrationConfig)
+    a2a: A2AConfig = field(default_factory=A2AConfig)
+    a2a_agents: Dict[str, RemoteA2AAgentConfig] = field(default_factory=dict)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> "AppConfig":
+    def from_dict(
+        cls,
+        config_dict: Dict[str, Any],
+        config_dir: str | Path | None = None,
+    ) -> "AppConfig":
         """
         Create an AppConfig instance from a dictionary.
 
@@ -59,7 +88,8 @@ class AppConfig:
 
         Args:
             config_dict (Dict[str, Any]): Dictionary containing keys 'model', 'interface', and 'agents'.
-
+            config_dir: Directory containing the configuration file. Relative
+                skill paths and A2A card paths are resolved against it.
         Returns:
             AppConfig: The fully populated application configuration.
 
@@ -90,6 +120,21 @@ class AppConfig:
         database_config = config_dict.get("database", {})
         app_conf["database"] = load_database_config(database_config)
 
+        orchestration_cfg = load_orchestration_config(config_dict.get("orchestration"))
+        orchestration_cfg.validate_participants(
+            [agent.agent_name for agent in agent_cfgs]
+        )
+        app_conf["orchestration"] = orchestration_cfg
+
+        app_conf["telemetry"] = load_telemetry_config(config_dict.get("telemetry"))
+
+        a2a_self_config, a2a_agents_config = _get_a2a_config_blocks(config_dict)
+        app_conf["a2a"] = load_a2a_config(
+            a2a_self_config,
+            card_path_base=config_dir,
+        )
+        app_conf["a2a_agents"] = load_a2a_agents_config(a2a_agents_config)
+
         # Load MCP servers configuration (optional)
         python_exe = config_dict.get("python_executable", sys.executable)
         mcp_servers_entry = config_dict.get("mcp_servers")
@@ -101,6 +146,15 @@ class AppConfig:
                 mcp_servers_cfg[name] = MCPServerConfig(**server_config)
             app_conf["mcp_servers"] = mcp_servers_cfg
 
+        # Load skills configuration (optional)
+        if "skill_paths" in config_dict or "skill_runtime" in config_dict:
+            raise ValueError(
+                "Use 'skills.skill_paths' and 'skills.skill_runtime' for skills configuration"
+            )
+        app_conf["skills"] = load_skills_config(
+            config_dict.get("skills"), skill_path_base_dir=config_dir
+        )
+
         # Load interface configuration (optional for multiagent app)
         interface_entry = config_dict.get("interface")
         if interface_entry:
@@ -108,6 +162,25 @@ class AppConfig:
             app_conf["interface"] = interface_cfg
 
         return cls(**app_conf)
+
+
+def _get_a2a_config_blocks(
+    config_dict: Dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """
+    Return server-side and remote-agent A2A blocks from nested config.
+    """
+    if "a2a_self" in config_dict or "a2a_agents" in config_dict:
+        raise ValueError("Use 'a2a.self' and 'a2a.agents' for A2A configuration")
+
+    a2a_section = config_dict.get("a2a")
+    if a2a_section is None:
+        return None, None
+
+    if not isinstance(a2a_section, dict):
+        raise ValueError("'a2a' must be an object")
+
+    return a2a_section.get("self"), a2a_section.get("agents")
 
 
 def load_config_from_json(path: str) -> AppConfig:
@@ -120,7 +193,10 @@ def load_config_from_json(path: str) -> AppConfig:
     Returns:
         AppConfig: The parsed application configuration object.
     """
-    with open(path, "r") as f:
+    config_path = Path(path)
+    with open(config_path, "r") as f:
         config_dict = json.load(f)
 
-    return AppConfig.from_dict(config_dict)
+    config = AppConfig.from_dict(config_dict, config_dir=config_path.parent)
+
+    return config

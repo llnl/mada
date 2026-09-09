@@ -15,6 +15,8 @@ import sys
 from dataclasses import dataclass
 from typing import Optional
 
+from mada.core.config.utils import expand_env_vars
+
 
 LOG = logging.getLogger("mada-interface")
 
@@ -30,6 +32,9 @@ class MCPServerConfig:
         command (Optional[str]): Command to launch server for stdio transport
         description (Optional[str]): Human-readable description of the server
         python_executable (str): Path to Python executable (used for stdio transport).
+        verify (bool | str): TLS verification setting for streamable-http
+            servers. Use `True` to resolve from environment/system trust,
+            `False` to disable verification, or a CA bundle path string.
     """
 
     transport: str
@@ -37,3 +42,9 @@ class MCPServerConfig:
     command: Optional[str] = None
     description: Optional[str] = ""
     python_executable: str = sys.executable
+    verify: bool | str = True
+
+    def __post_init__(self):
+        """Expand environment variables in string-based verification settings."""
+        if isinstance(self.verify, str):
+            self.verify = expand_env_vars(self.verify)

@@ -106,6 +106,10 @@ class OpenAIModelConfig(BaseModelConfig):
             containing the API key.
         base_url:
             Base URL for the OpenAI-compatible endpoint.
+        verify:
+            TLS verification setting passed to HTTPX. Use `True` to resolve
+            from environment/system trust, `False` to disable verification, or
+            a CA bundle path string.
 
     Methods:
         __post_init__:
@@ -120,6 +124,7 @@ class OpenAIModelConfig(BaseModelConfig):
 
     api_key: str  # Can be literal string, env var, or path to file containing API key
     base_url: str
+    verify: bool | str = True
 
     def __post_init__(self):
         """
@@ -129,6 +134,8 @@ class OpenAIModelConfig(BaseModelConfig):
         super().__post_init__()
         self.api_key = expand_env_vars(self.api_key)
         self.base_url = expand_env_vars(self.base_url)
+        if isinstance(self.verify, str):
+            self.verify = expand_env_vars(self.verify)
 
         if os.path.exists(self.api_key):
             with open(self.api_key, "r") as api_key_file:

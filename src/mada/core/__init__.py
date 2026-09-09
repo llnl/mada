@@ -25,13 +25,18 @@ from mada.core.config import (
     MCPServerConfig,
     ModelConfig,
     OpenAIModelConfig,
+    OrchestrationConfig,
     PostgreSQLConfig,
     SQLiteConfig,
+    DEFAULT_ORCHESTRATION_MODE,
+    SUPPORTED_ORCHESTRATION_MODES,
     expand_env_vars,
     load_config_from_json,
     load_database_config,
     load_model_config,
+    load_orchestration_config,
 )
+from mada.core.background_tasks import BackgroundTaskManager
 from mada.core.coordinator import MCPAgentManager
 from mada.core.orchestrator import MADAOrchestrator
 
@@ -42,6 +47,7 @@ __all__ = [
     "BaseModelConfig",
     "BedrockAdapter",
     "BedrockModelConfig",
+    "BackgroundTaskManager",
     "DatabaseConfig",
     "InterfaceConfig",
     "LivAIAdapter",
@@ -52,12 +58,16 @@ __all__ = [
     "ModelConfig",
     "OpenAIAdapter",
     "OpenAIModelConfig",
+    "OrchestrationConfig",
     "PostgreSQLConfig",
     "ProviderAdapter",
     "SQLiteConfig",
+    "DEFAULT_ORCHESTRATION_MODE",
+    "SUPPORTED_ORCHESTRATION_MODES",
     "chat_client_factory",
     "expand_env_vars",
     "load_config_from_json",
     "load_database_config",
     "load_model_config",
+    "load_orchestration_config",
 ]

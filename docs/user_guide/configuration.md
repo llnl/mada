@@ -10,6 +10,10 @@ Additionally, there are optional configuration options:
 
 - [Database Configuration](#optional-database-configuration)
 - [Gradio Interface Configuration](#optional-gradio-interface-configuration)
+- [Orchestration Configuration](#optional-orchestration-configuration)
+- [A2A Configuration](#optional-a2a-configuration)
+- [Telemetry Configuration](#optional-telemetry-configuration)
+- [Skills Configuration](#optional-skills-configuration)
 
 ## Agent Configuration
 
@@ -62,7 +66,12 @@ Agent configuration defines the autonomous agents that MADA will orchestrate in 
 
 ### How Agent Configuration Works
 
-When MADA starts, it reads the agent configuration and loads each agent by executing the specified server path Python file. The functions decorated with `@mcp.tool` within these scripts become the MCP tools that MADA can call during a session. Agents communicate within a group chat, and the [planning agent](#the-planning-agent) coordinates which helper agent should handle each user request.
+When MADA starts, it reads the agent configuration and creates the selected specialist agents. Each specialist can connect to named MCP servers from the `mcp_servers` block, or use the legacy `server_path` setting for a directly launched stdio MCP server.
+
+MADA then runs the configured orchestration mode:
+
+- `agent-as-tool`: Exposes specialists as tools to a visible planning agent.
+- `magentic`: Coordinates specialists in a peer group chat through a hidden manager.
 
 Each agent's configuration allows you to:
 
@@ -72,15 +81,17 @@ Each agent's configuration allows you to:
 
 ### The Planning Agent
 
-MADA includes a special agent called the **planning agent**. This agent is automatically added to every group chat session and **does not need to be defined in your agent configuration**. The planning agent's role is to interpret user input, determine which helper agent is best suited to handle each request, and coordinate task delegation.
+MADA includes a special coordinator called the **planning agent**. This coordinator is automatically added to orchestration and **does not need to be defined in your agent configuration**. In `agent-as-tool` mode it acts as the visible planner that delegates to specialists as tools. In `magentic` mode the same optional `PlanningAgent` configuration is reused as the hidden Magentic manager that coordinates the peer specialist group chat.
 
-The default, base instructions for the planning agent are:
+The default, base instructions for the `agent-as-tool` planning agent are:
 
-```python
---8<-- "src/mada/core/orchestrator.py:200:203"
+```
+You are a planning agent for the MADA multi-agent system.
+
+Your specialist agents (available as tools) can be delegated tasks.
 ```
 
-If you'd like to modify these instructions, add an agent entry to the `"agents"` list in your configuration file with `"agent_name": "PlanningAgent"`. For example:
+If you'd like to modify the coordinator instructions for either mode, add an agent entry to the `"agents"` list in your configuration file with `"agent_name": "PlanningAgent"`. For example:
 
 ```json
 "agents": [
@@ -93,10 +104,17 @@ If you'd like to modify these instructions, add an agent entry to the `"agents"`
 
 !!! note
 
-    The planning agent will always include core instructions that cannot be modified. These instructions describe each specialist agent you define, and include the following guidelines:
+    `PlanningAgent` is never part of `orchestration.participants`. In `magentic` mode it customizes the hidden manager instead of joining the visible specialist list.
 
-    ```python
-    --8<-- "src/mada/core/orchestrator.py:212:216"
+    The `agent-as-tool` planning agent will always include core instructions that cannot be modified. These instructions describe each specialist agent you define, and include the following guidelines:
+
+    ```
+    Guidelines:
+    - Delegate to specialist agents when the request matches their expertise
+    - Delegate to remote A2A agents when their descriptions match the request
+    - Answer directly only for questions about the system itself
+    - Avoid infinite loops between agents
+    - After receiving results, synthesize and respond to the user
     ```
 
 ## MCP Server Configuration
@@ -117,6 +135,7 @@ A typical agent configuration might include multiple MCP servers, each with diff
 | `url`         | URL for when `transport` is set to 'streamable-http'.         | No        | None      |
 | `command`     | Command to launch server when `transport` is set to `stdio`.  | No        | None      |
 | `description` | Human-readable description of the server.                     | No        | None      |
+| `verify`      | TLS verification for `streamable-http`. Use `true` for env/system trust, `false` to disable verification, or a CA bundle path. | No | `true` |
 
 ### Example
 
@@ -125,7 +144,8 @@ A typical agent configuration might include multiple MCP servers, each with diff
     "flux": {
         "transport": "streamable-http",
         "url": "http://localhost:8001/mcp",
-        "description": "Flux workload manager for job execution"
+        "description": "Flux workload manager for job execution",
+        "verify": true
     },
     "merlin": {
         "transport": "streamable-http",
@@ -143,6 +163,10 @@ A typical agent configuration might include multiple MCP servers, each with diff
 ## Model Configuration
 
 Model configuration tells MADA which language model to use for agent conversations, and how to connect to the selected provider. Depending on the provider, this may include values such as the model name, API key, base URL, region, or other authentication settings.
+
+For OpenAI-compatible providers, `verify` controls TLS verification. Use
+`true` to keep MADA's default env/system trust resolution, `false` to disable
+verification, or a CA bundle path string.
 
 MADA supports multiple providers for model configuration. Each provider has its own required and optional fields. Refer to the following documentation for provider-specific details:
 
@@ -173,6 +197,7 @@ export API_BASE_URL="https://api.openai.com/v1/responses"
     "model": "o3",
     "api_key": "${API_KEY}",
     "base_url": "${API_BASE_URL:-https://api.openai.com/v1/responses}",
+    "verify": true,
     "extra": {
         "temperature": 0.7,
         "max_tokens": 2048
@@ -195,6 +220,183 @@ When you start MADA, it reads your model configuration to connect to the right l
 
 - Fill out the model configuration section with your preferred model and settings.
 - Make sure your API key and endpoint are correct.
+
+## (Optional) Orchestration Configuration
+
+MADA now exposes the orchestration pattern as an explicit top-level config block. Two
+internal modes are supported:
+
+- `agent-as-tool`: the existing planner-plus-specialist flow
+- `magentic`: a peer specialist group chat coordinated by a hidden manager
+
+### Fields
+
+| Field Name     | Description                                                                 | Required? | Default           |
+| -------------- | --------------------------------------------------------------------------- | --------- | ----------------- |
+| `mode`         | Internal orchestration mode. Supported values are `agent-as-tool` and `magentic`. | No        | `agent-as-tool`   |
+| `participants` | Optional list of specialist agent names to include. `PlanningAgent` is excluded. | No        | All non-`PlanningAgent` agents |
+
+### Example
+
+```json
+"orchestration": {
+    "mode": "agent-as-tool",
+    "participants": ["JobManagementAgent", "InverseDesignAgent", "GeometryAgent"]
+}
+```
+
+If `participants` is omitted, MADA includes every configured agent except
+`PlanningAgent`.
+
+In `magentic` mode, the `participants` list still refers only to specialist
+agents. If a `PlanningAgent` config is present, its instructions customize the
+hidden Magentic manager. Otherwise MADA uses its built-in manager instructions.
+
+### Magentic Example
+
+```json
+"orchestration": {
+    "mode": "magentic",
+    "participants": ["JobManagementAgent", "InverseDesignAgent"]
+}
+```
+
+## (Optional) Telemetry Configuration
+
+MADA can emit OpenTelemetry data for agent runs. Telemetry is opt-in — add
+a top-level `telemetry` block to turn it on.
+
+### Fields
+
+| Field Name | Description | Required? | Default |
+| ---------- | ----------- | --------- | ------- |
+| `enabled` | Enables telemetry setup. Also requires the `telemetry` extra to be installed and `OTEL_EXPORTER_OTLP_ENDPOINT` to be set for data to actually be exported. | No | `false` |
+
+### Example
+
+```json
+"telemetry": {
+    "enabled": true
+}
+```
+
+For telemetry setup, supported environment variables, and backend details, see
+the dedicated [Telemetry](./telemetry.md) guide.
+
+## (Optional) A2A Configuration
+
+MADA can participate in Agent-to-Agent (A2A) workflows in two directions:
+
+- `a2a.agents` is the client-side configuration. It lists remote A2A agents
+  that MADA can call as tools from the orchestrator.
+- `a2a.self` is the server-side configuration. It describes MADA's own A2A
+  identity when you run MADA with `mada-a2a` so other agents can discover and
+  call MADA.
+
+These settings do not replace CLI or Gradio. CLI and Gradio are interactive
+interfaces for users. A2A mode starts an HTTP service so other A2A agents can
+discover MADA and delegate tasks to it.
+
+In code, the same split is reflected by the modules: `mada.core.a2a_client`
+handles outbound calls from MADA to remote A2A agents, while
+`mada.interfaces.a2a.main` exposes MADA itself as an inbound A2A service.
+
+### Remote A2A Agents
+
+Use `a2a.agents` when the MADA orchestrator should delegate work to other A2A
+agents. Each configured remote agent is exposed to the planning agent as a tool,
+using the remote agent card for routing context. If a configured remote A2A
+agent card cannot be fetched, MADA starts without that remote tool and reports
+a warning in the startup status.
+
+#### Fields
+
+| Field Name    | Description                                                                 | Required? | Default |
+| ------------- | --------------------------------------------------------------------------- | --------- | ------- |
+| `url`         | JSON-RPC endpoint for the remote A2A agent.                                  | Yes       | N/A     |
+| `card_url`    | Explicit URL for the remote agent card. If omitted, MADA tries standard A2A card paths derived from `url`. | No | None |
+| `timeout`     | HTTP timeout in seconds for calls to the remote agent.                       | No        | `180`   |
+| `api_key`     | Optional API key sent as `x-api-key`.                                        | No        | None    |
+| `headers`     | Additional HTTP headers to send to the remote agent.                         | No        | `{}`    |
+
+#### Example
+
+```json
+"a2a": {
+  "agents": {
+    "LangChainAgent": {
+      "url": "http://localhost:9111/",
+      "card_url": "http://localhost:9111/.well-known/agent-card.json"
+    },
+    "GoogleADKAgent": {
+      "url": "http://localhost:9112/",
+      "card_url": "http://localhost:9112/.well-known/agent-card.json"
+    }
+  }
+}
+```
+
+The example MCP servers are used inside the remote A2A agents, not as local
+MADA MCP servers. The MADA orchestrator should report `0 MCP Servers` and `2
+remote A2A agents` for this config. The remote agent card endpoints must be
+reachable so MADA can discover each remote agent's skills. Install optional
+dependencies and launch the MCP servers and A2A agents with the config path:
+
+```bash
+pip install -e ".[a2a-examples]"
+python examples/a2a/a2a_table_mcp_server.py --port 9101
+python examples/a2a/a2a_average_mcp_server.py --port 9102
+python examples/a2a/a2a_langchain_agent.py --port 9111 --config configs/example_a2a_agents.json --mcp-url http://localhost:9101/mcp
+python examples/a2a/a2a_google_adk_agent.py --port 9112 --config configs/example_a2a_agents.json --mcp-url http://localhost:9102/mcp
+```
+
+Use each example agent's `--model`, `--api-key`, and `--base-url` flags when
+you want that remote agent to use a different model endpoint from MADA. The
+Google ADK example also accepts `--provider`.
+
+### MADA's A2A Agent Card
+
+Use `a2a.self` when you want MADA itself to be discoverable by other A2A agents.
+This block is used by `mada-a2a` and `mada a2a`; it is not used by CLI or Gradio
+mode. These are commands within this repo and not actual MADA repos like `mada-tools`.
+
+The `card_path` value points to a standalone A2A agent card JSON file. Relative
+paths are resolved relative to the configuration file. When the card is served,
+MADA overwrites the card's `url` field with the runtime public URL from
+`a2a.self.url` or `--public-url`, and advertises A2A protocol `1.0.0`.
+
+#### Fields
+
+| Field Name  | Description                                                                 | Required? | Default |
+| ----------- | --------------------------------------------------------------------------- | --------- | ------- |
+| `card_path` | Path to MADA's standalone A2A agent card JSON file.                          | No        | None    |
+| `url`       | Public URL advertised in the served agent card.                              | No        | Runtime host and port |
+| `name`      | Name used by the generated card fallback when no `card_path` is supplied.    | No        | `MADA`  |
+| `description` | Description used by the generated card fallback when no `card_path` is supplied. | No | `MADA multi-agent orchestration service` |
+| `skills`    | Skills used by the generated card fallback when no `card_path` is supplied.  | No        | Derived from configured agents |
+
+#### Example
+
+```json
+"a2a": {
+  "self": {
+    "card_path": "agent_cards/mada_orchestrator_card.json",
+    "url": "http://localhost:9120",
+  }
+}
+```
+
+Launch MADA as an A2A service with:
+
+```bash
+mada-a2a --port 9120 configs/example_a2a_agents.json
+```
+
+Other A2A agents can then discover MADA at:
+
+```text
+http://localhost:9120/.well-known/agent-card.json
+```
 
 ## (Optional) Database Configuration
 
@@ -306,6 +508,75 @@ If you are running MADA in [Gradio mode](./usage/gradio.md), you can customize t
     }
 }
 ```
+
+## (Optional) Skills Configuration
+
+MADA can optionally discover manifest-based skills from directories that you provide in the configuration. A skill is a folder containing a `SKILL.md` file, along with optional `references/`, `assets/`, and `scripts/` subdirectories. This allows you to package reusable instructions and supporting files outside of the main agent configuration.
+
+Skills configuration lives under a single top-level `skills` key, which holds `skill_paths` and `skill_runtime`. Relative entries in `skill_paths` are resolved against the directory containing your configuration file.
+
+### Fields
+
+| Field Name      | Description                                                        | Required? | Default |
+| --------------- | ------------------------------------------------------------------ | --------- | ------- |
+| `skill_paths`   | List of directories to search for skill folders containing `SKILL.md`. Each path is searched recursively. Relative paths are resolved against the configuration file's directory. | No | `[]` |
+| `skill_runtime` | Runtime settings for reading skill resources and executing scripts. | No        | None    |
+
+### `skill_runtime` Fields
+
+| Field Name                           | Description                                                 | Required? | Default    |
+| ------------------------------------ | ----------------------------------------------------------- | --------- | ---------- |
+| `default_script_timeout_seconds`     | Maximum runtime for a skill-owned script process.           | No        | `30`       |
+| `max_resource_bytes`                 | Maximum size of a skill resource that may be read as text.  | No        | `32768`    |
+| `max_script_output_bytes`            | Maximum amount of stdout/stderr captured from a skill script. | No      | `32768`    |
+| `default_skill_script_approval_mode` | Approval mode applied when no override matches: `prompt`, `approve`, or `deny`. | No | `prompt` |
+| `skill_script_approval_modes`        | Per-skill and per-script approval overrides. [See below](#script-approval).     | No        | `{}`       |
+
+### Script Approval
+
+`default_skill_script_approval_mode` controls what happens when a skill script is about to run:
+
+- `prompt` asks the user to approve each script interactively.
+- `approve` runs scripts without asking.
+- `deny` blocks all script execution.
+
+`skill_script_approval_modes` overrides that default for specific skills or scripts. Keys are matched most specific first:
+
+1. `"skill_name:script_name"` — one specific script
+2. `"skill_name"` — every script in one skill
+3. `"*"` — a catch-all for every skill
+
+Values are `approve` or `deny`.
+
+A complete runnable example is available in `configs/example_skills.json`.
+
+### Example
+
+```json
+"skills": {
+    "skill_paths": [
+        "./skills"
+    ],
+    "skill_runtime": {
+        "default_script_timeout_seconds": 30,
+        "max_resource_bytes": 65536,
+        "max_script_output_bytes": 32768,
+        "default_skill_script_approval_mode": "prompt",
+        "skill_script_approval_modes": {
+            "documentation-helper": "approve",
+            "documentation-helper:scripts/publish.py": "deny"
+        }
+    }
+}
+```
+
+### How Skills Configuration Works
+
+When MADA starts, it scans each configured path in `skill_paths` recursively for directories containing a `SKILL.md` manifest, so skills may be nested at any depth. If a valid skill is found, MADA indexes the manifest along with any supported resources and scripts in that folder.
+
+Skill names must be unique across all configured paths. Two skills with the same name cause startup to fail, even if they come from different roots.
+
+This allows agents to load reusable skill instructions on demand, read skill-owned text resources, and optionally execute skill-owned scripts according to the configured runtime approval policy.
 
 ## Full Example Configuration File
 

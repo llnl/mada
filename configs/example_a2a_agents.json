@@ -1,0 +1,51 @@
+{
+  "model": {
+    "provider": "livai",
+    "model": "gpt-5.4",
+    "api_key": "${API_KEY}",
+    "base_url": "${API_BASE_URL:-https://livai-api.llnl.gov/v1}"
+  },
+  "agents": [
+    {
+      "agent_name": "LocalCoordinatorAgent",
+      "description": "Coordinates local reasoning and delegates to remote A2A agents when useful.",
+      "domain": "coordination",
+      "mcp_servers": [],
+      "instructions": "You are LocalCoordinatorAgent, a MADA specialist that handles local reasoning and helps the planning agent decide when to use remote A2A agents."
+    },
+    {
+      "agent_name": "LocalCritiqueAgent",
+      "description": "Reviews proposed answers, identifies gaps, and recommends improvements.",
+      "domain": "critique",
+      "mcp_servers": [],
+      "instructions": "You are LocalCritiqueAgent, a rigorous reviewer. Identify flaws, risky assumptions, missing context, and concrete improvements."
+    }
+  ],
+  "a2a": {
+    "agents": {
+      "LangChainAgent": {
+        "url": "http://localhost:9111/",
+        "card_url": "http://localhost:9111/.well-known/agent-card.json"
+      },
+      "GoogleADKAgent": {
+        "url": "http://localhost:9112/",
+        "card_url": "http://localhost:9112/.well-known/agent-card.json"
+      }
+    },
+    "self": {
+      "card_path": "agent_cards/mada_orchestrator_card.json",
+      "url": "http://localhost:9120"
+    }
+  },
+  "orchestration": {
+    "mode": "agent-as-tool",
+    "participants": ["LocalCoordinatorAgent", "LocalCritiqueAgent"]
+  },
+  "interface": {
+    "title": "MADA A2A Agent Orchestrator",
+    "description": "Coordinate local MADA agents with remote A2A agents",
+    "chat_placeholder": "Ask MADA to solve a task or delegate to a remote A2A agent...",
+    "port": 7862,
+    "share": false
+  }
+}

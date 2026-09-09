@@ -30,7 +30,7 @@ mada/
 
 The source code for the MADA Orchestrator repository is designed with the goal of modularity and extensibility. There are multiple directories to keep components organized:
 
-- **Core:** Implements the main orchestration logic, including the coordinator and orchestrator modules.
+- **Core:** Implements the shared orchestrator runtime, mode-specific orchestration strategies, coordinator primitives, configuration, and persistence.
 - **Common:** Contains shared utilities and exception handling.
 - **Interfaces:** Provides CLI and Gradio interfaces for user interaction.
 - **Config:** Manages configuration files and models.
@@ -44,13 +44,23 @@ src/
     ├── core/                     # Core orchestration logic
     │   ├── config/                 # Configuration management
     │   ├── database/               # Database operations
+    │   ├── orchestration/          # Mode-specific strategy implementations
     │   ├── coordinator.py          # Task coordination
-    │   └── orchestrator.py         # Main orchestration logic
+    │   └── orchestrator.py         # Shared orchestration runtime
     ├── common/                   # Shared utilities
     ├── interfaces/               # User interfaces
     │   ├── cli/                    # Command-line interface
     │   └── gradio/                 # Web-based interface
 ```
+
+## Orchestration Modes
+
+`src/mada/core/orchestration/` contains the internal strategy boundary for MADA orchestration, while `src/mada/core/orchestrator.py` owns shared state, MCP connection primitives, agent creation helpers, and session persistence. The current implementation supports two modes:
+
+- `agent-as-tool`: builds a reusable planning-agent session and exposes specialist agents as tools
+- `magentic`: builds a fresh peer-agent workflow per request and uses `PlanningAgent` only as the hidden manager configuration source
+
+In both modes, participant resolution follows the same rules: `PlanningAgent` is excluded, omitted participants means all non-`PlanningAgent` agents, and ordering is preserved while duplicates are collapsed.
 
 ## Test Code Structure
 

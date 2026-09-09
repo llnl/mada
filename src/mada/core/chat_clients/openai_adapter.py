@@ -12,9 +12,11 @@ creation.
 """
 
 from agent_framework.openai import OpenAIChatClient
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 
 from mada.core.config import BaseModelConfig, OpenAIModelConfig
 from mada.core.chat_clients.provider_adapter import ProviderAdapter
+from mada.core.tls import resolve_httpx_verify_value
 
 
 class OpenAIAdapter(ProviderAdapter):
@@ -37,6 +39,36 @@ class OpenAIAdapter(ProviderAdapter):
 
     provider_name = "openai"
     chat_client = OpenAIChatClient
+
+    def pre_create(self, model_config: BaseModelConfig) -> None:
+        """
+        Create an OpenAI SDK client that uses MADA's shared TLS configuration.
+
+        OpenAI's default client relies on ``certifi``, which can reject
+        institution-managed certificate chains on HPC systems. MADA already uses
+        the system trust store for MCP HTTP clients, so mirror that behavior for
+        OpenAI-compatible providers as well.
+        """
+        self.validate_model_config(model_config)
+
+        if model_config.extra.get("async_client") is not None:
+            return
+
+        client_kwargs = {
+            "api_key": model_config.api_key,
+            "base_url": model_config.base_url,
+            "http_client": DefaultAsyncHttpxClient(
+                verify=resolve_httpx_verify_value(verify=model_config.verify),
+            ),
+        }
+
+        if org_id := model_config.extra.get("org_id"):
+            client_kwargs["organization"] = org_id
+
+        if default_headers := model_config.extra.get("default_headers"):
+            client_kwargs["default_headers"] = default_headers
+
+        model_config.extra["async_client"] = AsyncOpenAI(**client_kwargs)
 
     def validate_model_config(self, model_config: BaseModelConfig) -> None:
         """

@@ -53,7 +53,7 @@ jobs:
       runs-on: ${{ matrix.os }}
       python-version: ${{ matrix.python-version }}
       test-name: "unit"
-      test-command: 'pytest -m unit --include-allocation-required tests/'
+      test-command: 'pytest -vv -s -m unit --include-allocation-required tests/'
 
   integration:
     strategy:
@@ -66,7 +66,7 @@ jobs:
       runs-on: ${{ matrix.os }}
       python-version: ${{ matrix.python-version }}
       test-name: "integration"
-      test-command: 'pytest -m integration --include-allocation-required tests/'
+      test-command: 'pytest -vv -s -m integration --include-allocation-required tests/'
 
   e2e:
     strategy:
@@ -79,4 +79,4 @@ jobs:
       runs-on: ${{ matrix.os }}
       python-version: ${{ matrix.python-version }}
       test-name: "e2e"
-      test-command: 'pytest -m e2e --include-allocation-required tests/'
+      test-command: 'pytest -vv -s -m e2e --include-allocation-required tests/'
