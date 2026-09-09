@@ -20,6 +20,7 @@
 - Test coverage for Magentic orchestration
 - OpenTelemetry-based observability
 - Ability to check version via `mada -v` or `mada --version`
+- Adds manifest-based skills, enabling agents to load reusable instructions and run skill-owned scripts on demand.
 
 ### Changed
 - OpenAI-compatible model configs and streamable MCP server configs now support a `verify` setting for TLS verification control.
@@ -45,7 +46,6 @@
 - Orchestration configuration layer and behavior selection through a mode-specific strategy, preserves existing CLI, Gradio, and OpenAI API interfaces.
 - `orchestration.py` , `orchestrator.py` large updates to support the new pattern selection layer
 - Adds A2A capabilities, enabling the agent to connect with other agents and be accessed by them through A2A.
-- Adds manifest-based skills, enabling agents to load reusable instructions and run skill-owned scripts on demand.
 
 ### Changed
 - re-architected the test suite into unit/integration/e2e tests
