@@ -97,6 +97,57 @@ Guidelines:
             **agent_kwargs,
         )
 
+    @staticmethod
+    def _clone_agent(agent: Agent) -> Agent:
+        """
+        Create a runtime-local Agent while reusing its client and tool handles.
+
+        MagenticBuilder creates fresh executors for each workflow, but those
+        executors still hold the Agent instance supplied to the builder.  Agent
+        instances lazily acquire history providers and retain other mutable
+        invocation state, so sharing them across overlapping background
+        workflows can cross-wire a tool result.  The model client and connected
+        tool handles are safe to reuse; the Agent wrapper and its option/tool
+        containers are not.
+        """
+        default_options = dict(getattr(agent, "default_options", {}) or {})
+        tools = list(default_options.pop("tools", []) or [])
+        tools.extend(list(getattr(agent, "mcp_tools", []) or []))
+        instructions = default_options.pop("instructions", None)
+
+        return Agent(
+            client=agent.client,
+            instructions=instructions,
+            id=getattr(agent, "id", None),
+            name=getattr(agent, "name", None),
+            description=getattr(agent, "description", None),
+            tools=tools,
+            default_options=default_options,
+            context_providers=list(getattr(agent, "context_providers", []) or []),
+            middleware=(
+                list(agent.middleware)
+                if getattr(agent, "middleware", None) is not None
+                else None
+            ),
+            require_per_service_call_history_persistence=(
+                getattr(agent, "require_per_service_call_history_persistence", False)
+            ),
+            compaction_strategy=getattr(agent, "compaction_strategy", None),
+            tokenizer=getattr(agent, "tokenizer", None),
+            additional_properties=dict(
+                getattr(agent, "additional_properties", {}) or {}
+            ),
+        )
+
+    def _runtime_agent(self, agent: Agent) -> Agent:
+        """Return a per-workflow copy for framework Agent instances."""
+        try:
+            return self._clone_agent(agent)
+        except (AttributeError, TypeError, ValueError):
+            # Keep compatibility with custom SupportsAgentRun implementations.
+            LOG.debug("Using shared custom Magentic agent %r", agent, exc_info=True)
+            return agent
+
     def _create_builder(self, orchestrator: "MADAOrchestrator"):
         """
         Create a fresh Magentic builder for a request.
@@ -107,8 +158,10 @@ Guidelines:
             )
 
         return MagenticBuilder(
-            participants=orchestrator.specialist_agents,
-            manager_agent=orchestrator.manager_agent,
+            participants=[
+                self._runtime_agent(agent) for agent in orchestrator.specialist_agents
+            ],
+            manager_agent=self._runtime_agent(orchestrator.manager_agent),
         )
 
     @staticmethod
