@@ -5,6 +5,7 @@
 ### Added
 - DOI link to README
 - Magentic Orchestration Functionality
+- Runtime isolation for agents participating in Magentic workflows
 - Safeguards for the orchestration switching and database consistency for async functionality
 - Test coverage for Magentic orchestration
 - OpenTelemetry-based observability
@@ -13,8 +14,10 @@
 ### Changed
 - OpenAI-compatible model configs and streamable MCP server configs now support a `verify` setting for TLS verification control.
 - MADA now depends on `httpx2` for its direct HTTP client usage, and A2A examples target `fastmcp>=4.0.0` for MCP 2 compatibility.
+- The sample configuration now uses LivAI with Magentic orchestration and the documented local MCP server ports.
 
 ### Fixed
+- Magentic runtime-agent cloning now preserves tools and instructions across Agent Framework constructor layouts.
 - OpenAI-compatible HTTP clients and streamable MCP HTTP clients now honor configured `verify` values when resolving TLS verification.
 - Specialist agents now honor agent-level extra settings, including default_options, matching the existing PlanningAgent behavior.
 - Wrong task planning from multi-turn conversations

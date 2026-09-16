@@ -14,6 +14,47 @@ from mada.core.orchestration.stream_events import InternalError
 from mada.core.orchestrator import MADAOrchestrator
 
 
+def test_normalize_transcript_messages_preserves_tool_call_pairing():
+    orchestrator = object.__new__(MADAOrchestrator)
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": "lookup result",
+            "tool_call_id": "call-1",
+        },
+    ]
+
+    normalized = orchestrator._normalize_transcript_messages(messages)
+
+    assert normalized == [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": messages[0]["tool_calls"],
+        },
+        {
+            "role": "tool",
+            "content": "lookup result",
+            "tool_call_id": "call-1",
+        },
+    ]
+
+    prompt = orchestrator.build_prompt_from_transcript(messages)
+    assert 'TOOL_CALLS:\n[{"id": "call-1"' in prompt
+    assert 'TOOL_CALL_ID:\n"call-1"' in prompt
+
+
 @pytest.mark.asyncio
 async def test_create_chat_agent_passes_agent_extra_to_as_agent(monkeypatch):
     captured = {}
