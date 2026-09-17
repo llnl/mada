@@ -22,8 +22,18 @@ def test_each_magentic_runtime_gets_fresh_agent_wrappers(monkeypatch):
     monkeypatch.setattr(magentic_strategy, "MagenticBuilder", Builder)
 
     client = object()
-    participant = Agent(client=client, name="specialist", description="Specialist")
-    manager = Agent(client=client, name="manager", description="Manager")
+    participant = Agent(
+        client=client,
+        name="specialist",
+        description="Specialist",
+        default_options={"store": True},
+    )
+    manager = Agent(
+        client=client,
+        name="manager",
+        description="Manager",
+        default_options={"store": True},
+    )
     orchestrator = SimpleNamespace(
         specialist_agents=[participant],
         manager_agent=manager,
@@ -41,6 +51,10 @@ def test_each_magentic_runtime_gets_fresh_agent_wrappers(monkeypatch):
     assert second_manager is not first_manager
     assert first_participants[0].client is client
     assert first_manager.client is client
+    assert first_participants[0].default_options["store"] is False
+    assert first_manager.default_options["store"] is False
+    assert second_participants[0].default_options["store"] is False
+    assert second_manager.default_options["store"] is False
 
 
 def test_clone_agent_preserves_top_level_configuration(monkeypatch):
@@ -72,7 +86,31 @@ def test_clone_agent_preserves_top_level_configuration(monkeypatch):
     assert clone is not source
     assert constructed["instructions"] == source.instructions
     assert constructed["tools"] == [explicit_tool, mcp_tool]
-    assert constructed["default_options"] == {"temperature": 0.2}
+    assert constructed["default_options"] == {"temperature": 0.2, "store": False}
+
+
+def test_clone_agent_overrides_source_store_option(monkeypatch):
+    constructed = {}
+
+    class VariantAgent:
+        def __init__(self, **kwargs):
+            constructed.update(kwargs)
+            self.__dict__.update(kwargs)
+
+    monkeypatch.setattr(magentic_strategy, "Agent", VariantAgent)
+
+    source = SimpleNamespace(
+        client=object(),
+        default_options={"store": True, "temperature": 0.2},
+    )
+
+    MagenticOrchestrationStrategy._clone_agent(source)
+
+    assert constructed["default_options"] == {
+        "store": False,
+        "temperature": 0.2,
+    }
+    assert source.default_options["store"] is True
 
 
 def test_clone_agent_preserves_legacy_default_option_configuration(monkeypatch):
@@ -106,4 +144,38 @@ def test_clone_agent_preserves_legacy_default_option_configuration(monkeypatch):
         "instructions": "Use the specialist instructions.",
         "tools": [tools[0], mcp_tool],
         "temperature": 0.2,
+        "store": False,
+    }
+
+
+def test_clone_agent_preserves_tools_instructions_and_unrelated_options(
+    monkeypatch,
+):
+    constructed = {}
+
+    class LegacyAgent:
+        def __init__(self, *, client, default_options):
+            constructed.update(client=client, default_options=default_options)
+
+    monkeypatch.setattr(magentic_strategy, "Agent", LegacyAgent)
+
+    explicit_tool = object()
+    source = SimpleNamespace(
+        client=object(),
+        default_options={
+            "instructions": "Keep these instructions.",
+            "tools": [explicit_tool],
+            "temperature": 0.4,
+            "max_tokens": 200,
+        },
+    )
+
+    MagenticOrchestrationStrategy._clone_agent(source)
+
+    assert constructed["default_options"] == {
+        "instructions": "Keep these instructions.",
+        "tools": [explicit_tool],
+        "temperature": 0.4,
+        "max_tokens": 200,
+        "store": False,
     }

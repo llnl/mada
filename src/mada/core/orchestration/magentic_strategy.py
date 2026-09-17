@@ -112,6 +112,10 @@ Guidelines:
         """
         missing = object()
         default_options = dict(getattr(agent, "default_options", {}) or {})
+        # This is a runtime option,
+        # keeping it scoped to the cloned agents rather than changing the shared
+        # client or source agent configuration.
+        default_options["store"] = False
 
         # Keep this compatible with Agent Framework releases that have added or
         # removed optional Agent constructor fields.  Inspect the signature
