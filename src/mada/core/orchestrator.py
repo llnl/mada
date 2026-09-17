@@ -12,6 +12,7 @@ persistence, and strategy selection. Mode-specific request handling lives in
 
 import asyncio
 import copy
+import json
 import logging
 import re
 import traceback
@@ -892,19 +893,38 @@ Guidelines:
 
     def _normalize_transcript_messages(
         self, messages: List[Dict[str, Any]]
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         """
         Normalize OpenAI-style messages or persisted chat history into a shared
-        role/content transcript format.
+        transcript format.
+
+        Tool-call messages often have no text content.  Dropping those messages
+        leaves a following ``tool`` message orphaned, which causes providers to
+        reject it with errors such as ``No tool call found for function call
+        output``.  Keep the metadata needed to associate each result with its
+        originating call even when the message content is empty.
         """
         transcript = []
+        tool_metadata_keys = (
+            "tool_calls",
+            "function_call",
+            "tool_call_id",
+            "name",
+        )
         for message in messages:
             role = message.get("role") or "user"
             role = str(role).strip().lower() or "user"
             content = self._stringify_openai_content(message.get("content")).strip()
-            if not content:
+            tool_metadata = {
+                key: copy.deepcopy(message[key])
+                for key in tool_metadata_keys
+                if key in message and message[key] is not None
+            }
+            if not content and not tool_metadata:
                 continue
-            transcript.append({"role": role, "content": content})
+            normalized_message = {"role": role, "content": content}
+            normalized_message.update(tool_metadata)
+            transcript.append(normalized_message)
 
         return transcript
 
@@ -922,10 +942,25 @@ Guidelines:
             A single prompt string that contains the conversation transcript and
             instructions to continue as the assistant.
         """
-        transcript = [
-            f"{message['role'].upper()}:\n{message['content']}"
-            for message in self._normalize_transcript_messages(messages)
-        ]
+        transcript = []
+        for message in self._normalize_transcript_messages(messages):
+            lines = [f"{message['role'].upper()}:"]
+            content = message.get("content", "")
+            if content:
+                lines.append(str(content))
+
+            for key in (
+                "tool_calls",
+                "function_call",
+                "tool_call_id",
+                "name",
+            ):
+                if key not in message:
+                    continue
+                value = json.dumps(message[key], default=str)
+                lines.append(f"{key.upper()}:\n{value}")
+
+            transcript.append("\n".join(lines))
 
         if not transcript:
             return "USER:\nPlease introduce yourself."

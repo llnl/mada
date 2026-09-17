@@ -97,6 +97,124 @@ Guidelines:
             **agent_kwargs,
         )
 
+    @staticmethod
+    def _clone_agent(agent: Agent) -> Agent:
+        """
+        Create a runtime-local Agent while reusing its client and tool handles.
+
+        MagenticBuilder creates fresh executors for each workflow, but those
+        executors still hold the Agent instance supplied to the builder.  Agent
+        instances lazily acquire history providers and retain other mutable
+        invocation state, so sharing them across overlapping background
+        workflows can cross-wire a tool result.  The model client and connected
+        tool handles are safe to reuse; the Agent wrapper and its option/tool
+        containers are not.
+        """
+        missing = object()
+        default_options = dict(getattr(agent, "default_options", {}) or {})
+        # This is a runtime option,
+        # keeping it scoped to the cloned agents rather than changing the shared
+        # client or source agent configuration.
+        default_options["store"] = False
+
+        # Keep this compatible with Agent Framework releases that have added or
+        # removed optional Agent constructor fields.  Inspect the signature
+        # before moving values out of default_options so older layouts retain
+        # their tools and instructions.
+        try:
+            parameters = inspect.signature(Agent).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        accepts_arbitrary_keywords = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+
+        def accepts_constructor_option(name: str) -> bool:
+            return accepts_arbitrary_keywords or not parameters or name in parameters
+
+        # Agent Framework has used both layouts for these two values.  In some
+        # releases they are constructor fields (`agent.tools` and
+        # `agent.instructions`); in others they are kept in default_options.
+        # Prefer an explicitly present top-level value, including an empty tool
+        # list, and only use default_options as a compatibility fallback.
+        top_level_tools = getattr(agent, "tools", missing)
+        if top_level_tools is missing or top_level_tools is None:
+            tools = list(default_options.get("tools", []) or [])
+        else:
+            tools = list(top_level_tools or [])
+
+        top_level_instructions = getattr(agent, "instructions", missing)
+        if top_level_instructions is missing or top_level_instructions is None:
+            instructions = default_options.get("instructions")
+        else:
+            instructions = top_level_instructions
+
+        # MCP tools can be exposed separately on some framework versions and
+        # together with `tools` on others.  Reuse the handles, but never give a
+        # runtime duplicate entries for the same tool object.
+        seen_tool_ids = {id(tool) for tool in tools}
+        for tool in list(getattr(agent, "mcp_tools", []) or []):
+            if id(tool) not in seen_tool_ids:
+                tools.append(tool)
+                seen_tool_ids.add(id(tool))
+
+        if accepts_constructor_option("tools"):
+            default_options.pop("tools", None)
+        elif top_level_tools is not missing or "tools" in default_options:
+            default_options["tools"] = tools
+
+        if accepts_constructor_option("instructions"):
+            default_options.pop("instructions", None)
+        elif top_level_instructions is not missing or "instructions" in default_options:
+            default_options["instructions"] = instructions
+
+        constructor_options = {
+            "client": agent.client,
+            "instructions": instructions,
+            "id": getattr(agent, "id", None),
+            "name": getattr(agent, "name", None),
+            "description": getattr(agent, "description", None),
+            "tools": tools,
+            "default_options": default_options,
+            "context_providers": list(getattr(agent, "context_providers", []) or []),
+            "middleware": (
+                list(agent.middleware)
+                if getattr(agent, "middleware", None) is not None
+                else None
+            ),
+            "require_per_service_call_history_persistence": getattr(
+                agent, "require_per_service_call_history_persistence", False
+            ),
+            "compaction_strategy": getattr(agent, "compaction_strategy", None),
+            "tokenizer": getattr(agent, "tokenizer", None),
+            "additional_properties": dict(
+                getattr(agent, "additional_properties", {}) or {}
+            ),
+        }
+
+        # Passing only accepted fields avoids falling back to the shared Agent
+        # (which would defeat per-workflow isolation) merely because an
+        # optional field is unknown.
+        if not accepts_arbitrary_keywords and parameters:
+            constructor_options = {
+                key: value
+                for key, value in constructor_options.items()
+                if key in parameters
+            }
+
+        return Agent(**constructor_options)
+
+    def _runtime_agent(self, agent: Agent) -> Agent:
+        """Return a per-workflow copy for framework Agent instances."""
+        # Keep compatibility with custom SupportsAgentRun implementations, but
+        # never silently share a real Agent after a cloning failure: that would
+        # bring back the cross-workflow history race this wrapper prevents.
+        if not isinstance(agent, Agent):
+            LOG.debug("Using custom Magentic agent %r", agent)
+            return agent
+        return self._clone_agent(agent)
+
     def _create_builder(self, orchestrator: "MADAOrchestrator"):
         """
         Create a fresh Magentic builder for a request.
@@ -107,8 +225,10 @@ Guidelines:
             )
 
         return MagenticBuilder(
-            participants=orchestrator.specialist_agents,
-            manager_agent=orchestrator.manager_agent,
+            participants=[
+                self._runtime_agent(agent) for agent in orchestrator.specialist_agents
+            ],
+            manager_agent=self._runtime_agent(orchestrator.manager_agent),
         )
 
     @staticmethod
