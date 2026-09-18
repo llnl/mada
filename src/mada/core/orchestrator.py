@@ -397,6 +397,7 @@ class MADAOrchestrator(MCPAgentManager):
                     "Accept": "text/event-stream, application/json",
                     "Cache-Control": "no-cache",
                 }
+                headers.update(server_config.headers)
 
                 # Add bearer token if provided
                 if self.bearer_token:

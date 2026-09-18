@@ -34,8 +34,12 @@
     },
     "professor": {
       "transport": "streamable-http",
-      "url": "http://localhost:8005/mcp",
-      "description": "Professor surrogate modeling"
+       "url": "http://localhost:8005/mcp",
+       "description": "Professor surrogate modeling",
+       "headers": {
+        "X-Token": "${TOKEN}"
+       },
+       "verify": true 
     }
   },
   "orchestration": {

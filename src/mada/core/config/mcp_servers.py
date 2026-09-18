@@ -12,7 +12,7 @@ metadata, and the Python executable used for stdio-based server startup.
 
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from mada.core.config.utils import expand_env_vars
@@ -35,6 +35,7 @@ class MCPServerConfig:
         verify (bool | str): TLS verification setting for streamable-http
             servers. Use `True` to resolve from environment/system trust,
             `False` to disable verification, or a CA bundle path string.
+        headers (dict[str, str]): headers for streamable-http servers.
     """
 
     transport: str
@@ -43,8 +44,15 @@ class MCPServerConfig:
     description: Optional[str] = ""
     python_executable: str = sys.executable
     verify: bool | str = True
+    headers: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         """Expand environment variables in string-based verification settings."""
         if isinstance(self.verify, str):
             self.verify = expand_env_vars(self.verify)
+        if not isinstance(self.headers, dict):
+            raise ValueError("'mcp_servers.<name>.headers' must be an object")
+        self.headers = {
+            str(key): expand_env_vars(str(value))
+            for key, value in self.headers.items()
+        }
