@@ -1,0 +1,16 @@
+spec:
+  inputs:
+    zone_extends:
+      type: array
+      description: Zone-specific parents
+---
+
+integration_tests:
+  stage: test
+  extends:
+    - .install_mada
+    - .python_matrix
+    - .retry_settings
+    - $[[ inputs.zone_extends ]]
+  script:
+    - pytest -vv -s -m integration --include-allocation-required tests/

@@ -1,0 +1,21 @@
+spec:
+  inputs:
+    zone_extends:
+      type: array
+      description: Zone-specific parents
+
+---
+
+pages_test:
+  stage: test
+  variables:
+    PYTHON_IMAGE: python:3.13
+  extends:
+    - .install_mada
+    - .retry_settings
+    - $[[ inputs.zone_extends ]]
+  script:
+    - mkdocs build --strict --verbose --site-dir doc_build_test
+  artifacts:
+    paths:
+      - doc_build_test
