@@ -9,10 +9,12 @@
 - Test coverage for Magentic orchestration
 - OpenTelemetry-based observability
 - Ability to check version via `mada -v` or `mada --version`
+- Support for Hubcast & GitLab Tests
 
 ### Changed
 - OpenAI-compatible model configs and streamable MCP server configs now support a `verify` setting for TLS verification control.
 - MADA now depends on `httpx2` for its direct HTTP client usage, and A2A examples target `fastmcp>=4.0.0` for MCP 2 compatibility.
+- All tests now run on LLNL machines except tests running on Windows OS
 
 ### Fixed
 - OpenAI-compatible HTTP clients and streamable MCP HTTP clients now honor configured `verify` values when resolving TLS verification.
