@@ -36,14 +36,41 @@ class OrchestrationConfig:
             Optional ordered list of specialist agent names to include in the
             orchestration pattern. When omitted, all non-`PlanningAgent`
             agents participate.
+        max_rounds:
+            Maximum number of Magentic coordination rounds for one request.
+        timeout_seconds:
+            Maximum wall-clock time for one Magentic request.
+        max_stalls:
+            Maximum number of consecutive Magentic cycles without meaningful
+            progress before synthesis is requested.
     """
 
     mode: str = DEFAULT_ORCHESTRATION_MODE
     participants: list[str] | None = None
+    max_rounds: int = 4
+    timeout_seconds: int = 120
+    max_stalls: int = 1
 
     def __post_init__(self) -> None:
         normalized_mode = expand_env_vars(self.mode or "").strip().lower()
         self.mode = normalized_mode or DEFAULT_ORCHESTRATION_MODE
+
+        for field_name in ("max_rounds", "timeout_seconds", "max_stalls"):
+            value = getattr(self, field_name)
+            if isinstance(value, str):
+                expanded_value = expand_env_vars(value)
+                if expanded_value != value:
+                    try:
+                        value = int(expanded_value.strip())
+                    except (AttributeError, ValueError):
+                        # Let the common validation below report the field-specific
+                        # positive-integer error for malformed env values.
+                        pass
+                    setattr(self, field_name, value)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(
+                    f"'orchestration.{field_name}' must be a positive integer"
+                )
 
         if self.mode not in SUPPORTED_ORCHESTRATION_MODES:
             raise ValueError(f"unsupported orchestration mode: {self.mode}")

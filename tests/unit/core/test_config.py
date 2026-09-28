@@ -94,12 +94,43 @@ class TestOrchestrationConfig:
 
         assert config.mode == DEFAULT_ORCHESTRATION_MODE
         assert config.participants is None
+        assert config.max_rounds == 4
+        assert config.timeout_seconds == 120
+        assert config.max_stalls == 1
 
     def test_load_orchestration_config_defaults_for_empty_object(self):
         config = load_orchestration_config({})
 
         assert config.mode == DEFAULT_ORCHESTRATION_MODE
         assert config.participants is None
+
+    def test_load_orchestration_config_expands_env_backed_limits(self, monkeypatch):
+        monkeypatch.setenv("MADA_MAX_ROUNDS", "7")
+
+        config = load_orchestration_config(
+            {
+                "max_rounds": "${MADA_MAX_ROUNDS}",
+                "timeout_seconds": "${MADA_TIMEOUT_SECONDS:-30}",
+                "max_stalls": "${MADA_MAX_STALLS:-2}",
+            }
+        )
+
+        assert config.max_rounds == 7
+        assert config.timeout_seconds == 30
+        assert config.max_stalls == 2
+
+    @pytest.mark.parametrize(
+        "field_name", ["max_rounds", "timeout_seconds", "max_stalls"]
+    )
+    @pytest.mark.parametrize("invalid_value", [0, -1, False, "4"])
+    def test_load_orchestration_config_rejects_invalid_convergence_limits(
+        self, field_name, invalid_value
+    ):
+        with pytest.raises(
+            ValueError,
+            match=rf"'orchestration\.{field_name}' must be a positive integer",
+        ):
+            load_orchestration_config({field_name: invalid_value})
 
     @pytest.mark.parametrize("invalid_value", [False, []])
     def test_load_orchestration_config_rejects_non_object_blocks(self, invalid_value):
