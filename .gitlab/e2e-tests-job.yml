@@ -1,0 +1,16 @@
+spec:
+  inputs:
+    zone_extends:
+      type: array
+      description: Zone-specific parents
+---
+
+e2e_tests:
+  stage: test
+  extends:
+    - .install_mada
+    - .python_matrix
+    - .retry_settings
+    - $[[ inputs.zone_extends ]]
+  script:
+    - pytest -vv -s -m e2e --include-allocation-required tests/

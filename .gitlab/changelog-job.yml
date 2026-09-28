@@ -1,0 +1,22 @@
+spec:
+  inputs:
+    zone_extends:
+      type: array
+      description: Zone-specific parents
+---
+
+changelog:
+  stage: test
+  image: alpine/git:latest
+  extends:
+    - .retry_settings
+    - $[[ inputs.zone_extends ]]
+  script:
+    - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth=1
+    - |
+      if git diff --name-only FETCH_HEAD...HEAD | grep -qx 'CHANGELOG.md'; then
+        echo "CHANGELOG.md updated"
+      else
+        echo "Please update CHANGELOG.md."
+        exit 1
+      fi
