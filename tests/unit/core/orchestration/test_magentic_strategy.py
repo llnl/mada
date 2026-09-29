@@ -82,12 +82,12 @@ def test_builder_keeps_native_stall_recovery_behind_round_limit(monkeypatch):
     orchestrator = SimpleNamespace(
         specialist_agents=[participant],
         manager_agent=manager,
-        orchestration=SimpleNamespace(max_rounds=4, max_stalls=5),
+        orchestration=SimpleNamespace(max_rounds=4, max_stalls=10),
     )
 
     MagenticOrchestrationStrategy()._build_runtime(orchestrator)
 
-    assert captured["kwargs"] == {"max_stall_count": 5}
+    assert captured["kwargs"] == {"max_stall_count": 11}
 
 
 def test_repeated_progress_reaches_stall_limit():
@@ -401,7 +401,7 @@ def test_progress_ledger_stall_state_counts_even_when_signature_changes():
     assert state[3] == "no-progress limit (1)"
 
 
-def test_executor_events_preserve_stalled_ledger_state():
+def test_completed_executor_work_resets_stalled_ledger_state():
     strategy = MagenticOrchestrationStrategy()
 
     stalled_ledger = {
@@ -445,8 +445,88 @@ def test_executor_events_preserve_stalled_ledger_state():
         seen_round_ids=set(),
     )
 
-    assert state[1] == 1
-    assert state[3] == "no-progress limit (1)"
+    assert state[1] == 0
+    assert state[3] is None
+
+
+@pytest.mark.parametrize("result_type", ["tool_result", "function_result"])
+def test_empty_tool_result_clears_stalled_ledger_state(result_type):
+    strategy = MagenticOrchestrationStrategy()
+    stalled_ledger = {
+        "type": "magentic_orchestrator",
+        "data": {
+            "event_type": "PROGRESS_LEDGER_UPDATED",
+            "content": {
+                "is_progress_being_made": {"answer": False},
+                "is_in_loop": {"answer": False},
+            },
+        },
+    }
+    state = strategy._update_convergence(
+        stalled_ledger,
+        rounds=0,
+        stalls=0,
+        max_rounds=4,
+        max_stalls=1,
+        last_signature=None,
+        seen_round_ids=set(),
+    )
+    state = strategy._update_convergence(
+        {"type": result_type, "call_id": "call-1"},
+        rounds=state[0],
+        stalls=state[1],
+        max_rounds=4,
+        max_stalls=1,
+        last_signature=state[2],
+        seen_round_ids=set(),
+    )
+    state = strategy._update_convergence(
+        stalled_ledger,
+        rounds=state[0],
+        stalls=state[1],
+        max_rounds=4,
+        max_stalls=1,
+        last_signature=state[2],
+        seen_round_ids=set(),
+    )
+
+    assert state[1] == 0
+    assert state[2] is not None
+    assert state[3] is None
+
+
+def test_fresh_output_resets_stalled_ledger_state():
+    strategy = MagenticOrchestrationStrategy()
+    state = strategy._update_convergence(
+        {"type": "progress", "text": "waiting"},
+        rounds=0,
+        stalls=0,
+        max_rounds=4,
+        max_stalls=1,
+        last_signature=None,
+        seen_round_ids=set(),
+    )
+    state = strategy._update_convergence(
+        {"type": "output", "text": "new specialist work"},
+        rounds=state[0],
+        stalls=state[1],
+        max_rounds=4,
+        max_stalls=1,
+        last_signature=state[2],
+        seen_round_ids=set(),
+    )
+    state = strategy._update_convergence(
+        {"type": "progress", "text": "waiting"},
+        rounds=state[0],
+        stalls=state[1],
+        max_rounds=4,
+        max_stalls=1,
+        last_signature=state[2],
+        seen_round_ids=set(),
+    )
+
+    assert state[1] == 0
+    assert state[3] is None
 
 
 def test_text_progress_resets_stall_detection():
@@ -766,7 +846,7 @@ async def test_stalled_workflow_synthesizes_and_replaces_provisional_text(monkey
 
 
 @pytest.mark.asyncio
-async def test_background_ack_takes_precedence_over_synthesized_fallback(monkeypatch):
+async def test_background_task_preserves_synthesized_fallback(monkeypatch):
     strategy = MagenticOrchestrationStrategy()
 
     async def events(_orchestrator, _messages):
@@ -807,7 +887,38 @@ async def test_background_ack_takes_precedence_over_synthesized_fallback(monkeyp
     ):
         results.append((kind, value))
 
-    assert results[-1] == ("final", "[task-42] Started in background.")
+    assert any(kind == "background_task" for kind, _value in results)
+    assert results[-1] == ("final", "synthesized fallback")
+
+
+@pytest.mark.asyncio
+async def test_process_message_persists_final_answer_without_background_ack_prefix(
+    monkeypatch,
+):
+    strategy = MagenticOrchestrationStrategy()
+    persisted = {}
+
+    async def events(_orchestrator, _messages, *, include_tool_notices):
+        assert include_tool_notices
+        yield "background_task", '{"task_id":"task-42","status":"running"}'
+        yield "final", "synthesized fallback"
+
+    async def commit(_turn_id, _message, assistant_reply, **_kwargs):
+        persisted["reply"] = assistant_reply
+
+    monkeypatch.setattr(strategy, "_stream_workflow_response", events)
+    orchestrator = SimpleNamespace(
+        manager_agent=object(),
+        _session_lock=asyncio.Lock(),
+        _next_turn_id=1,
+        session_manager=SimpleNamespace(load_history=lambda: []),
+        _normalize_transcript_messages=lambda messages: messages,
+        _commit_completed_turn=commit,
+    )
+
+    [chunk async for chunk in strategy.process_message(orchestrator, "hello")]
+
+    assert persisted["reply"] == "synthesized fallback"
 
 
 @pytest.mark.asyncio
@@ -899,6 +1010,83 @@ async def test_aborting_response_stream_runs_cleanup_hooks():
 
     assert stream_closed
     assert cleanup_called
+
+
+@pytest.mark.asyncio
+async def test_aborting_unopened_response_stream_closes_source():
+    strategy = MagenticOrchestrationStrategy()
+
+    class Source:
+        def __init__(self):
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.sleep(10)
+
+        async def aclose(self):
+            self.closed = True
+
+    source = Source()
+    stream = ResponseStream(source)
+
+    closed = await strategy._close_async_iterator_until(stream, time.monotonic() + 1)
+
+    assert closed
+    assert source.closed
+
+
+@pytest.mark.asyncio
+async def test_workflow_event_teardown_is_bounded(monkeypatch):
+    strategy = MagenticOrchestrationStrategy()
+    close_started = asyncio.Event()
+    close_release = asyncio.Event()
+    close_finished = asyncio.Event()
+
+    class Source:
+        def __init__(self):
+            self.index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.index:
+                await asyncio.sleep(10)
+            self.index += 1
+            return {"type": "output", "text": "partial"}
+
+        async def aclose(self):
+            close_started.set()
+            try:
+                await close_release.wait()
+            finally:
+                close_finished.set()
+
+    source = Source()
+
+    monkeypatch.setattr(strategy, "_build_runtime", lambda _orchestrator: object())
+    monkeypatch.setattr(strategy, "_start_runtime", lambda _runtime, _messages: source)
+    orchestrator = SimpleNamespace(
+        manager_agent=object(),
+        build_prompt_from_transcript=lambda _messages: "task",
+    )
+    events = strategy._iter_workflow_events(
+        orchestrator,
+        [{"role": "user", "content": "hello"}],
+        close_deadline=time.monotonic() - 1,
+    )
+    await anext(events)
+
+    started = time.monotonic()
+    await events.aclose()
+
+    assert time.monotonic() - started < 1
+    await close_started.wait()
+    close_release.set()
+    await close_finished.wait()
 
 
 @pytest.mark.asyncio
@@ -1124,7 +1312,7 @@ def test_duplicate_text_updates_do_not_reach_stall_limit():
 def test_progress_stall_survives_cumulative_output_updates():
     strategy = MagenticOrchestrationStrategy()
     state = strategy._update_convergence(
-        {"type": "progress", "text": "waiting"},
+        {"type": "output", "text": "draft"},
         rounds=0,
         stalls=0,
         max_rounds=4,
@@ -1133,7 +1321,7 @@ def test_progress_stall_survives_cumulative_output_updates():
         seen_round_ids=set(),
     )
     state = strategy._update_convergence(
-        {"type": "output", "text": "draft"},
+        {"type": "progress", "text": "waiting"},
         rounds=state[0],
         stalls=state[1],
         max_rounds=4,
@@ -1142,7 +1330,7 @@ def test_progress_stall_survives_cumulative_output_updates():
         seen_round_ids=set(),
     )
     state = strategy._update_convergence(
-        {"type": "output", "text": "draft with more detail"},
+        {"type": "output", "text": "draft"},
         rounds=state[0],
         stalls=state[1],
         max_rounds=4,
@@ -1297,6 +1485,46 @@ async def test_teardown_timeout_preserves_convergence_synthesis_reason(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_teardown_timeout_synthesizes_provisional_output(monkeypatch):
+    strategy = MagenticOrchestrationStrategy()
+
+    async def events(_orchestrator, _messages):
+        yield {"type": "output", "text": "provisional answer"}
+
+    async def close(_value):
+        raise asyncio.TimeoutError
+
+    async def synthesize(
+        _orchestrator,
+        _messages,
+        candidate_text,
+        *,
+        completed_tool_work,
+        timeout_seconds,
+    ):
+        assert candidate_text == "provisional answer"
+        assert not completed_tool_work
+        assert timeout_seconds > 0
+        return "synthesized answer"
+
+    monkeypatch.setattr(strategy, "_iter_workflow_events", events)
+    monkeypatch.setattr(strategy, "_close_async_iterator", close)
+    monkeypatch.setattr(strategy, "_synthesize_response", synthesize)
+    orchestrator = SimpleNamespace(
+        manager_agent=object(),
+        orchestration=SimpleNamespace(max_rounds=4, max_stalls=1, timeout_seconds=10),
+    )
+
+    results = []
+    async for kind, value in strategy._stream_workflow_response(
+        orchestrator, [{"role": "user", "content": "hello"}], include_tool_notices=False
+    ):
+        results.append((kind, value))
+
+    assert results[-1] == ("final", "synthesized answer")
+
+
+@pytest.mark.asyncio
 async def test_workflow_timeout_synthesizes_with_reserved_budget(monkeypatch):
     strategy = MagenticOrchestrationStrategy()
     synthesis_called = False
@@ -1390,6 +1618,40 @@ async def test_stream_cleanup_is_bounded_by_request_deadline(monkeypatch):
     assert close_cancelled
     close_release.set()
     await close_finished.wait()
+
+
+@pytest.mark.asyncio
+async def test_completed_post_deadline_cleanup_reports_success(monkeypatch):
+    strategy = MagenticOrchestrationStrategy()
+
+    async def close(_value):
+        return None
+
+    monkeypatch.setattr(strategy, "_close_async_iterator", close)
+    closed = await strategy._close_async_iterator_until(
+        object(),
+        time.monotonic() - 1,
+        initiate_after_deadline=True,
+    )
+
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_stream_cleanup_skips_after_deadline(monkeypatch):
+    strategy = MagenticOrchestrationStrategy()
+    close_started = asyncio.Event()
+
+    async def slow_close(_value):
+        close_started.set()
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(strategy, "_close_async_iterator", slow_close)
+    closed = await strategy._close_async_iterator_until(object(), time.monotonic() - 1)
+
+    assert not closed
+    await asyncio.sleep(0)
+    assert not close_started.is_set()
 
 
 @pytest.mark.asyncio
@@ -1524,6 +1786,36 @@ def test_clone_agent_preserves_top_level_configuration(monkeypatch):
     assert constructed["default_options"] == {"temperature": 0.2, "store": False}
 
 
+def test_clone_agent_normalizes_single_tool_configurations(monkeypatch):
+    constructed = {}
+
+    class VariantAgent:
+        def __init__(self, **kwargs):
+            constructed.update(kwargs)
+            self.__dict__.update(kwargs)
+
+    monkeypatch.setattr(magentic_strategy, "Agent", VariantAgent)
+
+    def tool():
+        return None
+
+    top_level_source = SimpleNamespace(
+        client=object(),
+        tools=tool,
+        default_options={},
+    )
+    MagenticOrchestrationStrategy._clone_agent(top_level_source)
+    assert constructed["tools"] == [tool]
+
+    constructed.clear()
+    legacy_source = SimpleNamespace(
+        client=object(),
+        default_options={"tools": tool},
+    )
+    MagenticOrchestrationStrategy._clone_agent(legacy_source)
+    assert constructed["tools"] == [tool]
+
+
 def test_clone_agent_overrides_source_store_option(monkeypatch):
     constructed = {}
 
@@ -1536,7 +1828,11 @@ def test_clone_agent_overrides_source_store_option(monkeypatch):
 
     source = SimpleNamespace(
         client=object(),
-        default_options={"store": True, "temperature": 0.2},
+        default_options={
+            "store": True,
+            "temperature": 0.2,
+            "conversation_id": "shared-conversation",
+        },
     )
 
     MagenticOrchestrationStrategy._clone_agent(source)
@@ -1563,6 +1859,9 @@ def test_clone_agent_preserves_legacy_default_option_configuration(monkeypatch):
     mcp_tool = object()
     source = SimpleNamespace(
         client=object(),
+        id="specialist-id",
+        name="specialist",
+        description="Specialist description",
         mcp_tools=[mcp_tool],
         default_options={
             "instructions": "Use the specialist instructions.",
@@ -1581,6 +1880,9 @@ def test_clone_agent_preserves_legacy_default_option_configuration(monkeypatch):
         "temperature": 0.2,
         "store": False,
     }
+    assert clone.id == source.id
+    assert clone.name == source.name
+    assert clone.description == source.description
 
 
 def test_clone_agent_preserves_tools_instructions_and_unrelated_options(

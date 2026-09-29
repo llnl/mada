@@ -125,6 +125,7 @@ Guidelines:
         # keeping it scoped to the cloned agents rather than changing the shared
         # client or source agent configuration.
         default_options["store"] = False
+        default_options.pop("conversation_id", None)
 
         # Keep this compatible with Agent Framework releases that have added or
         # removed optional Agent constructor fields.  Inspect the signature
@@ -142,6 +143,13 @@ Guidelines:
         def accepts_constructor_option(name: str) -> bool:
             return accepts_arbitrary_keywords or not parameters or name in parameters
 
+        def normalize_tools(value: Any) -> list[Any]:
+            if value is None:
+                return []
+            if isinstance(value, (list, tuple, set, frozenset)):
+                return list(value)
+            return [value]
+
         # Agent Framework has used both layouts for these two values.  In some
         # releases they are constructor fields (`agent.tools` and
         # `agent.instructions`); in others they are kept in default_options.
@@ -149,9 +157,9 @@ Guidelines:
         # list, and only use default_options as a compatibility fallback.
         top_level_tools = getattr(agent, "tools", missing)
         if top_level_tools is missing or top_level_tools is None:
-            tools = list(default_options.get("tools", []) or [])
+            tools = normalize_tools(default_options.get("tools"))
         else:
-            tools = list(top_level_tools or [])
+            tools = normalize_tools(top_level_tools)
 
         top_level_instructions = getattr(agent, "instructions", missing)
         if top_level_instructions is missing or top_level_instructions is None:
@@ -212,7 +220,14 @@ Guidelines:
                 if key in parameters
             }
 
-        return Agent(**constructor_options)
+        clone = Agent(**constructor_options)
+        for attribute in ("id", "name", "description"):
+            value = getattr(agent, attribute, None)
+            if value is not None and getattr(clone, attribute, None) != value:
+                MagenticOrchestrationStrategy._set_agent_metadata(
+                    clone, attribute, value
+                )
+        return clone
 
     def _runtime_agent(self, agent: Agent) -> Agent:
         """Return a per-workflow copy for framework Agent instances."""
@@ -245,6 +260,7 @@ Guidelines:
         # MADA's synthesis decision.
         configured = getattr(orchestrator, "orchestration", None)
         max_rounds = max(1, int(getattr(configured, "max_rounds", 4)))
+        max_stalls = max(1, int(getattr(configured, "max_stalls", 1)))
         try:
             builder_parameters = inspect.signature(MagenticBuilder).parameters
         except (TypeError, ValueError):
@@ -254,7 +270,7 @@ Guidelines:
             for parameter in builder_parameters.values()
         )
         if "max_stall_count" in builder_parameters or accepts_kwargs:
-            builder_kwargs["max_stall_count"] = max_rounds + 1
+            builder_kwargs["max_stall_count"] = max(max_rounds, max_stalls) + 1
 
         return MagenticBuilder(**builder_kwargs)
 
@@ -804,6 +820,16 @@ Guidelines:
             return f"[{task_id}] Started in background."
         return "Started in background."
 
+    @classmethod
+    def _reply_for_persistence(
+        cls, assistant_reply: str, background_task_descriptors: List[str]
+    ) -> str:
+        """Persist an answer, or an acknowledgement when no answer exists."""
+        ack = cls._background_task_ack(background_task_descriptors)
+        if assistant_reply.strip():
+            return assistant_reply
+        return ack
+
     async def _iter_result_events(
         self,
         result: Any,
@@ -847,6 +873,7 @@ Guidelines:
                     result,
                     close_deadline,
                     finalize_response=not final_response_called,
+                    initiate_after_deadline=True,
                 )
 
     @staticmethod
@@ -873,6 +900,16 @@ Guidelines:
         # generator, then use the stream's finalization path so cleanup hooks
         # still run for an aborted workflow.
         iterator = getattr(value, "_iterator", None)
+        if iterator is None:
+            source = getattr(value, "_stream_source", None)
+            if source is not None and source is not value:
+                if asyncio.isfuture(source):
+                    source.cancel()
+                else:
+                    await MagenticOrchestrationStrategy._close_async_iterator(
+                        source, finalize_response=False
+                    )
+
         close = getattr(iterator, "aclose", None)
         if callable(close):
             result = close()
@@ -903,23 +940,45 @@ Guidelines:
         deadline: float,
         *,
         finalize_response: bool = True,
+        initiate_after_deadline: bool = False,
     ) -> bool:
         """Close a stream without allowing teardown to exceed the deadline."""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 and not initiate_after_deadline:
+            return False
+
         if finalize_response:
             close_task = asyncio.create_task(self._close_async_iterator(value))
         else:
             close_task = asyncio.create_task(
                 self._close_async_iterator(value, finalize_response=False)
             )
-        remaining = max(0.0, deadline - time.monotonic())
 
         def consume_task_result(task: asyncio.Task[Any]) -> None:
             if not task.cancelled():
                 task.exception()
 
         if remaining <= 0:
+            # Let nested async-generator finalizers start, but never retain a
+            # cleanup task after the request deadline has elapsed.
+            await asyncio.sleep(0)
+            if close_task.done():
+                try:
+                    await close_task
+                    return True
+                except asyncio.CancelledError:
+                    return False
+                except Exception:
+                    LOG.exception("Magentic workflow stream teardown failed")
+                    return False
+
             close_task.cancel()
-            close_task.add_done_callback(consume_task_result)
+            try:
+                await close_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                LOG.exception("Magentic workflow stream teardown failed")
             return False
 
         try:
@@ -972,6 +1031,8 @@ Guidelines:
         self,
         orchestrator: "MADAOrchestrator",
         transcript_messages: List[Dict[str, Any]],
+        *,
+        close_deadline: float | None = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Run a Magentic workflow and yield its events.
@@ -994,12 +1055,20 @@ Guidelines:
 
         runtime = self._build_runtime(orchestrator)
         result = self._start_runtime(runtime, [task_message])
-        event_stream = self._iter_result_events(result)
+        event_stream = self._iter_result_events(result, close_deadline=close_deadline)
         try:
             async for event in event_stream:
                 yield event
         finally:
-            await self._close_async_iterator(event_stream)
+            if close_deadline is None:
+                await self._close_async_iterator(event_stream)
+            else:
+                await self._close_async_iterator_until(
+                    event_stream,
+                    close_deadline,
+                    finalize_response=False,
+                    initiate_after_deadline=True,
+                )
 
     @staticmethod
     def _normalize_convergence_event_name(value: Any) -> str:
@@ -1274,16 +1343,52 @@ Guidelines:
         """Return whether a prior progress signature contained a stalled ledger."""
         if not signature or not signature.startswith("progress:"):
             return False
-        signature = signature.lower()
+        signature = signature.split(
+            MagenticOrchestrationStrategy._CONVERGENCE_OUTPUT_MARKER, 1
+        )[0].lower()
         return (
             "is_progress_being_made=false" in signature
             or "is_in_loop=true" in signature
         )
 
-    @staticmethod
-    def _signature_is_progress(signature: str | None) -> bool:
+    _CONVERGENCE_OUTPUT_MARKER = "\x1eoutput="
+
+    @classmethod
+    def _signature_base(cls, signature: str | None) -> str | None:
+        if signature is None:
+            return None
+        return signature.split(cls._CONVERGENCE_OUTPUT_MARKER, 1)[0]
+
+    @classmethod
+    def _signature_output(cls, signature: str | None) -> str | None:
+        if signature is None:
+            return None
+        base, marker, encoded = signature.partition(cls._CONVERGENCE_OUTPUT_MARKER)
+        if not marker:
+            return base[5:] if base.startswith("text:") else None
+        try:
+            output = json.loads(encoded)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return output if isinstance(output, str) else None
+
+    @classmethod
+    def _signature_with_output(
+        cls, signature: str | None, output: str | None
+    ) -> str | None:
+        if signature is None or output is None:
+            return signature
+        return (
+            f"{cls._signature_base(signature)}{cls._CONVERGENCE_OUTPUT_MARKER}"
+            f"{json.dumps(output)}"
+        )
+
+    @classmethod
+    def _signature_is_progress(cls, signature: str | None) -> bool:
         """Return whether a signature represents a progress update."""
-        return bool(signature and signature.startswith("progress:"))
+        return bool(
+            signature and cls._signature_base(signature).startswith("progress:")
+        )
 
     @classmethod
     def _convergence_round_increment(cls, event: Any, seen_round_ids: set[str]) -> int:
@@ -1314,24 +1419,31 @@ Guidelines:
         ledger_stalled = cls._progress_ledger_is_stalled(event)
         ledger_satisfied = cls._progress_ledger_is_satisfied(event)
         event_type = cls._convergence_event_type(event)
-        preserves_stall_state = cls._signature_is_stalled(
-            last_signature
-        ) and event_type in {
-            "executor_invoked",
+        last_signature_base = cls._signature_base(last_signature)
+        last_output = cls._signature_output(last_signature)
+        preserves_stall_state = (
+            cls._signature_is_stalled(last_signature)
+            and event_type == "executor_invoked"
+        )
+        resets_stall_state = event_type in {
             "executor_completed",
             "tool_result",
             "function_result",
         }
         if cls._is_text_progress_event(event):
             # Compatibility streams may repeat cumulative output verbatim. A
-            # repeated transport update is not a new convergence cycle. Keep a
-            # preceding progress signature as the meaningful state so output
-            # updates cannot hide the next repeated stalled progress update.
-            text_signature = f"text:{cls._progress_text(event)}"
-            if text_signature != last_signature:
-                if not cls._signature_is_progress(last_signature):
-                    stalls = 0
-                    last_signature = text_signature
+            # repeated transport update is not a new convergence cycle, while
+            # genuinely new output resets a prior no-progress run.
+            text = cls._progress_text(event)
+            text_signature = f"text:{text}"
+            if text != last_output:
+                stalls = 0
+                last_signature = text_signature
+            elif cls._signature_is_progress(last_signature):
+                last_signature = cls._signature_with_output(last_signature, text)
+        elif resets_stall_state:
+            stalls = 0
+            last_signature = signature
         elif preserves_stall_state:
             pass
         elif ledger_stalled is not None:
@@ -1340,10 +1452,10 @@ Guidelines:
                 if ledger_stalled and cls._signature_is_stalled(last_signature)
                 else 0
             )
-            last_signature = signature
+            last_signature = cls._signature_with_output(signature, last_output)
         elif signature is not None:
-            stalls = stalls + 1 if signature == last_signature else 0
-            last_signature = signature
+            stalls = stalls + 1 if signature == last_signature_base else 0
+            last_signature = cls._signature_with_output(signature, last_output)
 
         reason = None
         # Progress is reported at the start of a round. Stop on the first
@@ -1604,7 +1716,25 @@ Guidelines:
         stalls = 0
         last_signature = None
         stop_reason = None
-        workflow_events = self._iter_workflow_events(orchestrator, transcript_messages)
+        workflow_event_factory = self._iter_workflow_events
+        try:
+            workflow_event_parameters = inspect.signature(
+                workflow_event_factory
+            ).parameters
+        except (TypeError, ValueError):
+            workflow_event_parameters = {}
+        supports_close_deadline = "close_deadline" in workflow_event_parameters or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in workflow_event_parameters.values()
+        )
+        if supports_close_deadline:
+            workflow_events = workflow_event_factory(
+                orchestrator,
+                transcript_messages,
+                close_deadline=workflow_deadline,
+            )
+        else:
+            workflow_events = workflow_event_factory(orchestrator, transcript_messages)
 
         try:
             async with asyncio.timeout(workflow_timeout):
@@ -1684,9 +1814,11 @@ Guidelines:
         finally:
             # Teardown must not consume the time reserved for synthesis.
             closed = await self._close_async_iterator_until(
-                workflow_events, workflow_deadline
+                workflow_events,
+                workflow_deadline,
+                initiate_after_deadline=True,
             )
-            if not closed and not stop_reason and not final_text and not streamed_text:
+            if not closed and not stop_reason and not final_text:
                 stop_reason = f"wall-clock limit ({timeout_seconds:g}s)"
 
         synthesized = ""
@@ -1712,10 +1844,7 @@ Guidelines:
                 final_text = synthesized
 
         bg_ack = self._background_task_ack(background_task_descriptors)
-        if bg_ack and synthesized:
-            main_output = bg_ack
-        else:
-            main_output = final_text or streamed_text or bg_ack
+        main_output = final_text or streamed_text or bg_ack
 
         # Stream delta/replacement if main_output differs from streamed
         if main_output and main_output != streamed_text:
@@ -1935,17 +2064,25 @@ Guidelines:
                             persist_result=False,
                         )
                 elif persistence_session_id is not None:
+                    persisted_reply = self._reply_for_persistence(
+                        aggregated_assistant_reply,
+                        background_task_descriptors,
+                    )
                     await orchestrator._persist_isolated_response(
                         message,
-                        aggregated_assistant_reply,
+                        persisted_reply,
                         background_task_descriptors=background_task_descriptors,
                         session_id=persistence_session_id,
                     )
             else:
+                persisted_reply = self._reply_for_persistence(
+                    aggregated_assistant_reply,
+                    background_task_descriptors,
+                )
                 await orchestrator._commit_completed_turn(
                     turn_id,
                     message,
-                    aggregated_assistant_reply,
+                    persisted_reply,
                     run_session=None,
                     history_lengths={},
                     background_task_descriptors=background_task_descriptors,

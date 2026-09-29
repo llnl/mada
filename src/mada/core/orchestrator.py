@@ -1176,7 +1176,11 @@ Guidelines:
             from mada.core.background_tasks import is_background_task_start_ack
 
             is_bg_ack = is_background_task_start_ack(assistant_reply)
-            if not (already_started and is_bg_ack):
+            if already_started and is_bg_ack:
+                _, separator, answer = assistant_reply.partition("\n")
+                if separator and answer.strip():
+                    self.session_manager.add_message("assistant", answer.strip())
+            else:
                 self.session_manager.add_message("assistant", assistant_reply)
 
         self.background_tasks.start_background_tool_poll_from_reply_if_needed(
@@ -1344,7 +1348,11 @@ Guidelines:
             from mada.core.background_tasks import is_background_task_start_ack
 
             is_bg_ack = is_background_task_start_ack(assistant_reply)
-            if not (already_started and is_bg_ack):
+            if already_started and is_bg_ack:
+                _, separator, answer = assistant_reply.partition("\n")
+                if separator and answer.strip():
+                    self.session_manager.add_message("assistant", answer.strip())
+            else:
                 self.session_manager.add_message("assistant", assistant_reply)
 
         self.background_tasks.start_background_tool_poll_from_reply_if_needed(
