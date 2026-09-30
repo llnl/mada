@@ -128,6 +128,7 @@ class MADACLIInterface:
             if choice == "n":
                 self.create_new_session()
                 print("Created and selected a new session.")
+                self.configure_context_sessions()
                 return True
 
             if choice == "s" and sessions:
@@ -141,6 +142,7 @@ class MADACLIInterface:
                         history = self.select_session(label)
                         print(f"Selected session: {label}")
                         self._print_history_summary(history)
+                        self.configure_context_sessions()
                         return True
                     else:
                         print("Invalid index.")
@@ -251,6 +253,98 @@ class MADACLIInterface:
 
         return history
 
+    def select_context_sessions(self, session_labels: List[str] | None) -> List[str]:
+        """
+        Track additional sessions that should be loaded as read-only model context.
+
+        Args:
+            session_labels: Session labels selected by the user for additional
+                model context.
+
+        Returns:
+            Normalized session labels that remain attached as read-only context.
+        """
+        session_ids = [self._extract_id_from_label(label) for label in session_labels or []]
+        selected_session_ids = self.session_manager.set_context_sessions(session_ids)
+        session_labels_by_id = {
+            self._extract_id_from_label(label): label for label in self.list_sessions()
+        }
+        return [
+            session_labels_by_id.get(session_id, session_id)
+            for session_id in selected_session_ids
+        ]
+
+    def _print_context_summary(self) -> None:
+        """
+        Print the sessions currently loaded as additional model context.
+
+        The primary writable chat session is not included in this summary.
+        """
+        context_session_ids = self.session_manager.get_context_session_ids()
+        if not context_session_ids:
+            print("No additional sessions loaded into model context.")
+            return
+
+        session_labels_by_id = {
+            self._extract_id_from_label(label): label for label in self.list_sessions()
+        }
+        print("Additional context sessions:")
+        for session_id in context_session_ids:
+            print(f"  - {session_labels_by_id.get(session_id, session_id)}")
+
+    def configure_context_sessions(self) -> None:
+        """
+        Interactively choose additional read-only sessions to load into context.
+
+        This updates only the extra sessions used for model context; new chat
+        turns continue to be persisted to the currently selected primary session.
+        """
+        current_session_id = self.session_manager.current_session_id
+        candidate_labels = [
+            label
+            for label in self.list_sessions()
+            if self._extract_id_from_label(label) != current_session_id
+        ]
+
+        if not candidate_labels:
+            self.session_manager.set_context_sessions([])
+            print("No other sessions are available to load into context.")
+            return
+
+        current_context_ids = set(self.session_manager.get_context_session_ids())
+        print("\nAdditional context sessions (read-only)")
+        print("Enter comma-separated numbers to load those sessions into model context.")
+        print("Press Enter without a value to clear additional context.")
+        for idx, label in enumerate(candidate_labels, start=1):
+            marker = "*" if self._extract_id_from_label(label) in current_context_ids else " "
+            print(f"  {idx}. [{marker}] {label}")
+
+        raw_selection = input("Select context sessions: ").strip()
+        if not raw_selection:
+            self.session_manager.set_context_sessions([])
+            print("Cleared additional context sessions.")
+            return
+
+        selected_labels = []
+        try:
+            for token in raw_selection.split(","):
+                index = int(token.strip())
+                if index < 1 or index > len(candidate_labels):
+                    raise ValueError
+                selected_labels.append(candidate_labels[index - 1])
+        except ValueError:
+            print("Invalid selection. Keeping the current context sessions.")
+            return
+
+        selected_context_labels = self.select_context_sessions(selected_labels)
+        if not selected_context_labels:
+            print("No additional context sessions loaded.")
+            return
+
+        print("Loaded additional context sessions:")
+        for label in selected_context_labels:
+            print(f"  - {label}")
+
     def delete_session(self, session_label: str):
         """
         Delete a chat session.
@@ -316,6 +410,7 @@ class MADACLIInterface:
                     return
 
                 print("\nChat with the agents (type 'quit' to exit)")
+                print("Type 'context' to choose additional sessions to load into model context.")
                 print("-" * 50)
 
                 prompt_session = PromptSession()
@@ -338,6 +433,11 @@ class MADACLIInterface:
                             break
 
                         if not user_input:
+                            continue
+
+                        if user_input.lower() == "context":
+                            self.configure_context_sessions()
+                            self._print_context_summary()
                             continue
 
                         if not self.blocking and user_input.lower() == "tasks":

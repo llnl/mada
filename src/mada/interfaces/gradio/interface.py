@@ -190,6 +190,14 @@ class MADAMultiAgentGradioInterface:
                         label="Sessions",
                         interactive=True,
                     )
+                    context_sessions = gr.CheckboxGroup(
+                        choices=self.client.get_context_session_choices(),
+                        label="Load Into Context",
+                        interactive=True,
+                    )
+                    context_status = gr.Markdown(
+                        self.client.get_context_status_markdown()
+                    )
                     delete_chat_btn = gr.Button(
                         "🗑️ Delete selected chat", variant="stop"
                     )
@@ -279,25 +287,41 @@ class MADAMultiAgentGradioInterface:
                 fn=self.client.update_session_choices,
                 inputs=None,
                 outputs=[session_list],
+            ).then(
+                fn=self.client.update_context_session_choices,
+                inputs=[session_list],
+                outputs=[context_sessions],
+            ).then(
+                fn=self.client.get_context_status_markdown,
+                inputs=None,
+                outputs=[context_status],
             )
 
             # New chat button -> create new session, update session list, select it, clear history
             new_chat_btn.click(
                 fn=self.client.create_new_session,
                 inputs=None,
-                outputs=[session_list, chatbot],  # set choices, value, history
+                outputs=[session_list, context_sessions, context_status, chatbot],
             )
 
             # Selecting a session -> load history into chatbot
             session_list.change(
-                fn=self.client.select_session, inputs=session_list, outputs=chatbot
+                fn=self.client.select_session,
+                inputs=session_list,
+                outputs=[chatbot, context_sessions, context_status],
+            )
+
+            context_sessions.change(
+                fn=self.client.select_context_sessions,
+                inputs=[context_sessions, session_list],
+                outputs=[context_sessions, context_status],
             )
 
             # Deleting a session
             delete_chat_btn.click(
                 fn=self.client.delete_session,
                 inputs=session_list,
-                outputs=[session_list, chatbot],
+                outputs=[session_list, context_sessions, context_status, chatbot],
             )
 
             # Show confirmation panel when "Delete ALL chats" is clicked
@@ -311,7 +335,7 @@ class MADAMultiAgentGradioInterface:
             confirm_delete_all_btn.click(
                 fn=self.client.delete_all_sessions,
                 inputs=None,
-                outputs=[session_list, chatbot],
+                outputs=[session_list, context_sessions, context_status, chatbot],
             ).then(
                 # Hide confirmation panel after deletion
                 fn=lambda: gr.update(visible=False),

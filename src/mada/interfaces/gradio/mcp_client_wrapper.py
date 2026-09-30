@@ -211,21 +211,133 @@ class MCPGradioClientSession:
         """
         return gr.update(choices=self.list_sessions(), value=None)
 
-    def create_new_session(self) -> Tuple[gr.update, List]:
+    def get_context_session_choices(self, primary_session_label: str = None) -> List[str]:
         """
-        Create a new chat session.
+        Return the selectable read-only sessions for additional model context.
+
+        Args:
+            primary_session_label: Optional primary session label to exclude from
+                the additional context choices.
+
+        Returns:
+            Session labels that may be attached as extra read-only context.
+        """
+        primary_session_id = (
+            self._extract_id_from_label(primary_session_label)
+            if primary_session_label
+            else self.session_manager.current_session_id
+        )
+        return [
+            label
+            for label in self.list_sessions()
+            if self._extract_id_from_label(label) != primary_session_id
+        ]
+
+    def _context_labels_from_ids(self, session_ids: List[str]) -> List[str]:
+        """
+        Map stored session IDs back to the current UI labels.
+
+        Args:
+            session_ids: Persisted session IDs.
+
+        Returns:
+            Current UI labels for the supplied session IDs.
+        """
+        session_labels_by_id = {
+            self._extract_id_from_label(label): label for label in self.list_sessions()
+        }
+        return [
+            session_labels_by_id.get(session_id, session_id) for session_id in session_ids
+        ]
+
+    def get_context_status_markdown(self) -> str:
+        """
+        Describe the sessions currently loaded as additional model context.
+
+        Returns:
+            Markdown summary of the extra read-only context sessions.
+        """
+        context_session_ids = self.session_manager.get_context_session_ids()
+        if not context_session_ids:
+            return "No additional context sessions loaded."
+
+        labels = self._context_labels_from_ids(context_session_ids)
+        return "Loaded into model context:\n" + "\n".join(
+            f"- {label}" for label in labels
+        )
+
+    def update_context_session_choices(self, primary_session_label: str = None) -> gr.update:
+        """
+        Update the selectable context sessions and preserve valid selections.
+
+        Args:
+            primary_session_label: Optional primary session label to exclude from
+                the additional context choices.
+
+        Returns:
+            Gradio update containing the valid context-session choices and the
+            subset of current selections that still apply.
+        """
+        choices = self.get_context_session_choices(primary_session_label)
+        valid_choice_ids = {
+            self._extract_id_from_label(label): label for label in choices
+        }
+        selected_labels = self._context_labels_from_ids(
+            [
+                session_id
+                for session_id in self.session_manager.get_context_session_ids()
+                if session_id in valid_choice_ids
+            ]
+        )
+        self.session_manager.set_context_sessions(
+            [self._extract_id_from_label(label) for label in selected_labels]
+        )
+        return gr.update(choices=choices, value=selected_labels)
+
+    def select_context_sessions(
+        self,
+        session_labels: List[str] | None,
+        primary_session_label: str = None,
+    ) -> Tuple[gr.update, str]:
+        """
+        Track additional read-only sessions to load into model context.
+
+        Args:
+            session_labels: Session labels selected as additional context.
+            primary_session_label: Optional primary session label used to keep the
+                writable chat out of the extra context selection.
+
+        Returns:
+            Updated context-session choices and refreshed status markdown.
+        """
+        session_ids = [self._extract_id_from_label(label) for label in session_labels or []]
+        self.session_manager.set_context_sessions(session_ids)
+        return (
+            self.update_context_session_choices(primary_session_label),
+            self.get_context_status_markdown(),
+        )
+
+    def create_new_session(self) -> Tuple[gr.update, gr.update, str, List]:
+        """
+        Create a new primary chat session.
 
         Returns:
             A tuple containing a gradio update object for updating the
-                sessions list and an empty chat history.
+            sessions list, a context-session update, a context summary,
+            and an empty chat history. Additional context-session selections are
+            cleared for the new primary chat.
         """
         new_id = self.session_manager.create_session_id()
         self.session_manager.create_new_session(new_id)
         self.session_manager.select_session(new_id)
+        self.session_manager.set_context_sessions([])
         updated_sessions = self.list_sessions()
-        return gr.update(
-            choices=updated_sessions, value=None
-        ), []  # update sessions list, empty chat history
+        return (
+            gr.update(choices=updated_sessions, value=None),
+            self.update_context_session_choices(),
+            self.get_context_status_markdown(),
+            [],
+        )
 
     def _extract_id_from_label(self, session_label: str) -> str:
         """
@@ -244,27 +356,33 @@ class MCPGradioClientSession:
 
         return session_id
 
-    def select_session(self, session_label: str) -> List[Dict[str, str]]:
+    def select_session(self, session_label: str) -> Tuple[List[Dict[str, str]], gr.update, str]:
         """
-        Given a label like 'timestamp | session_id', select that session and return its history.
+        Given a label like 'timestamp | session_id', select that session as the
+        primary chat and return its history.
 
         Args:
             session_label (str): The label of the chat session that the user wants to select.
 
         Returns:
-            A list of the chat history.
+            The primary chat history, updated context-session choices, and
+            context summary.
         """
         if not session_label:
-            return []  # nothing selected
+            return [], self.update_context_session_choices(None), self.get_context_status_markdown()
 
         # Extract session id from label
         session_id = self._extract_id_from_label(session_label)
 
         history = self.session_manager.select_session(session_id)
 
-        return history
+        return (
+            history,
+            self.update_context_session_choices(session_label),
+            self.get_context_status_markdown(),
+        )
 
-    def delete_session(self, session_label: str) -> Tuple[gr.update, List]:
+    def delete_session(self, session_label: str) -> Tuple[gr.update, gr.update, str, List]:
         """
         Delete a chat session.
 
@@ -273,40 +391,69 @@ class MCPGradioClientSession:
 
         Returns:
             A tuple containing a gradio update object for updating the
-                sessions list and an empty chat history.
+            sessions list, a context-session update, a context summary,
+            and an empty chat history. Deleted sessions are also removed from the
+            additional context selection.
         """
         # Handle case where no session is selected
         if not session_label:
             # Return current state unchanged
             updated_sessions = self.list_sessions()
-            return gr.update(choices=updated_sessions, value=None), []
+            return (
+                gr.update(choices=updated_sessions, value=None),
+                self.update_context_session_choices(),
+                self.get_context_status_markdown(),
+                [],
+            )
 
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
+        if session_id == self.session_manager.current_session_id:
+            self.session_manager.current_session_id = None
+        self.session_manager.set_context_sessions(
+            [
+                existing_session_id
+                for existing_session_id in self.session_manager.get_context_session_ids()
+                if existing_session_id != session_id
+            ]
+        )
         updated_sessions = self.list_sessions()
-        return gr.update(
-            choices=updated_sessions, value=None
-        ), []  # update sessions list, clear chat history
+        return (
+            gr.update(choices=updated_sessions, value=None),
+            self.update_context_session_choices(),
+            self.get_context_status_markdown(),
+            [],
+        )
 
-    def delete_all_sessions(self) -> Tuple[gr.update, List]:
+    def delete_all_sessions(self) -> Tuple[gr.update, gr.update, str, List]:
         """
         Delete all chat sessions with proper error handling.
 
         Returns:
-            A tuple containing:
-            - gradio update object for updating the sessions list
-            - chat history (empty if successful, unchanged if error)
+            A tuple containing the updated session list, updated context-session
+            list, current context summary markdown, and chat history.
         """
         try:
             LOG.info("Attempting to delete all sessions")
             self.session_manager.delete_all_sessions(confirm=False)
+            self.session_manager.set_context_sessions([])
             LOG.info("Successfully deleted all sessions")
-            return gr.update(choices=[], value=None), []
+            return (
+                gr.update(choices=[], value=None),
+                gr.update(choices=[], value=[]),
+                self.get_context_status_markdown(),
+                [],
+            )
         except Exception as e:
             LOG.error(f"Failed to delete all sessions: {e}")
             # Return current state unchanged if deletion fails
             current_sessions = self.list_sessions()
-            return gr.update(choices=current_sessions), []
+            return (
+                gr.update(choices=current_sessions),
+                self.update_context_session_choices(),
+                self.get_context_status_markdown(),
+                [],
+            )
 
     async def process_message(
         self,
