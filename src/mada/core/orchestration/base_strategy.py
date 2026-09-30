@@ -307,8 +307,13 @@ class BaseOrchestrationStrategy(ABC):
         isolated_session: bool = False,
         persistence_session_id: str | None = None,
         stateless_session: bool = False,
+        context_session_ids: List[str] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process one interactive user message for this orchestration mode.
+
+        Implementations may use `persistence_session_id` as the writable
+        persisted chat target and `context_session_ids` as additional read-only
+        session histories to merge into model context for the turn.
         """
         pass

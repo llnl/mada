@@ -137,6 +137,8 @@ class MADAOrchestrator(MCPAgentManager):
         self.orchestration_strategy = self._build_orchestration_strategy(
             self.orchestration.mode
         )
+        self._shared_session_context_signature: Tuple[str, ...] | None = None
+        self._shared_session_requires_context_rebuild = True
         # Initialize the database
         self.session_manager = session_manager or ChatSessionManager(database_config)
         self.background_tasks = BackgroundTaskManager(
@@ -938,6 +940,86 @@ Guidelines:
             f"{conversation}"
         )
 
+    def resolve_loaded_session_ids(
+        self,
+        primary_session_id: Optional[str] = None,
+        context_session_ids: Optional[List[str]] = None,
+    ) -> List[str]:
+        """
+        Resolve the persisted chat sessions that should be loaded into context.
+
+        Args:
+            primary_session_id: Optional explicit primary session. Defaults to the
+                active writable session.
+            context_session_ids: Optional explicit additional context sessions.
+
+        Returns:
+            Ordered session IDs with read-only context sessions first and the
+            writable primary session last.
+        """
+        return self.session_manager.get_loaded_session_ids(
+            primary_session_id=primary_session_id,
+            context_session_ids=context_session_ids,
+        )
+
+    async def load_persisted_context_messages(
+        self,
+        primary_session_id: Optional[str] = None,
+        context_session_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Load and merge persisted chat history for the selected session context.
+
+        Args:
+            primary_session_id: Optional explicit primary session whose history
+                should be appended after any additional context sessions.
+            context_session_ids: Optional explicit additional read-only sessions
+                to merge ahead of the primary session.
+
+        Returns:
+            Flat list of persisted messages ordered by session selection, with
+            messages preserved in each session's stored order.
+        """
+        merged_messages = []
+        for session_id in self.resolve_loaded_session_ids(
+            primary_session_id=primary_session_id,
+            context_session_ids=context_session_ids,
+        ):
+            merged_messages.extend(self.session_manager.load_history(session_id))
+        return merged_messages
+
+    async def build_persisted_context_transcript(
+        self,
+        latest_user_message: Optional[str] = None,
+        primary_session_id: Optional[str] = None,
+        context_session_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Build a normalized transcript from the selected persisted session context.
+
+        Args:
+            latest_user_message: Optional user message to append after the loaded
+                persisted history.
+            primary_session_id: Optional explicit primary session whose history
+                should be loaded last.
+            context_session_ids: Optional explicit additional read-only sessions
+                to load ahead of the primary session.
+
+        Returns:
+            Normalized role/content transcript messages ready for prompt
+            construction.
+        """
+        transcript_messages = await self.load_persisted_context_messages(
+            primary_session_id=primary_session_id,
+            context_session_ids=context_session_ids,
+        )
+        if latest_user_message is not None:
+            transcript_messages = [
+                *transcript_messages,
+                {"role": "user", "content": latest_user_message},
+            ]
+        return self._normalize_transcript_messages(transcript_messages)
+
     async def process_openai_messages(
         self,
         messages: List[Dict[str, Any]],
@@ -956,9 +1038,25 @@ Guidelines:
         isolated_session: bool = False,
         persistence_session_id: Optional[str] = None,
         stateless_session: bool = False,
+        context_session_ids: Optional[List[str]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message using the configured strategy.
+
+        Args:
+            message: User message to process.
+            isolated_session: If True, process with a fresh agent session rather
+                than the shared interactive session.
+            persistence_session_id: Optional explicit primary session where an
+                isolated turn should be persisted.
+            stateless_session: If True, avoid loading persisted history and do
+                not persist the result.
+            context_session_ids: Optional additional read-only sessions to merge
+                into model context for this turn.
+
+        Yields:
+            Streamed response chunks emitted by the active orchestration
+            strategy.
         """
         async for chunk in self.orchestration_strategy.process_message(
             self,
@@ -966,6 +1064,7 @@ Guidelines:
             isolated_session=isolated_session,
             persistence_session_id=persistence_session_id,
             stateless_session=stateless_session,
+            context_session_ids=context_session_ids,
         ):
             yield chunk
 
@@ -1023,7 +1122,9 @@ Guidelines:
     async def _create_run_session(
         self,
         isolated_session: bool,
-    ) -> Tuple[Optional[int], AgentSession, Dict[str, int]]:
+        primary_session_id: Optional[str] = None,
+        context_session_ids: Optional[List[str]] = None,
+    ) -> Tuple[Optional[int], AgentSession, Dict[str, int], bool]:
         """
         Create the agent session used for one message turn.
 
@@ -1031,27 +1132,50 @@ Guidelines:
             isolated_session: If True, create a fresh session. Otherwise, copy
                 the shared orchestrator session and reserve a turn ID for later
                 ordered commit.
+            primary_session_id: Optional explicit primary persisted session used
+                to determine whether the shared session must be rebuilt.
+            context_session_ids: Optional additional read-only sessions used to
+                determine whether the shared session must be rebuilt.
 
         Returns:
-            Tuple containing the turn ID, the run session, and provider message
-            history lengths captured before streaming.
+            Tuple containing the turn ID, the run session, provider message
+            history lengths captured before streaming, and whether the next
+            prompt should be rebuilt from persisted transcript history.
 
         Raises:
             RuntimeError: If the shared orchestrator session is not initialized.
         """
         if isolated_session:
-            return None, self.planning_agent.create_session(), {}
+            return None, self.planning_agent.create_session(), {}, False
 
         async with self._session_lock:
             if self.session is None:
                 raise RuntimeError("Orchestrator session not initialized.")
 
+            selected_session_signature = tuple(
+                self.resolve_loaded_session_ids(
+                    primary_session_id=primary_session_id,
+                    context_session_ids=context_session_ids,
+                )
+            )
+            if self._shared_session_context_signature != selected_session_signature:
+                self.session = self.planning_agent.create_session()
+                self._shared_session_context_signature = selected_session_signature
+                self._shared_session_requires_context_rebuild = True
+
             turn_id = self._next_turn_id
             self._next_turn_id += 1
             run_session = AgentSession.from_dict(self.session.to_dict())
             history_lengths = self._provider_message_lengths(run_session)
+            rebuild_from_persisted_context = self._shared_session_requires_context_rebuild
+            self._shared_session_requires_context_rebuild = False
 
-        return turn_id, run_session, history_lengths
+        return (
+            turn_id,
+            run_session,
+            history_lengths,
+            rebuild_from_persisted_context,
+        )
 
     async def _load_history_for_session(self, session_id: str) -> List[Dict]:
         """
@@ -1063,13 +1187,7 @@ Guidelines:
         Returns:
             Stored chat history for the session.
         """
-        async with self._session_lock:
-            previous_session_id = self.session_manager.current_session_id
-            self.session_manager.current_session_id = session_id
-            try:
-                return self.session_manager.load_history()
-            finally:
-                self.session_manager.current_session_id = previous_session_id
+        return self.session_manager.load_history(session_id)
 
     @staticmethod
     def _provider_message_lengths(session: AgentSession) -> Dict[str, int]:
@@ -1327,6 +1445,7 @@ Guidelines:
         isolated_session: bool = False,
         persistence_session_id: Optional[str] = None,
         stateless_session: bool = False,
+        context_session_ids: Optional[List[str]] = None,
         first_tool_call: Optional[asyncio.Event] = None,
         first_tool_state: Optional[Dict[str, str]] = None,
     ) -> str:
@@ -1348,6 +1467,8 @@ Guidelines:
                 request output should be persisted.
             stateless_session: If True, isolated processing starts with no chat
                 history and does not persist output.
+            context_session_ids: Optional additional read-only sessions to merge
+                into model context for this request.
             first_tool_call: Optional event set when the streamed response first
                 reports a tool call.
             first_tool_state: Optional mutable mapping populated with the first
@@ -1366,6 +1487,7 @@ Guidelines:
             isolated_session=isolated_session,
             persistence_session_id=persistence_session_id,
             stateless_session=stateless_session,
+            context_session_ids=context_session_ids,
         ):
             internal_tool_call_name = tool_call_name(response_chunk)
             if (

@@ -44,6 +44,8 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
             participant_configs=active_participant_configs,
         )
         orchestrator.session = orchestrator.planning_agent.create_session()
+        orchestrator._shared_session_context_signature = None
+        orchestrator._shared_session_requires_context_rebuild = True
         orchestrator.manager_agent = None
 
     def _remote_a2a_tool_labels(self, orchestrator: "MADAOrchestrator") -> List[str]:
@@ -204,9 +206,16 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         isolated_session: bool = False,
         persistence_session_id: str | None = None,
         stateless_session: bool = False,
+        context_session_ids: List[str] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message through the planning agent.
+
+        When persisted session context is selected, isolated turns rebuild the
+        prompt from that merged transcript immediately. Shared interactive turns
+        also rebuild on the next message after the loaded session set changes so
+        the planning agent's in-memory session stays aligned with persisted
+        context selection.
         """
         if not orchestrator.planning_agent:
             yield "Error: Orchestrator not initialized. Call initialize_orchestrator() first."
@@ -222,7 +231,12 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 turn_id,
                 run_session,
                 history_lengths,
-            ) = await orchestrator._create_run_session(isolated_session)
+                rebuild_from_persisted_context,
+            ) = await orchestrator._create_run_session(
+                isolated_session,
+                primary_session_id=persistence_session_id,
+                context_session_ids=context_session_ids,
+            )
 
             prompt = message
             if (
@@ -230,11 +244,17 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 and persistence_session_id is not None
                 and not stateless_session
             ):
-                history = await orchestrator._load_history_for_session(
-                    persistence_session_id
+                transcript_messages = await orchestrator.build_persisted_context_transcript(
+                    latest_user_message=message,
+                    primary_session_id=persistence_session_id,
+                    context_session_ids=context_session_ids,
                 )
-                transcript_messages = orchestrator._normalize_transcript_messages(
-                    [*history, {"role": "user", "content": message}]
+                prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
+            elif rebuild_from_persisted_context:
+                transcript_messages = await orchestrator.build_persisted_context_transcript(
+                    latest_user_message=message,
+                    primary_session_id=persistence_session_id,
+                    context_session_ids=context_session_ids,
                 )
                 prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
 
