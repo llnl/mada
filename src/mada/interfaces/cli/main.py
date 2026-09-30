@@ -298,6 +298,7 @@ class MADACLIInterface:
 
         This updates only the extra sessions used for model context; new chat
         turns continue to be persisted to the currently selected primary session.
+        Submitting an empty response keeps the current selection unchanged.
         """
         current_session_id = self.session_manager.current_session_id
         candidate_labels = [
@@ -314,13 +315,18 @@ class MADACLIInterface:
         current_context_ids = set(self.session_manager.get_context_session_ids())
         print("\nAdditional context sessions (read-only)")
         print("Enter comma-separated numbers to load those sessions into model context.")
-        print("Press Enter without a value to clear additional context.")
+        print("Press Enter without a value to keep the current selection.")
+        print("Enter 'none' to clear additional context.")
         for idx, label in enumerate(candidate_labels, start=1):
             marker = "*" if self._extract_id_from_label(label) in current_context_ids else " "
             print(f"  {idx}. [{marker}] {label}")
 
         raw_selection = input("Select context sessions: ").strip()
         if not raw_selection:
+            print("Kept the current context sessions.")
+            return
+
+        if raw_selection.lower() == "none":
             self.session_manager.set_context_sessions([])
             print("Cleared additional context sessions.")
             return

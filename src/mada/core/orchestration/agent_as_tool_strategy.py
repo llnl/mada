@@ -239,18 +239,11 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
             )
 
             prompt = message
-            if (
-                isolated_session
-                and persistence_session_id is not None
-                and not stateless_session
-            ):
-                transcript_messages = await orchestrator.build_persisted_context_transcript(
-                    latest_user_message=message,
-                    primary_session_id=persistence_session_id,
-                    context_session_ids=context_session_ids,
-                )
-                prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
-            elif rebuild_from_persisted_context:
+            should_rebuild_prompt_from_persisted_context = (
+                (isolated_session and persistence_session_id is not None and not stateless_session)
+                or rebuild_from_persisted_context
+            )
+            if should_rebuild_prompt_from_persisted_context:
                 transcript_messages = await orchestrator.build_persisted_context_transcript(
                     latest_user_message=message,
                     primary_session_id=persistence_session_id,
