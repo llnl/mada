@@ -120,6 +120,7 @@ def run_gradio(
         debug=True,
         css=_GRADIO_CSS,
         js=_GRADIO_JS,
+        allowed_paths=[client._attachment_cache.name],
     )
 
 
