@@ -16,9 +16,11 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Tuple
 from agent_framework import Agent, Message
 
 from mada.core.config import AgentConfig, MCPServerConfig, RemoteA2AAgentConfig
+from mada.core.media import ImageAttachment, extract_image_attachments
 from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
 from mada.core.orchestration.stream_events import (
     InternalError,
+    InternalImageSignal,
     InternalResponseReplacement,
     InternalToolCallSignal,
     response_replacement,
@@ -733,7 +735,7 @@ Guidelines:
         transcript_messages: List[Dict[str, Any]],
         *,
         include_tool_notices: bool,
-    ) -> AsyncGenerator[Tuple[str, str], None]:
+    ) -> AsyncGenerator[Tuple[str, Any], None]:
         """
         Stream Magentic notices and return the final assistant reply as an event.
         """
@@ -741,9 +743,16 @@ Guidelines:
         final_text = ""
         background_task_descriptors = []
         seen_executor_ids = set()
+        seen_image_digests: set[str] = set()
         async for event in self._iter_workflow_events(
             orchestrator, transcript_messages
         ):
+            for attachment in extract_image_attachments(event):
+                if attachment.digest in seen_image_digests:
+                    continue
+                seen_image_digests.add(attachment.digest)
+                yield "image", attachment
+
             if include_tool_notices:
                 for notice in self._call_notices_from_event(event, seen_executor_ids):
                     yield "notice", notice
@@ -933,6 +942,7 @@ Guidelines:
 
         try:
             background_task_descriptors = []
+            image_attachments: list[ImageAttachment] = []
             turn_id = None
             streamed_text = ""
 
@@ -980,6 +990,9 @@ Guidelines:
                     aggregated_assistant_reply = value
                 elif kind == "background_task":
                     background_task_descriptors.append(value)
+                elif kind == "image":
+                    image_attachments.append(value)
+                    yield InternalImageSignal(value)
 
             if isolated_session:
                 if stateless_session:
@@ -996,6 +1009,7 @@ Guidelines:
                     await orchestrator._persist_isolated_response(
                         message,
                         aggregated_assistant_reply,
+                        image_attachments=image_attachments,
                         background_task_descriptors=background_task_descriptors,
                         session_id=persistence_session_id,
                     )
@@ -1006,6 +1020,7 @@ Guidelines:
                     aggregated_assistant_reply,
                     run_session=None,
                     history_lengths={},
+                    image_attachments=image_attachments,
                     background_task_descriptors=background_task_descriptors,
                 )
 

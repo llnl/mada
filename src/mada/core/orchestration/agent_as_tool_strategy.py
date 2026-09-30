@@ -10,7 +10,9 @@ import traceback
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Tuple
 
 from mada.core.config import AgentConfig, MCPServerConfig, RemoteA2AAgentConfig
+from mada.core.media import ImageAttachment, extract_image_attachments
 from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
+from mada.core.orchestration.stream_events import InternalImageSignal
 
 if TYPE_CHECKING:
     from mada.core.orchestrator import MADAOrchestrator
@@ -111,6 +113,9 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         tool_calls = []
         stream = orchestrator.planning_agent.run(prompt, session=session, stream=True)
         async for chunk in stream:
+            for attachment in extract_image_attachments(chunk):
+                yield InternalImageSignal(attachment)
+
             if chunk.text:
                 response_started = True
                 yield chunk.text
@@ -215,6 +220,9 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         aggregated_assistant_reply = ""
         tool_calls = []
         background_task_descriptors = []
+        image_attachments: list[ImageAttachment] = []
+        image_digests: set[str] = set()
+        capture_token = None
         response_started = False
 
         try:
@@ -238,10 +246,27 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 )
                 prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
 
+            if hasattr(orchestrator, "_begin_image_capture"):
+                capture_token, captured_images = orchestrator._begin_image_capture()
+            else:
+                captured_images = []
+            captured_image_index = 0
             stream = orchestrator.planning_agent.run(
                 prompt, session=run_session, stream=True
             )
             async for chunk in stream:
+                available_images = [
+                    *captured_images[captured_image_index:],
+                    *extract_image_attachments(chunk),
+                ]
+                captured_image_index = len(captured_images)
+                for attachment in available_images:
+                    if attachment.digest in image_digests:
+                        continue
+                    image_digests.add(attachment.digest)
+                    image_attachments.append(attachment)
+                    yield InternalImageSignal(attachment)
+
                 if chunk.text:
                     response_started = True
                     aggregated_assistant_reply += chunk.text
@@ -250,6 +275,13 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
 
                 for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
                     yield notice
+
+            for attachment in captured_images[captured_image_index:]:
+                if attachment.digest in image_digests:
+                    continue
+                image_digests.add(attachment.digest)
+                image_attachments.append(attachment)
+                yield InternalImageSignal(attachment)
 
             if not response_started:
                 LOG.warning("No text chunks received from planning agent")
@@ -269,6 +301,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 await orchestrator._persist_isolated_response(
                     message,
                     aggregated_assistant_reply,
+                    image_attachments=image_attachments,
                     background_task_descriptors=background_task_descriptors,
                     session_id=persistence_session_id,
                 )
@@ -280,7 +313,13 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 aggregated_assistant_reply,
                 run_session,
                 history_lengths,
+                image_attachments=image_attachments,
                 background_task_descriptors=background_task_descriptors,
             )
         except Exception as e:
             yield orchestrator._process_message_error(e)
+        finally:
+            if capture_token is not None and hasattr(
+                orchestrator, "_end_image_capture"
+            ):
+                orchestrator._end_image_capture(capture_token)

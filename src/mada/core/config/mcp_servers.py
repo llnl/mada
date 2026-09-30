@@ -53,6 +53,5 @@ class MCPServerConfig:
         if not isinstance(self.headers, dict):
             raise ValueError("'mcp_servers.<name>.headers' must be an object")
         self.headers = {
-            str(key): expand_env_vars(str(value))
-            for key, value in self.headers.items()
+            str(key): expand_env_vars(str(value)) for key, value in self.headers.items()
         }

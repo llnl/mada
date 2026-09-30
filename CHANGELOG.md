@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Inline, persisted Gradio display of images returned by MCP tools as `ImageContent`.
 - DOI link to README
 - Magentic Orchestration Functionality
 - Safeguards for the orchestration switching and database consistency for async functionality

@@ -13,6 +13,10 @@ import pytest
 
 from mada.core.config import PostgreSQLConfig
 from mada.core.database import PostgreSQLChatDatabase
+from mada.core.media import ImageAttachment
+
+
+PNG_DATA = b"\x89PNG\r\n\x1a\n" + b"test-image-data"
 
 
 @pytest.fixture
@@ -70,6 +74,11 @@ class TestInitDB:
                         timestamp TIMESTAMP
                     )
                 """)
+
+        assert any(
+            "CREATE TABLE IF NOT EXISTS message_attachments" in call.args[0]
+            for call in mock_cursor.execute.call_args_list
+        )
 
 
 class TestCreateSession:
@@ -135,6 +144,35 @@ class TestAddMessage:
 
         mock_conn.commit.assert_called_once()
 
+    def test_add_message_inserts_attachments(self, postgresql_db):
+        db, mock_cursor, _ = postgresql_db
+        attachment = ImageAttachment.from_data(PNG_DATA, "image/png")
+        mock_cursor.execute.reset_mock()
+        mock_cursor.fetchone.return_value = (42,)
+
+        db.add_message(
+            "test_session",
+            "assistant",
+            "Rendered image",
+            attachments=[attachment],
+        )
+
+        assert any(
+            "RETURNING message_id" in call.args[0]
+            for call in mock_cursor.execute.call_args_list
+        )
+        attachment_call = next(
+            call
+            for call in mock_cursor.execute.call_args_list
+            if "INSERT INTO message_attachments" in call.args[0]
+        )
+        assert attachment_call.args[1][:4] == (
+            42,
+            0,
+            attachment.filename,
+            "image/png",
+        )
+
     def test_add_message_without_timestamp_uses_current_time(self, postgresql_db):
         db, mock_cursor, mock_conn = postgresql_db
         session_id = "test_session"
@@ -173,9 +211,12 @@ class TestLoadSession:
 
         mock_cursor.execute.reset_mock()
 
-        mock_cursor.fetchall.return_value = [
-            ("user", "Hello", datetime(2025, 12, 18, 17, 58, 43)),
-            ("assistant", "Hi", datetime(2025, 12, 18, 17, 58, 44)),
+        mock_cursor.fetchall.side_effect = [
+            [
+                (1, "user", "Hello", datetime(2025, 12, 18, 17, 58, 43)),
+                (2, "assistant", "Hi", datetime(2025, 12, 18, 17, 58, 44)),
+            ],
+            [],
         ]
 
         session_id = "test_session"
@@ -194,14 +235,29 @@ class TestLoadSession:
             },
         ]
 
-        mock_cursor.execute.assert_called_once_with(
+        mock_cursor.execute.assert_any_call(
             """
-                    SELECT role, content, timestamp FROM messages
+                    SELECT message_id, role, content, timestamp FROM messages
                     WHERE session_id = %s
                     ORDER BY message_id ASC
                 """,
             (session_id,),
         )
+
+    def test_load_session_returns_attachments(self, postgresql_db):
+        db, mock_cursor, _ = postgresql_db
+        timestamp = datetime(2025, 12, 18, 17, 58, 43)
+        mock_cursor.execute.reset_mock()
+        mock_cursor.fetchall.side_effect = [
+            [(7, "assistant", "Rendered image", timestamp)],
+            [(7, "plot.png", "image/png", PNG_DATA)],
+        ]
+
+        loaded_messages = db.load_session("test_session")
+
+        assert loaded_messages[0]["attachments"] == [
+            ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+        ]
 
     def test_load_session_returns_empty_list_if_not_found(self, postgresql_db):
         """Test that load_session returns an empty list if the session has no messages."""
@@ -216,7 +272,7 @@ class TestLoadSession:
         assert loaded_messages == []
         mock_cursor.execute.assert_called_once_with(
             """
-                    SELECT role, content, timestamp FROM messages
+                    SELECT message_id, role, content, timestamp FROM messages
                     WHERE session_id = %s
                     ORDER BY message_id ASC
                 """,

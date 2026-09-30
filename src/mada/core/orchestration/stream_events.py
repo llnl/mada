@@ -11,10 +11,13 @@ instructions to consumers that understand MADA's internal stream protocol.
 
 from typing import Any
 
+from mada.core.media import ImageAttachment
+
 
 TOOL_CALL_NAME_ATTR = "_mada_tool_call_name"
 RESPONSE_REPLACEMENT_ATTR = "_mada_response_replacement"
 ERROR_MESSAGE_ATTR = "_mada_error_message"
+IMAGE_ATTACHMENT_ATTR = "_mada_image_attachment"
 
 
 class InternalToolCallSignal(str):
@@ -50,6 +53,15 @@ class InternalError(str):
         return value
 
 
+class InternalImageSignal(str):
+    """Empty stream chunk carrying an MCP image for rich interfaces."""
+
+    def __new__(cls, attachment: ImageAttachment):
+        value = str.__new__(cls, "")
+        setattr(value, IMAGE_ATTACHMENT_ATTR, attachment)
+        return value
+
+
 def tool_call_name(chunk: Any) -> str | None:
     """
     Return the internal tool-call name carried by a stream chunk, if present.
@@ -72,6 +84,12 @@ def error_message(chunk: Any) -> str | None:
     """
     value = getattr(chunk, ERROR_MESSAGE_ATTR, None)
     return None if value is None else str(value)
+
+
+def image_attachment(chunk: Any) -> ImageAttachment | None:
+    """Return the image attachment carried by a stream chunk, if present."""
+    value = getattr(chunk, IMAGE_ATTACHMENT_ATTR, None)
+    return value if isinstance(value, ImageAttachment) else None
 
 
 def apply_text_control(chunks: list[str], chunk: Any) -> tuple[bool, bool]:

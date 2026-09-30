@@ -60,7 +60,16 @@ Click the "Connect to MCP Servers" button to start the MCP servers for your agen
 
 Now that your agents are connected, you're free to start entering prompts into the chat box!
 
-If your configuration uses `magentic` orchestration, the Gradio interface still shows the active specialist agents in the table. The hidden Magentic manager is not displayed as a participant, and only the final assistant answer is streamed back into the chat UI.
+### MCP image results
+
+MCP tools can return generated plots, rendered simulation frames, and other
+images directly in the conversation. Return a standard MCP `ImageContent` item
+whose `data` field contains base64-encoded image bytes and whose `mimeType` is
+`image/png`, `image/jpeg`, `image/webp`, or `image/gif`. MADA displays the image
+inline with the assistant response and stores it with the chat history; the MCP
+server and MADA do not need to share a filesystem.
+
+If your configuration uses `magentic` orchestration, the Gradio interface still shows the active specialist agents in the table. The hidden Magentic manager is not displayed as a participant, and the final assistant response and any returned images are displayed in the chat UI.
 
 ## Managing Chat Histories
 

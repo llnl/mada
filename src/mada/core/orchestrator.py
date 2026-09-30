@@ -15,6 +15,7 @@ import copy
 import logging
 import re
 import traceback
+from contextvars import ContextVar, Token
 from types import TracebackType
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Type
 from contextlib import AsyncExitStack
@@ -43,6 +44,7 @@ from mada.core.config import (
 )
 from mada.core.coordinator import MCPAgentManager
 from mada.core.database import ChatSessionManager
+from mada.core.media import ImageAttachment, RichResponse, extract_image_attachments
 from mada.core.skills.skill_registry import SkillRegistry
 from mada.core.orchestration import (
     AgentAsToolOrchestrationStrategy,
@@ -51,6 +53,7 @@ from mada.core.orchestration import (
 )
 from mada.core.orchestration.stream_events import (
     apply_text_control,
+    image_attachment,
     tool_call_name,
 )
 from mada.core.tls import resolve_httpx_verify_value
@@ -133,6 +136,9 @@ class MADAOrchestrator(MCPAgentManager):
         self._a2a_clients_by_agent: Dict[str, RemoteA2AClient] = {}
         self._agent_descriptions = {}
         self._mcp_tool_count = 0
+        self._image_capture: ContextVar[List[ImageAttachment] | None] = ContextVar(
+            "mada_image_capture", default=None
+        )
         self.orchestration = orchestration_config or OrchestrationConfig()
         self.orchestration_strategy = self._build_orchestration_strategy(
             self.orchestration.mode
@@ -568,11 +574,16 @@ class MADAOrchestrator(MCPAgentManager):
             description = self._agent_descriptions.get(
                 agent.name, f"Specialist agent: {agent.name}"
             )
+
+            async def capture_specialist_update(update: Any) -> None:
+                self._capture_image_attachments(update)
+
             agent_tool = agent.as_tool(
                 name=agent.name,
                 description=description,
                 arg_name="task",
                 arg_description="The task to delegate to this agent",
+                stream_callback=capture_specialist_update,
             )
             agent_tools.append(agent_tool)
 
@@ -641,6 +652,28 @@ Guidelines:
         )
 
         return planning_agent
+
+    def _begin_image_capture(
+        self,
+    ) -> Tuple[Token, List[ImageAttachment]]:
+        """Start a task-local image collection for nested specialist streams."""
+        attachments: List[ImageAttachment] = []
+        return self._image_capture.set(attachments), attachments
+
+    def _end_image_capture(self, token: Token) -> None:
+        """Restore the previous task-local image collection."""
+        self._image_capture.reset(token)
+
+    def _capture_image_attachments(self, value: Any) -> None:
+        """Capture unique images emitted by a nested specialist agent."""
+        attachments = self._image_capture.get()
+        if attachments is None:
+            return
+        existing = {attachment.digest for attachment in attachments}
+        for attachment in extract_image_attachments(value):
+            if attachment.digest not in existing:
+                existing.add(attachment.digest)
+                attachments.append(attachment)
 
     def _create_remote_a2a_agent_tools(self) -> List[Any]:
         """
@@ -903,11 +936,28 @@ Guidelines:
             role = message.get("role") or "user"
             role = str(role).strip().lower() or "user"
             content = self._stringify_openai_content(message.get("content")).strip()
+            attachment_transcript = self._image_attachment_transcript(
+                message.get("attachments") or []
+            )
+            if attachment_transcript:
+                if content and content != attachment_transcript:
+                    content = f"{content}\n{attachment_transcript}"
+                else:
+                    content = attachment_transcript
             if not content:
                 continue
             transcript.append({"role": role, "content": content})
 
         return transcript
+
+    @staticmethod
+    def _image_attachment_transcript(
+        attachments: List[ImageAttachment],
+    ) -> str:
+        """Render image attachments as compact transcript placeholders."""
+        return "\n".join(
+            f"[Image attachment: {attachment.filename}]" for attachment in attachments
+        )
 
     def build_prompt_from_transcript(self, messages: List[Dict[str, Any]]) -> str:
         """
@@ -1094,6 +1144,7 @@ Guidelines:
         self,
         message: str,
         assistant_reply: str,
+        image_attachments: Optional[List[ImageAttachment]] = None,
         background_task_descriptors: Optional[List[str]] = None,
         session_id: Optional[str] = None,
     ) -> None:
@@ -1103,6 +1154,7 @@ Guidelines:
         Args:
             message: User message for the isolated turn.
             assistant_reply: Aggregated assistant response text.
+            image_attachments: Images returned by MCP tools during the turn.
             background_task_descriptors: Optional hidden MCP background task
                 descriptors that should start polling but not be stored as
                 assistant-visible text.
@@ -1123,6 +1175,7 @@ Guidelines:
                     await self._persist_isolated_response(
                         message,
                         assistant_reply,
+                        image_attachments=image_attachments,
                         background_task_descriptors=background_task_descriptors,
                     )
                 finally:
@@ -1138,12 +1191,19 @@ Guidelines:
             self.session_manager.add_message("user", message)
 
         # Skip persisting duplicate background ACKs
-        if assistant_reply.strip():
+        if assistant_reply.strip() or image_attachments:
             from mada.core.background_tasks import is_background_task_start_ack
 
             is_bg_ack = is_background_task_start_ack(assistant_reply)
             if not (already_started and is_bg_ack):
-                self.session_manager.add_message("assistant", assistant_reply)
+                persisted_reply = (
+                    assistant_reply
+                    if assistant_reply.strip()
+                    else self._image_attachment_transcript(image_attachments or [])
+                )
+                self.session_manager.add_message(
+                    "assistant", persisted_reply, attachments=image_attachments
+                )
 
         self.background_tasks.start_background_tool_poll_from_reply_if_needed(
             assistant_reply
@@ -1160,6 +1220,7 @@ Guidelines:
         assistant_reply: str,
         run_session: Optional[AgentSession],
         history_lengths: Dict[str, int],
+        image_attachments: Optional[List[ImageAttachment]] = None,
         background_task_descriptors: Optional[List[str]] = None,
     ) -> None:
         """
@@ -1171,6 +1232,7 @@ Guidelines:
             assistant_reply: Aggregated assistant response text.
             run_session: Agent session used to process the turn.
             history_lengths: Provider message counts captured before streaming.
+            image_attachments: Images returned by MCP tools during the turn.
             background_task_descriptors: Optional hidden MCP background task
                 descriptors that should start polling but not be stored as
                 assistant-visible text.
@@ -1197,6 +1259,7 @@ Guidelines:
                 "assistant_reply": assistant_reply,
                 "run_session": run_session,
                 "history_lengths": history_lengths,
+                "image_attachments": image_attachments or [],
                 "background_task_descriptors": background_task_descriptors or [],
             }
 
@@ -1295,6 +1358,7 @@ Guidelines:
         """
         message = completed["message"]
         assistant_reply = completed["assistant_reply"]
+        image_attachments = completed.get("image_attachments", [])
         background_task_descriptors = completed.get("background_task_descriptors", [])
 
         # Check if interface layer already persisted a background-start ACK
@@ -1306,12 +1370,19 @@ Guidelines:
             self.session_manager.add_message("user", message)
 
         # Skip persisting duplicate background ACKs
-        if assistant_reply.strip():
+        if assistant_reply.strip() or image_attachments:
             from mada.core.background_tasks import is_background_task_start_ack
 
             is_bg_ack = is_background_task_start_ack(assistant_reply)
             if not (already_started and is_bg_ack):
-                self.session_manager.add_message("assistant", assistant_reply)
+                persisted_reply = (
+                    assistant_reply
+                    if assistant_reply.strip()
+                    else self._image_attachment_transcript(image_attachments)
+                )
+                self.session_manager.add_message(
+                    "assistant", persisted_reply, attachments=image_attachments
+                )
 
         self.background_tasks.start_background_tool_poll_from_reply_if_needed(
             assistant_reply
@@ -1361,12 +1432,21 @@ Guidelines:
             Exception: Propagates unexpected failures from `process_message`.
         """
         response_chunks = []
+        image_attachments = []
+        image_digests = set()
         async for response_chunk in self.process_message(
             message,
             isolated_session=isolated_session,
             persistence_session_id=persistence_session_id,
             stateless_session=stateless_session,
         ):
+            attachment = image_attachment(response_chunk)
+            if attachment is not None:
+                if attachment.digest not in image_digests:
+                    image_digests.add(attachment.digest)
+                    image_attachments.append(attachment)
+                continue
+
             internal_tool_call_name = tool_call_name(response_chunk)
             if (
                 first_tool_call
@@ -1393,7 +1473,10 @@ Guidelines:
                     str(response_chunk).strip()[len("[Calling:") :].rstrip("]").strip()
                 )
                 first_tool_call.set()
-        return "".join(response_chunks)
+        response_text = "".join(response_chunks)
+        if image_attachments:
+            return RichResponse(response_text, image_attachments)
+        return response_text
 
     async def cleanup(self) -> None:
         """

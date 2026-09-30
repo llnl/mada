@@ -7,6 +7,11 @@ Integration tests for SQLiteChatDatabase.
 
 from unittest.mock import patch
 
+from mada.core.media import ImageAttachment
+
+
+PNG_DATA = b"\x89PNG\r\n\x1a\n" + b"test-image-data"
+
 
 class TestInitDB:
     def test_init_db_creates_tables(self, sqlite_db):
@@ -79,6 +84,22 @@ class TestAddMessage:
         assert message_result[1] == role, "Role mismatch."
         assert message_result[2] == content, "Content mismatch."
         assert message_result[3] is not None, "Timestamp was not saved."
+
+    def test_add_message_persists_image_attachments(self, sqlite_db):
+        session_id = "test_add_message_persists_image_attachments"
+        attachment = ImageAttachment.from_data(PNG_DATA, "image/png")
+
+        sqlite_db.add_message(session_id, "user", "Render a plot")
+        sqlite_db.add_message(
+            session_id,
+            "assistant",
+            "Rendered image",
+            attachments=[attachment],
+        )
+
+        loaded = sqlite_db.load_session(session_id)
+        assert "attachments" not in loaded[0]
+        assert loaded[1]["attachments"] == [attachment]
 
 
 class TestLoadSession:
@@ -165,6 +186,21 @@ class TestDeleteSession:
 
         assert session_result is None, "Session was not deleted."
         assert message_result is None, "Session messages were not deleted."
+
+    def test_delete_session_removes_attachments(self, sqlite_db):
+        session_id = "test_delete_session_removes_attachments"
+        attachment = ImageAttachment.from_data(PNG_DATA, "image/png")
+        sqlite_db.add_message(
+            session_id, "assistant", "Rendered image", attachments=[attachment]
+        )
+
+        sqlite_db.delete_session(session_id)
+
+        with sqlite_db._connect() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM message_attachments").fetchone()[
+                0
+            ]
+        assert count == 0
 
 
 class TestFlushDatabase:

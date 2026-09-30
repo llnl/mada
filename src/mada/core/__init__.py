@@ -37,6 +37,7 @@ from mada.core.config import (
     load_orchestration_config,
 )
 from mada.core.background_tasks import BackgroundTaskManager
+from mada.core.media import ImageAttachment, RichResponse
 from mada.core.coordinator import MCPAgentManager
 from mada.core.orchestrator import MADAOrchestrator
 
@@ -48,6 +49,7 @@ __all__ = [
     "BedrockAdapter",
     "BedrockModelConfig",
     "BackgroundTaskManager",
+    "ImageAttachment",
     "DatabaseConfig",
     "InterfaceConfig",
     "LivAIAdapter",
@@ -61,6 +63,7 @@ __all__ = [
     "OrchestrationConfig",
     "PostgreSQLConfig",
     "ProviderAdapter",
+    "RichResponse",
     "SQLiteConfig",
     "DEFAULT_ORCHESTRATION_MODE",
     "SUPPORTED_ORCHESTRATION_MODES",

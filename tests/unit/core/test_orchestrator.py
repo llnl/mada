@@ -1,6 +1,8 @@
 # Copyright 2026, Lawrence Livermore National Security, LLC and MADA contributors
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from unittest.mock import MagicMock, call
+
 import pytest
 
 from mada.core.config import (
@@ -10,8 +12,12 @@ from mada.core.config import (
     RemoteA2AAgentConfig,
 )
 from mada.core.coordinator import MCPAgentManager
+from mada.core.media import ImageAttachment
 from mada.core.orchestration.stream_events import InternalError
 from mada.core.orchestrator import MADAOrchestrator
+
+
+PNG_DATA = b"\x89PNG\r\n\x1a\n" + b"test-image-data"
 
 
 @pytest.mark.asyncio
@@ -217,3 +223,85 @@ async def test_collect_message_response_surfaces_internal_error(monkeypatch):
     response = await orchestrator.collect_message_response("hello")
 
     assert response == "Error processing message: boom"
+
+
+def test_normalize_transcript_preserves_image_only_message():
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+
+    transcript = orchestrator._normalize_transcript_messages(
+        [{"role": "assistant", "content": "", "attachments": [attachment]}]
+    )
+
+    assert transcript == [
+        {"role": "assistant", "content": "[Image attachment: plot.png]"}
+    ]
+
+
+def test_normalize_transcript_appends_image_context_to_text_message():
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+
+    transcript = orchestrator._normalize_transcript_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "Here is the plot.",
+                "attachments": [attachment],
+            }
+        ]
+    )
+
+    assert transcript == [
+        {
+            "role": "assistant",
+            "content": "Here is the plot.\n[Image attachment: plot.png]",
+        }
+    ]
+
+
+def test_persist_completed_turn_stores_placeholder_for_image_only_response():
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    orchestrator.session_manager = MagicMock()
+    orchestrator.background_tasks = MagicMock()
+    orchestrator.background_tasks.user_message_already_started_background_task.return_value = False
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+
+    orchestrator._persist_completed_turn(
+        {
+            "message": "Create a plot",
+            "assistant_reply": "",
+            "image_attachments": [attachment],
+        }
+    )
+
+    assert orchestrator.session_manager.add_message.call_args_list == [
+        call("user", "Create a plot"),
+        call(
+            "assistant",
+            "[Image attachment: plot.png]",
+            attachments=[attachment],
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_persist_isolated_response_stores_placeholder_for_image_only_response():
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    orchestrator.session_manager = MagicMock()
+    orchestrator.background_tasks = MagicMock()
+    orchestrator.background_tasks.user_message_already_started_background_task.return_value = False
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+
+    await orchestrator._persist_isolated_response(
+        "Create a plot", "", image_attachments=[attachment]
+    )
+
+    assert orchestrator.session_manager.add_message.call_args_list == [
+        call("user", "Create a plot"),
+        call(
+            "assistant",
+            "[Image attachment: plot.png]",
+            attachments=[attachment],
+        ),
+    ]
