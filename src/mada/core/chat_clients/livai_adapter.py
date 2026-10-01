@@ -9,7 +9,7 @@ an [`OpenAIAdapter`][core.chat_clients.openai_adapter.OpenAIAdapter] specializat
 for LivAI-hosted models.
 """
 
-from agent_framework.openai import OpenAIChatClient
+from agent_framework.openai import OpenAIChatCompletionClient
 
 from mada.core.chat_clients.openai_adapter import OpenAIAdapter
 
@@ -18,10 +18,10 @@ class LivAIAdapter(OpenAIAdapter):
     """
     Provider adapter for LivAI-hosted chat models.
 
-    LivAI models are served through OpenAI's API, so we can re-use the
-    same behavior as the
-    [`OpenAIAdapter`][core.chat_clients.openai_adapter.OpenAIAdapter],
-    while exposing a different provider name.
+    LivAI's LiteLLM proxy fronts Azure OpenAI, which does not yet expose the
+    newer Responses API (requires api-version >= 2025-03-01-preview). So we
+    use OpenAIChatCompletionClient (hits /v1/chat/completions) instead of
+    OpenAIChatClient (hits /v1/responses).
 
     Attributes:
         provider_name:
@@ -31,4 +31,4 @@ class LivAIAdapter(OpenAIAdapter):
     """
 
     provider_name = "livai"
-    chat_client = OpenAIChatClient
+    chat_client = OpenAIChatCompletionClient
