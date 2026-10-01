@@ -1,0 +1,57 @@
+{
+  "math_server": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8011/mcp",
+    "description": "Mathematical operations: arithmetic, descriptive statistics, quadratic solver, factorial, square root. Use for any numeric calculation an agent needs to perform explicitly."
+  },
+  "weather_server": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8012/mcp",
+    "description": "Weather data: current conditions, multi-day forecasts, and severe-weather alerts for cities worldwide. Use whenever a plan involves weather retrieval."
+  },
+  "database_server": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8013/mcp",
+    "description": "Relational database CRUD: list tables, query rows with filters, and insert/update/delete records. Use for any structured-data lookup or persistence."
+  },
+  "file_server": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8014/mcp",
+    "description": "Sandboxed file system: read/write files, list and create directories, search by name/content. Use for any local artifact I/O."
+  },
+  "flux": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8001/mcp",
+    "description": "Flux HPC workload manager. Executes staged workflows and batches of jobs on the compute cluster, launches simulation binaries (Laghos, MPI apps), monitors job status, and cancels or resubmits runs. Use for any 'submit', 'launch', 'execute', or 'monitor jobs' step. To run Laghos parameter sweeps, pair with the `laghos` server, which handles staging and QoI retrieval."
+  },
+  "slurm": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8002/mcp",
+    "description": "SLURM batch scheduler. Alternative to `flux` on SLURM-managed clusters: submits sbatch jobs, monitors queue state, retrieves job logs, cancels jobs. Use only when the target cluster runs SLURM instead of Flux."
+  },
+  "laghos": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8003/mcp",
+    "description": "Laghos hydrodynamics simulation lifecycle. Stages parameter sweeps using Latin hypercube or grid sampling (given sample count and parameter ranges), generates per-sample params.txt input files under a base output directory, configures per-run simulation inputs, runs individual simulations, and retrieves quantities of interest at specific timesteps from single runs or full sweeps (including 'find best QoI across N samples at step K'). Use for any Laghos setup, staging, iterative refinement, or QoI analysis step. Pair with `flux` (or `slurm`) to actually execute the staged jobs."
+  },
+  "cubit": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8004/mcp",
+    "description": "Cubit mesh generation and geometric modeling. Creates 2D and 3D meshes from geometric definitions, applies boundary conditions and material assignments, and exports mesh files for downstream simulation tools (Laghos, other FEM codes). Use for any mesh creation, geometry definition, or BC assignment step."
+  },
+  "professor": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8005/mcp",
+    "description": "Professor surrogate modeling for design optimization campaigns. Builds regression or Gaussian process surrogates from parameter-QoI datasets, queries surrogate predictions at new parameter points, and proposes next-batch parameter values that improve a target objective (inverse design, Bayesian optimization). Use only when the user asks for surrogate models, learned response surfaces, or model-guided optimization — not for raw sweeps."
+  },
+  "merlin": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8006/mcp",
+    "description": "Merlin workflow orchestration for multi-step scientific workflows. Defines DAG-shaped studies, orchestrates dependent tasks with parameter propagation, and manages retries and resumption. Use for complex campaigns with multiple interdependent stages beyond a single parameter sweep."
+  },
+  "vision": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8020/mcp",
+    "description": "Vision analysis for images. Analyze the visual content of an image (local file path or public URL) with a vision-capable LLM. Tools: `describe_image(path_or_url, question)` returns a text answer about the image; `compare_images(path_a, path_b, question)` compares two images. Use for any task where an agent must reason about actual pixel content: reading plot values, checking convergence in a QoI curve, verifying mesh quality, comparing simulation snapshots. Distinct from displaying images (which happens automatically via the /api/files UI post-processor)."
+  }
+}

@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground: #171717;
+  --background: #f8f9fc;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Shared input styles */
+@layer components {
+  .input-field {
+    @apply w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm
+           focus:border-mada-500 focus:ring-1 focus:ring-mada-500 focus:outline-none;
+  }
+  .btn-primary {
+    @apply rounded-lg bg-mada-600 px-5 py-2 text-sm font-medium text-white
+           hover:bg-mada-700 disabled:bg-gray-300 disabled:cursor-not-allowed
+           transition-colors;
+  }
+  .btn-secondary {
+    @apply rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm
+           font-medium text-gray-700 hover:bg-gray-50 transition-colors;
+  }
+}
+
+/* reactflow overrides */
+.react-flow__node {
+  cursor: pointer;
+}
+
+.react-flow__attribution {
+  display: none;
+}

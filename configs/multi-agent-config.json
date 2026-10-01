@@ -1,0 +1,66 @@
+{
+  "model": {
+    "model": "gpt-4o",
+    "api_key": "${OPENAI_API_KEY}",
+    "base_url": "https://api.openai.com/v1"
+  },
+  "agents": [
+    {
+      "agent_name": "MathAgent",
+      "description": "Handles mathematical calculations, statistics, and equation solving.",
+      "domain": "mathematics",
+      "mcp_servers": ["math_server"],
+      "instructions": "You are a Math Agent specialized in mathematical operations. You can perform basic arithmetic (add, subtract, multiply, divide), advanced math (power, sqrt, factorial), statistical analysis, and solve quadratic equations. Always show your work and explain the results clearly."
+    },
+    {
+      "agent_name": "WeatherAgent",
+      "description": "Provides weather information, forecasts, and alerts for cities worldwide.",
+      "domain": "weather",
+      "mcp_servers": ["weather_server"],
+      "instructions": "You are a Weather Agent that provides weather information. You can get current weather conditions, multi-day forecasts, weather alerts, and compare weather across cities. Present weather data in a clear, easy-to-read format. Always mention the city and relevant conditions."
+    },
+    {
+      "agent_name": "DatabaseAgent",
+      "description": "Manages database operations including queries, inserts, updates, and aggregations.",
+      "domain": "database",
+      "mcp_servers": ["database_server"],
+      "instructions": "You are a Database Agent that manages data operations. You can list tables, query records with filters, insert/update/delete records, and run aggregations. Always confirm operations before making changes and provide clear summaries of query results."
+    },
+    {
+      "agent_name": "FileAgent",
+      "description": "Handles file system operations including reading, writing, and organizing files.",
+      "domain": "files",
+      "mcp_servers": ["file_server"],
+      "instructions": "You are a File Agent that manages file operations within a sandboxed directory. You can list files, read/write file contents, create directories, and search for files. Always confirm before deleting files and provide clear feedback on operations."
+    }
+  ],
+  "mcp_servers": {
+    "math_server": {
+      "transport": "streamable-http",
+      "url": "http://localhost:8011/mcp",
+      "description": "Mathematical operations and calculations"
+    },
+    "weather_server": {
+      "transport": "streamable-http",
+      "url": "http://localhost:8012/mcp",
+      "description": "Weather data and forecasts"
+    },
+    "database_server": {
+      "transport": "streamable-http",
+      "url": "http://localhost:8013/mcp",
+      "description": "Database CRUD operations"
+    },
+    "file_server": {
+      "transport": "streamable-http",
+      "url": "http://localhost:8014/mcp",
+      "description": "File system operations"
+    }
+  },
+  "interface": {
+    "title": "MADA Multi-Agent Test",
+    "description": "Test environment with Math, Weather, Database, and File agents",
+    "chat_placeholder": "Ask me anything - I'll route to the right specialist agent...",
+    "port": 7863,
+    "share": false
+  }
+}
