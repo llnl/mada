@@ -235,7 +235,7 @@ Guidelines:
         for key in self._TEXT_KEYS:
             value = self._payload_value(payload, key)
             if isinstance(value, str) and value.strip():
-                return value
+                return strip_image_payload_text(value)
             if value is not None:
                 text = self._extract_text(value)
                 if text.strip():
@@ -798,7 +798,7 @@ Guidelines:
                 continue
 
             chunk, streamed_text = self._stream_text_update(streamed_text, event_text)
-            if chunk:
+            if chunk or response_replacement(chunk) is not None:
                 yield "chunk", chunk
 
         bg_ack = self._background_task_ack(background_task_descriptors)
@@ -826,6 +826,8 @@ Guidelines:
         """
         if event_text.startswith(streamed_text):
             return event_text[len(streamed_text) :], event_text
+        if streamed_text.startswith(event_text):
+            return InternalResponseReplacement(event_text), event_text
         return event_text, streamed_text + event_text
 
     async def initialize(

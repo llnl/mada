@@ -15,7 +15,10 @@ from mada.core.media import (
 from mada.core.orchestration.agent_as_tool_strategy import (
     AgentAsToolOrchestrationStrategy,
 )
-from mada.core.orchestration.stream_events import InternalImageSignal
+from mada.core.orchestration.stream_events import (
+    InternalImageSignal,
+    InternalResponseReplacement,
+)
 from mada.core.orchestration.magentic_strategy import MagenticOrchestrationStrategy
 from mada.core.orchestrator import MADAOrchestrator
 
@@ -313,3 +316,28 @@ async def test_magentic_stream_surfaces_images_before_final_text(monkeypatch):
     assert output[0][0] == "image"
     assert output[0][1].data == PNG_DATA
     assert output[-1] == ("final", "Rendered")
+
+
+@pytest.mark.asyncio
+async def test_magentic_stream_replaces_cumulative_image_payload_text(monkeypatch):
+    strategy = MagenticOrchestrationStrategy()
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    partial = "Result: data:image/png;base64,"
+    complete = f"{partial}{encoded}"
+
+    async def events(*args, **kwargs):
+        yield {"type": "output", "text": partial}
+        yield {"type": "output", "text": complete}
+
+    monkeypatch.setattr(strategy, "_iter_workflow_events", events)
+
+    output = [
+        item
+        async for item in strategy._stream_workflow_response(
+            SimpleNamespace(), [], include_tool_notices=False
+        )
+    ]
+
+    assert output[0] == ("chunk", partial)
+    assert isinstance(output[1][1], InternalResponseReplacement)
+    assert output[2] == ("final", "Result:")

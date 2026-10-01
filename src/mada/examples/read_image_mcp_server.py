@@ -13,13 +13,15 @@ from pathlib import Path
 from fastmcp import FastMCP
 from mcp.types import ImageContent
 
+from mada.core.media import ImageAttachment
+
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 SUPPORTED_TYPES = {
-    ".gif": ("image/gif", (b"GIF87a", b"GIF89a")),
-    ".jpeg": ("image/jpeg", (b"\xff\xd8\xff",)),
-    ".jpg": ("image/jpeg", (b"\xff\xd8\xff",)),
-    ".png": ("image/png", (b"\x89PNG\r\n\x1a\n",)),
-    ".webp": ("image/webp", (b"RIFF",)),
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
 }
 
 mcp = FastMCP("local-images")
@@ -48,14 +50,13 @@ def _load_image(path: str) -> tuple[bytes, str, str]:
             f"Image exceeds the {MAX_IMAGE_BYTES // (1024 * 1024)} MB limit"
         )
 
-    media_type, signatures = SUPPORTED_TYPES.get(image_path.suffix.lower(), (None, ()))
+    media_type = SUPPORTED_TYPES.get(image_path.suffix.lower())
     if media_type is None:
         media_type = mimetypes.guess_type(image_path.name)[0] or ""
     data = image_path.read_bytes()
-    if media_type not in {item[0] for item in SUPPORTED_TYPES.values()}:
+    if media_type not in set(SUPPORTED_TYPES.values()):
         raise ValueError(f"Unsupported image type: {image_path.suffix}")
-    if signatures and not any(data.startswith(signature) for signature in signatures):
-        raise ValueError("Image data does not match its file type")
+    ImageAttachment.from_data(data, media_type, filename=image_path.name)
     return data, media_type, image_path.name
 
 

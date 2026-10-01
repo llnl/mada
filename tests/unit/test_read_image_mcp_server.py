@@ -26,3 +26,12 @@ def test_read_image_rejects_paths_outside_allowed_roots(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="outside"):
         image_server.read_image(str(image_path))
+
+
+def test_read_image_rejects_invalid_webp_signature(tmp_path, monkeypatch):
+    image_path = tmp_path / "plot.webp"
+    image_path.write_bytes(b"RIFF" + b"\x00" * 4 + b"NOPE")
+    monkeypatch.setenv("MADA_IMAGE_ROOTS", str(tmp_path))
+
+    with pytest.raises(ValueError, match="does not match"):
+        image_server.read_image(str(image_path))
