@@ -1,4 +1,5 @@
 import base64
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -110,6 +111,26 @@ def test_extracts_and_strips_markdown_data_uri():
     assert strip_image_payload_text(text) == "Here is the plot."
 
 
+def test_extracts_and_strips_serialized_image_array():
+    second_png = b"\x89PNG\r\n\x1a\nsecond-image-data"
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    second_encoded = base64.b64encode(second_png).decode("ascii")
+    payload = json.dumps(
+        [
+            {"type": "image", "mimeType": "image/png", "data": encoded},
+            {"type": "image", "mimeType": "image/png", "data": second_encoded},
+        ]
+    )
+    text = f"Before {payload} after"
+
+    attachments = extract_image_attachments(text)
+
+    assert len(attachments) == 2
+    cleaned = strip_image_payload_text(text)
+    assert cleaned == "Before  after"
+    assert encoded not in cleaned
+
+
 def test_strips_invalid_serialized_image_payload_without_displaying_base64():
     text = (
         'Here is the image. {"type":"image","mimeType":"image/png",'
@@ -141,7 +162,7 @@ async def test_agent_as_tool_reassembles_split_serialized_image_text():
     encoded = base64.b64encode(PNG_DATA).decode("ascii")
     chunks = [
         SimpleNamespace(text="Here ![plot](data:image/png;base64,"),
-        SimpleNamespace(text=f"{encoded})"),
+        SimpleNamespace(text=f"{encoded}) after"),
     ]
 
     class PlanningAgent:
@@ -163,9 +184,35 @@ async def test_agent_as_tool_reassembles_split_serialized_image_text():
         )
     ]
 
-    assert len(output) == 2
-    assert str(output[0]).startswith("[Image attachment: ")
-    assert output[1] == "Here"
+    assert output[0] == "Here "
+    assert isinstance(output[1], InternalImageSignal)
+    assert output[2] == " after"
+
+
+@pytest.mark.asyncio
+async def test_agent_as_tool_streams_plain_text_incrementally():
+    chunks = [SimpleNamespace(text="first"), SimpleNamespace(text=" second")]
+
+    class PlanningAgent:
+        async def stream(self):
+            for chunk in chunks:
+                yield chunk
+
+        def run(self, prompt, session, stream):
+            return self.stream()
+
+    strategy = AgentAsToolOrchestrationStrategy()
+    output = [
+        item
+        async for item in strategy._stream_response(
+            SimpleNamespace(planning_agent=PlanningAgent()),
+            "show me",
+            session=None,
+            include_tool_notices=False,
+        )
+    ]
+
+    assert output == ["first", " second"]
 
 
 @pytest.mark.asyncio

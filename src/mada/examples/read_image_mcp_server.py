@@ -34,7 +34,7 @@ def _allowed_roots() -> list[Path]:
         for item in configured.split(os.pathsep)
         if item
     ]
-    return roots or [Path.cwd().resolve()]
+    return roots
 
 
 def _load_image(path: str) -> tuple[bytes, str, str]:

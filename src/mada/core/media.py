@@ -140,12 +140,19 @@ def _decode_image_data(data: Any, media_type: Any) -> ImageAttachment | None:
 
 
 def _json_candidates(value: str) -> list[str]:
-    """Return possible JSON objects embedded in assistant text."""
+    """Return possible JSON values embedded in assistant text."""
     candidates = [value.strip()]
-    start = value.find("{")
-    end = value.rfind("}")
-    if start >= 0 and end > start:
-        candidates.append(value[start : end + 1])
+    decoder = json.JSONDecoder()
+    for start, character in enumerate(value):
+        if character not in "[{":
+            continue
+        try:
+            _, end = decoder.raw_decode(value, start)
+        except json.JSONDecodeError:
+            continue
+        candidate = value[start:end]
+        if candidate not in candidates:
+            candidates.append(candidate)
     return candidates
 
 
@@ -160,6 +167,17 @@ def _is_serialized_image_payload(value: Any) -> bool:
         and isinstance(media_type, str)
         and media_type.lower().startswith("image/")
     )
+
+
+def _contains_serialized_image_payload(value: Any) -> bool:
+    """Return whether decoded JSON contains an image payload descriptor."""
+    if _is_serialized_image_payload(value):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_serialized_image_payload(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_serialized_image_payload(item) for item in value)
+    return False
 
 
 def extract_image_attachments(value: Any) -> list[ImageAttachment]:
@@ -270,20 +288,36 @@ def extract_image_attachments(value: Any) -> list[ImageAttachment]:
     return found
 
 
-def strip_image_payload_text(value: str) -> str:
+def strip_image_payload_text(value: str, *, strip_outer_whitespace: bool = True) -> str:
     """Remove serialized image payloads from assistant-visible text."""
     cleaned = _IMAGE_MARKDOWN_RE.sub("", value)
     cleaned = _IMAGE_DATA_URI_RE.sub("", cleaned)
     cleaned = re.sub(r"!\[[^\]]*\]\(\s*\)", "", cleaned)
 
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start >= 0 and end > start:
-        candidate = cleaned[start : end + 1]
+    decoder = json.JSONDecoder()
+    spans: list[tuple[int, int]] = []
+    for start, character in enumerate(cleaned):
+        if character not in "[{":
+            continue
         try:
-            parsed = json.loads(candidate)
+            parsed, end = decoder.raw_decode(cleaned, start)
         except json.JSONDecodeError:
-            parsed = None
-        if _is_serialized_image_payload(parsed) or extract_image_attachments(candidate):
-            cleaned = cleaned[:start] + cleaned[end + 1 :]
-    return cleaned.strip()
+            continue
+        if _contains_serialized_image_payload(parsed) or extract_image_attachments(
+            parsed
+        ):
+            spans.append((start, end))
+
+    outermost_spans = [
+        (start, end)
+        for start, end in spans
+        if not any(
+            other_start <= start
+            and end <= other_end
+            and (other_start, other_end) != (start, end)
+            for other_start, other_end in spans
+        )
+    ]
+    for start, end in sorted(outermost_spans, reverse=True):
+        cleaned = cleaned[:start] + cleaned[end:]
+    return cleaned.strip() if strip_outer_whitespace else cleaned
