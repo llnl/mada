@@ -5,12 +5,23 @@
 Agent-as-tool orchestration strategy implementation.
 """
 
+import json
 import logging
+import re
 import traceback
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Tuple
 
 from mada.core.config import AgentConfig, MCPServerConfig, RemoteA2AAgentConfig
+from mada.core.media import (
+    ImageAttachment,
+    extract_image_attachments,
+    strip_image_payload_text,
+)
 from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
+from mada.core.orchestration.stream_events import (
+    InternalImageSignal,
+    InternalResponseReplacement,
+)
 
 if TYPE_CHECKING:
     from mada.core.orchestrator import MADAOrchestrator
@@ -29,6 +40,86 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
     """
 
     mode = "agent-as-tool"
+
+    _IMAGE_STREAM_START_RE = re.compile(
+        r"!\[[^\]]*\]\(\s*data:image/(?:gif|jpeg|png|webp);base64,|"
+        r"data:image/(?:gif|jpeg|png|webp);base64,|"
+        r"(?:\[\s*)?\{\s*[\"'](?:type|mimeType|media_type)[\"']\s*:\s*[\"']"
+        r"(?:image|data|uri)|"
+        r"(?:\[\s*)?\{(?=[^{}]*[\"'](?:type|mimeType|media_type)[\"']\s*:\s*"
+        r"[\"'](?:image|data|uri))",
+        re.IGNORECASE,
+    )
+    _IMAGE_STREAM_PREFIXES = (
+        "data:image/",
+        '{"type":"image',
+        '{"mimeType":"image/',
+        '{"media_type":"image/',
+        '[{"type":"image',
+        '[{"mimeType":"image/',
+        '[{"media_type":"image/',
+    )
+
+    @classmethod
+    def _serialized_image_start(cls, text: str) -> int | None:
+        """Return the start of a possibly split serialized image payload."""
+        matches = [match.start() for match in cls._IMAGE_STREAM_START_RE.finditer(text)]
+        for prefix in cls._IMAGE_STREAM_PREFIXES:
+            minimum_length = 5 if prefix == "data:image/" else 4
+            for length in range(minimum_length, min(len(prefix), len(text)) + 1):
+                start = len(text) - length
+                if text.endswith(prefix[:length]) and not (
+                    prefix == "data:image/" and start > 0 and text[start - 1].isalnum()
+                ):
+                    matches.append(start)
+
+        if not matches:
+            return None
+
+        start = min(matches)
+        data_start = text.find("data:image/", start)
+        if data_start >= 0:
+            markdown_start = text.rfind("![", start, data_start + 1)
+            if markdown_start >= 0:
+                markdown_prefix = text[markdown_start:data_start]
+                if re.fullmatch(r"!\[[^\]]*\]\(\s*", markdown_prefix):
+                    start = markdown_start
+        return start
+
+    @classmethod
+    def _safe_text_chunk(cls, pending_text: str, chunk_text: str) -> tuple[str, str]:
+        """Return safe text to emit and a possibly incomplete image suffix."""
+        combined = pending_text + chunk_text
+        start = cls._serialized_image_start(combined)
+        if start is None:
+            return combined, ""
+
+        payload = combined[start:]
+        attachments = extract_image_attachments(payload)
+        if not attachments and not cls._serialized_image_is_complete(payload):
+            return combined[:start], payload
+
+        return strip_image_payload_text(combined, strip_outer_whitespace=False), ""
+
+    @staticmethod
+    def _serialized_image_is_complete(payload: str) -> bool:
+        """Return whether a possible serialized image has a closing boundary."""
+        stripped = payload.lstrip()
+        if stripped.startswith("!["):
+            return ")" in stripped
+        if stripped.startswith(("{", "[")):
+            try:
+                json.JSONDecoder().raw_decode(stripped)
+            except json.JSONDecodeError:
+                return False
+            return True
+        return bool(
+            re.search(
+                r"data:image/(?:gif|jpeg|png|webp);base64,[^\s)]+",
+                stripped,
+                re.IGNORECASE,
+            )
+        )
 
     def _initialize_planning_agent(
         self,
@@ -109,11 +200,32 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         """
         response_started = False
         tool_calls = []
+        text_chunks = []
+        pending_text = ""
+        emitted_text = ""
+        image_digests: set[str] = set()
         stream = orchestrator.planning_agent.run(prompt, session=session, stream=True)
         async for chunk in stream:
+            for attachment in extract_image_attachments(chunk):
+                if attachment.digest in image_digests:
+                    continue
+                image_digests.add(attachment.digest)
+                yield InternalImageSignal(attachment)
+
             if chunk.text:
-                response_started = True
-                yield chunk.text
+                text_chunks.append(chunk.text)
+                for attachment in extract_image_attachments(pending_text + chunk.text):
+                    if attachment.digest in image_digests:
+                        continue
+                    image_digests.add(attachment.digest)
+                    yield InternalImageSignal(attachment)
+                safe_text, pending_text = self._safe_text_chunk(
+                    pending_text, chunk.text
+                )
+                if safe_text:
+                    response_started = True
+                    emitted_text += safe_text
+                    yield safe_text
                 continue
 
             if not include_tool_notices:
@@ -121,6 +233,27 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
 
             for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
                 yield notice
+
+        assembled_text = "".join(text_chunks)
+        for attachment in extract_image_attachments(assembled_text):
+            if attachment.digest in image_digests:
+                continue
+            image_digests.add(attachment.digest)
+            yield InternalImageSignal(attachment)
+
+        text = strip_image_payload_text(assembled_text)
+        if text.strip() != emitted_text.strip():
+            if text.startswith(emitted_text):
+                remainder = text[len(emitted_text) :]
+                if remainder:
+                    response_started = True
+                    emitted_text += remainder
+                    yield remainder
+            elif text:
+                response_started = True
+                yield InternalResponseReplacement(text)
+        if text and not response_started:
+            response_started = True
 
         if not response_started:
             LOG.warning("No text chunks received from planning agent")
@@ -215,6 +348,12 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         aggregated_assistant_reply = ""
         tool_calls = []
         background_task_descriptors = []
+        image_attachments: list[ImageAttachment] = []
+        image_digests: set[str] = set()
+        text_chunks: list[str] = []
+        pending_text = ""
+        emitted_text = ""
+        capture_token = None
         response_started = False
 
         try:
@@ -238,18 +377,75 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 )
                 prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
 
+            if hasattr(orchestrator, "_begin_image_capture"):
+                capture_token, captured_images = orchestrator._begin_image_capture()
+            else:
+                captured_images = []
+            captured_image_index = 0
             stream = orchestrator.planning_agent.run(
                 prompt, session=run_session, stream=True
             )
             async for chunk in stream:
+                available_images = [
+                    *captured_images[captured_image_index:],
+                    *extract_image_attachments(chunk),
+                ]
+                captured_image_index = len(captured_images)
+                for attachment in available_images:
+                    if attachment.digest in image_digests:
+                        continue
+                    image_digests.add(attachment.digest)
+                    image_attachments.append(attachment)
+                    yield InternalImageSignal(attachment)
+
                 if chunk.text:
-                    response_started = True
-                    aggregated_assistant_reply += chunk.text
-                    yield chunk.text
+                    text_chunks.append(chunk.text)
+                    for attachment in extract_image_attachments(
+                        pending_text + chunk.text
+                    ):
+                        if attachment.digest in image_digests:
+                            continue
+                        image_digests.add(attachment.digest)
+                        image_attachments.append(attachment)
+                        yield InternalImageSignal(attachment)
+                    safe_text, pending_text = self._safe_text_chunk(
+                        pending_text, chunk.text
+                    )
+                    if safe_text:
+                        response_started = True
+                        emitted_text += safe_text
+                        yield safe_text
                     continue
 
                 for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
                     yield notice
+
+            for attachment in captured_images[captured_image_index:]:
+                if attachment.digest in image_digests:
+                    continue
+                image_digests.add(attachment.digest)
+                image_attachments.append(attachment)
+                yield InternalImageSignal(attachment)
+
+            assembled_text = "".join(text_chunks)
+            for attachment in extract_image_attachments(assembled_text):
+                if attachment.digest in image_digests:
+                    continue
+                image_digests.add(attachment.digest)
+                image_attachments.append(attachment)
+                yield InternalImageSignal(attachment)
+
+            aggregated_assistant_reply = strip_image_payload_text(assembled_text)
+            if aggregated_assistant_reply.strip() != emitted_text.strip():
+                if aggregated_assistant_reply.startswith(emitted_text):
+                    remainder = aggregated_assistant_reply[len(emitted_text) :]
+                    if remainder:
+                        response_started = True
+                        emitted_text += remainder
+                        yield remainder
+                elif aggregated_assistant_reply:
+                    response_started = True
+                    yield InternalResponseReplacement(aggregated_assistant_reply)
 
             if not response_started:
                 LOG.warning("No text chunks received from planning agent")
@@ -269,6 +465,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 await orchestrator._persist_isolated_response(
                     message,
                     aggregated_assistant_reply,
+                    image_attachments=image_attachments,
                     background_task_descriptors=background_task_descriptors,
                     session_id=persistence_session_id,
                 )
@@ -280,7 +477,13 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 aggregated_assistant_reply,
                 run_session,
                 history_lengths,
+                image_attachments=image_attachments,
                 background_task_descriptors=background_task_descriptors,
             )
         except Exception as e:
             yield orchestrator._process_message_error(e)
+        finally:
+            if capture_token is not None and hasattr(
+                orchestrator, "_end_image_capture"
+            ):
+                orchestrator._end_image_capture(capture_token)

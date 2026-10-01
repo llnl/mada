@@ -16,9 +16,15 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Tuple
 from agent_framework import Agent, Message
 
 from mada.core.config import AgentConfig, MCPServerConfig, RemoteA2AAgentConfig
+from mada.core.media import (
+    ImageAttachment,
+    extract_image_attachments,
+    strip_image_payload_text,
+)
 from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
 from mada.core.orchestration.stream_events import (
     InternalError,
+    InternalImageSignal,
     InternalResponseReplacement,
     InternalToolCallSignal,
     response_replacement,
@@ -209,13 +215,16 @@ Guidelines:
         if payload is None:
             return ""
         if isinstance(payload, str):
-            return payload
+            return strip_image_payload_text(payload)
         if isinstance(payload, (list, tuple)):
             return "".join(
                 text for item in payload if (text := self._extract_text(item))
             )
 
         event_type = self._event_type(payload)
+        if self._is_image_payload(payload, event_type):
+            # Image bytes/base64 are attachments, not assistant-visible text.
+            return ""
         if event_type in self._IGNORED_EVENT_TYPES or event_type in (
             "tool_result",
             "function_result",
@@ -226,7 +235,7 @@ Guidelines:
         for key in self._TEXT_KEYS:
             value = self._payload_value(payload, key)
             if isinstance(value, str) and value.strip():
-                return value
+                return strip_image_payload_text(value)
             if value is not None:
                 text = self._extract_text(value)
                 if text.strip():
@@ -257,6 +266,19 @@ Guidelines:
         return str(
             getattr(payload, "type", "") or getattr(payload, "event", "")
         ).lower()
+
+    @classmethod
+    def _is_image_payload(cls, payload: Any, event_type: str | None = None) -> bool:
+        """Return whether a payload is an image content item."""
+        event_type = event_type or cls._event_type(payload)
+        if event_type == "image":
+            return True
+        if event_type not in {"data", "uri"}:
+            return False
+        media_type = cls._payload_value(payload, "media_type") or cls._payload_value(
+            payload, "mimeType"
+        )
+        return isinstance(media_type, str) and media_type.lower().startswith("image/")
 
     def _is_terminal_output_event(self, event: Any) -> bool:
         """
@@ -733,7 +755,7 @@ Guidelines:
         transcript_messages: List[Dict[str, Any]],
         *,
         include_tool_notices: bool,
-    ) -> AsyncGenerator[Tuple[str, str], None]:
+    ) -> AsyncGenerator[Tuple[str, Any], None]:
         """
         Stream Magentic notices and return the final assistant reply as an event.
         """
@@ -741,9 +763,16 @@ Guidelines:
         final_text = ""
         background_task_descriptors = []
         seen_executor_ids = set()
+        seen_image_digests: set[str] = set()
         async for event in self._iter_workflow_events(
             orchestrator, transcript_messages
         ):
+            for attachment in extract_image_attachments(event):
+                if attachment.digest in seen_image_digests:
+                    continue
+                seen_image_digests.add(attachment.digest)
+                yield "image", attachment
+
             if include_tool_notices:
                 for notice in self._call_notices_from_event(event, seen_executor_ids):
                     yield "notice", notice
@@ -769,7 +798,7 @@ Guidelines:
                 continue
 
             chunk, streamed_text = self._stream_text_update(streamed_text, event_text)
-            if chunk:
+            if chunk or response_replacement(chunk) is not None:
                 yield "chunk", chunk
 
         bg_ack = self._background_task_ack(background_task_descriptors)
@@ -797,6 +826,8 @@ Guidelines:
         """
         if event_text.startswith(streamed_text):
             return event_text[len(streamed_text) :], event_text
+        if streamed_text.startswith(event_text):
+            return InternalResponseReplacement(event_text), event_text
         return event_text, streamed_text + event_text
 
     async def initialize(
@@ -892,6 +923,9 @@ Guidelines:
                     yield value
                 elif kind == "final":
                     final_text = value
+                elif kind == "image":
+                    # Text-only OpenAI consumers still need the safe fallback.
+                    yield InternalImageSignal(value)
                 elif kind == "background_task":
                     continue
 
@@ -933,6 +967,7 @@ Guidelines:
 
         try:
             background_task_descriptors = []
+            image_attachments: list[ImageAttachment] = []
             turn_id = None
             streamed_text = ""
 
@@ -980,6 +1015,9 @@ Guidelines:
                     aggregated_assistant_reply = value
                 elif kind == "background_task":
                     background_task_descriptors.append(value)
+                elif kind == "image":
+                    image_attachments.append(value)
+                    yield InternalImageSignal(value)
 
             if isolated_session:
                 if stateless_session:
@@ -996,6 +1034,7 @@ Guidelines:
                     await orchestrator._persist_isolated_response(
                         message,
                         aggregated_assistant_reply,
+                        image_attachments=image_attachments,
                         background_task_descriptors=background_task_descriptors,
                         session_id=persistence_session_id,
                     )
@@ -1006,6 +1045,7 @@ Guidelines:
                     aggregated_assistant_reply,
                     run_session=None,
                     history_lengths={},
+                    image_attachments=image_attachments,
                     background_task_descriptors=background_task_descriptors,
                 )
 

@@ -39,7 +39,7 @@
        "headers": {
         "X-Token": "${TOKEN}"
        },
-       "verify": true 
+       "verify": true
     }
   },
   "orchestration": {

@@ -60,7 +60,31 @@ Click the "Connect to MCP Servers" button to start the MCP servers for your agen
 
 Now that your agents are connected, you're free to start entering prompts into the chat box!
 
-If your configuration uses `magentic` orchestration, the Gradio interface still shows the active specialist agents in the table. The hidden Magentic manager is not displayed as a participant, and only the final assistant answer is streamed back into the chat UI.
+### MCP image results
+
+MCP tools can return generated plots, rendered simulation frames, and other
+images directly in the conversation. Return a standard MCP `ImageContent` item
+whose `data` field contains base64-encoded image bytes and whose `mimeType` is
+`image/png`, `image/jpeg`, `image/webp`, or `image/gif`. MADA displays the image
+inline with the assistant response and stores it with the chat history; the MCP
+server and MADA do not need to share a filesystem.
+
+To let an agent display an existing local image, install the optional image
+tool and use the stdio server included with MADA:
+
+```bash
+pip install 'mada[image-tools]'
+export MADA_IMAGE_ROOTS="$PWD"
+```
+
+The Vertex-CFD example configuration enables this server as `image_files`. Ask
+the agent to call `read_image` with a path under `MADA_IMAGE_ROOTS`; it returns
+the file as `ImageContent`, which Gradio renders inline. The server rejects
+paths outside the configured roots, unsupported formats, invalid signatures,
+and images larger than 10 MB. The `mada-read-image-mcp` launcher and server
+module are included in the installed `image-tools` workflow.
+
+If your configuration uses `magentic` orchestration, the Gradio interface still shows the active specialist agents in the table. The hidden Magentic manager is not displayed as a participant, and the final assistant response and any returned images are displayed in the chat UI.
 
 ## Managing Chat Histories
 
