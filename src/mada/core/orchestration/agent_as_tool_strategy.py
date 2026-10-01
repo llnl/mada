@@ -10,7 +10,11 @@ import traceback
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Tuple
 
 from mada.core.config import AgentConfig, MCPServerConfig, RemoteA2AAgentConfig
-from mada.core.media import ImageAttachment, extract_image_attachments
+from mada.core.media import (
+    ImageAttachment,
+    extract_image_attachments,
+    strip_image_payload_text,
+)
 from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
 from mada.core.orchestration.stream_events import InternalImageSignal
 
@@ -111,14 +115,20 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         """
         response_started = False
         tool_calls = []
+        text_chunks = []
+        image_digests: set[str] = set()
         stream = orchestrator.planning_agent.run(prompt, session=session, stream=True)
         async for chunk in stream:
             for attachment in extract_image_attachments(chunk):
+                if attachment.digest in image_digests:
+                    continue
+                image_digests.add(attachment.digest)
                 yield InternalImageSignal(attachment)
 
             if chunk.text:
-                response_started = True
-                yield chunk.text
+                # Hold text until the stream is complete so serialized image
+                # payloads split across updates cannot leak to text clients.
+                text_chunks.append(chunk.text)
                 continue
 
             if not include_tool_notices:
@@ -126,6 +136,18 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
 
             for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
                 yield notice
+
+        assembled_text = "".join(text_chunks)
+        for attachment in extract_image_attachments(assembled_text):
+            if attachment.digest in image_digests:
+                continue
+            image_digests.add(attachment.digest)
+            yield InternalImageSignal(attachment)
+
+        text = strip_image_payload_text(assembled_text)
+        if text:
+            response_started = True
+            yield text
 
         if not response_started:
             LOG.warning("No text chunks received from planning agent")
@@ -222,6 +244,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         background_task_descriptors = []
         image_attachments: list[ImageAttachment] = []
         image_digests: set[str] = set()
+        text_chunks: list[str] = []
         capture_token = None
         response_started = False
 
@@ -268,9 +291,10 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                     yield InternalImageSignal(attachment)
 
                 if chunk.text:
-                    response_started = True
-                    aggregated_assistant_reply += chunk.text
-                    yield chunk.text
+                    # Hold text until the stream is complete so serialized
+                    # image payloads split across updates cannot leak to
+                    # persistence or text-only interfaces.
+                    text_chunks.append(chunk.text)
                     continue
 
                 for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
@@ -282,6 +306,19 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 image_digests.add(attachment.digest)
                 image_attachments.append(attachment)
                 yield InternalImageSignal(attachment)
+
+            assembled_text = "".join(text_chunks)
+            for attachment in extract_image_attachments(assembled_text):
+                if attachment.digest in image_digests:
+                    continue
+                image_digests.add(attachment.digest)
+                image_attachments.append(attachment)
+                yield InternalImageSignal(attachment)
+
+            aggregated_assistant_reply = strip_image_payload_text(assembled_text)
+            if aggregated_assistant_reply:
+                response_started = True
+                yield aggregated_assistant_reply
 
             if not response_started:
                 LOG.warning("No text chunks received from planning agent")

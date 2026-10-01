@@ -427,7 +427,10 @@ class MCPGradioClientSession:
                 self.session_manager.add_message("user", message)
                 self.session_manager.add_message("assistant", response)
             if isinstance(response, RichResponse) and response.images:
-                yield self._format_message_content(str(response), list(response.images))
+                text = str(response)
+                if self._is_image_attachment_placeholder(text):
+                    text = ""
+                yield self._format_message_content(text, list(response.images))
             else:
                 yield response
 

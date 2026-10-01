@@ -6,7 +6,15 @@ import pytest
 from agent_framework import AgentResponseUpdate, Content
 from mcp.types import ImageContent
 
-from mada.core.media import ImageAttachment, RichResponse, extract_image_attachments
+from mada.core.media import (
+    ImageAttachment,
+    RichResponse,
+    extract_image_attachments,
+    strip_image_payload_text,
+)
+from mada.core.orchestration.agent_as_tool_strategy import (
+    AgentAsToolOrchestrationStrategy,
+)
 from mada.core.orchestration.stream_events import InternalImageSignal
 from mada.core.orchestration.magentic_strategy import MagenticOrchestrationStrategy
 from mada.core.orchestrator import MADAOrchestrator
@@ -66,6 +74,118 @@ def test_invalid_images_are_ignored(payload):
     assert extract_image_attachments(payload) == []
 
 
+def test_image_attachment_filename_is_safe_for_transcript_markers():
+    attachment = ImageAttachment.from_data(
+        PNG_DATA,
+        "image/png",
+        filename="plot]\n[synthetic].png",
+    )
+
+    assert attachment.filename.isprintable()
+    assert "\n" not in attachment.filename
+    assert "]" not in attachment.filename
+
+
+def test_magentic_does_not_expose_image_data_as_text():
+    strategy = MagenticOrchestrationStrategy()
+    payload = {
+        "type": "image",
+        "data": base64.b64encode(PNG_DATA).decode("ascii"),
+        "mimeType": "image/png",
+    }
+
+    assert strategy._extract_text(payload) == ""
+
+
+def test_extracts_and_strips_markdown_data_uri():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    text = f"Here is the plot.\n![plot](data:image/png;base64,{encoded})"
+
+    attachments = extract_image_attachments(text)
+
+    assert len(attachments) == 1
+    assert strip_image_payload_text(text) == "Here is the plot."
+
+
+def test_strips_invalid_serialized_image_payload_without_displaying_base64():
+    text = (
+        'Here is the image. {"type":"image","mimeType":"image/png",'
+        '"data":"not-valid-base64"}'
+    )
+
+    assert strip_image_payload_text(text) == "Here is the image."
+
+
+@pytest.mark.asyncio
+async def test_collect_message_response_converts_serialized_image_text(monkeypatch):
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+
+    async def process_message(*args, **kwargs):
+        yield f"Here is the plot. ![plot](data:image/png;base64,{encoded})"
+
+    monkeypatch.setattr(orchestrator, "process_message", process_message)
+
+    response = await orchestrator.collect_message_response("show me")
+
+    assert isinstance(response, RichResponse)
+    assert response == "Here is the plot."
+    assert len(response.images) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_as_tool_reassembles_split_serialized_image_text():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    chunks = [
+        SimpleNamespace(text="Here ![plot](data:image/png;base64,"),
+        SimpleNamespace(text=f"{encoded})"),
+    ]
+
+    class PlanningAgent:
+        async def stream(self):
+            for chunk in chunks:
+                yield chunk
+
+        def run(self, prompt, session, stream):
+            return self.stream()
+
+    strategy = AgentAsToolOrchestrationStrategy()
+    output = [
+        item
+        async for item in strategy._stream_response(
+            SimpleNamespace(planning_agent=PlanningAgent()),
+            "show me",
+            session=None,
+            include_tool_notices=False,
+        )
+    ]
+
+    assert len(output) == 2
+    assert str(output[0]).startswith("[Image attachment: ")
+    assert output[1] == "Here"
+
+
+@pytest.mark.asyncio
+async def test_magentic_openai_stream_forwards_image_signal(monkeypatch):
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png")
+    strategy = MagenticOrchestrationStrategy()
+
+    async def workflow(*args, **kwargs):
+        yield "image", attachment
+        yield "final", ""
+
+    monkeypatch.setattr(strategy, "_stream_workflow_response", workflow)
+    orchestrator = SimpleNamespace(
+        manager_agent=object(),
+        _normalize_transcript_messages=lambda messages: messages,
+    )
+
+    output = [item async for item in strategy.process_openai_messages(orchestrator, [])]
+
+    assert len(output) == 1
+    assert str(output[0]).startswith("[Image attachment: ")
+
+
 def test_oversized_images_are_ignored(monkeypatch):
     monkeypatch.setattr("mada.core.media.MAX_IMAGE_BYTES", 4)
     payload = {
@@ -94,6 +214,32 @@ async def test_collect_message_response_preserves_images_and_text(monkeypatch):
     assert isinstance(response, RichResponse)
     assert response == "description"
     assert response.images == (attachment,)
+
+
+@pytest.mark.asyncio
+async def test_collect_message_response_uses_text_fallback_for_image_only(
+    monkeypatch,
+):
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+
+    async def process_message(*args, **kwargs):
+        yield InternalImageSignal(attachment)
+
+    monkeypatch.setattr(orchestrator, "process_message", process_message)
+
+    response = await orchestrator.collect_message_response("show me")
+
+    assert response == "[Image attachment: plot.png]"
+    assert response.images == (attachment,)
+
+
+def test_internal_image_signal_has_text_fallback():
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+
+    signal = InternalImageSignal(attachment)
+
+    assert str(signal) == "[Image attachment: plot.png]"
 
 
 def test_task_local_capture_deduplicates_images():

@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Tuple
 from agent_framework import Agent, Message
 
 from mada.core.config import AgentConfig, MCPServerConfig, RemoteA2AAgentConfig
-from mada.core.media import ImageAttachment, extract_image_attachments
+from mada.core.media import (
+    ImageAttachment,
+    extract_image_attachments,
+    strip_image_payload_text,
+)
 from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
 from mada.core.orchestration.stream_events import (
     InternalError,
@@ -211,13 +215,16 @@ Guidelines:
         if payload is None:
             return ""
         if isinstance(payload, str):
-            return payload
+            return strip_image_payload_text(payload)
         if isinstance(payload, (list, tuple)):
             return "".join(
                 text for item in payload if (text := self._extract_text(item))
             )
 
         event_type = self._event_type(payload)
+        if self._is_image_payload(payload, event_type):
+            # Image bytes/base64 are attachments, not assistant-visible text.
+            return ""
         if event_type in self._IGNORED_EVENT_TYPES or event_type in (
             "tool_result",
             "function_result",
@@ -259,6 +266,19 @@ Guidelines:
         return str(
             getattr(payload, "type", "") or getattr(payload, "event", "")
         ).lower()
+
+    @classmethod
+    def _is_image_payload(cls, payload: Any, event_type: str | None = None) -> bool:
+        """Return whether a payload is an image content item."""
+        event_type = event_type or cls._event_type(payload)
+        if event_type == "image":
+            return True
+        if event_type not in {"data", "uri"}:
+            return False
+        media_type = cls._payload_value(payload, "media_type") or cls._payload_value(
+            payload, "mimeType"
+        )
+        return isinstance(media_type, str) and media_type.lower().startswith("image/")
 
     def _is_terminal_output_event(self, event: Any) -> bool:
         """
@@ -901,6 +921,9 @@ Guidelines:
                     yield value
                 elif kind == "final":
                     final_text = value
+                elif kind == "image":
+                    # Text-only OpenAI consumers still need the safe fallback.
+                    yield InternalImageSignal(value)
                 elif kind == "background_task":
                     continue
 

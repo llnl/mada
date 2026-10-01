@@ -95,3 +95,30 @@ async def test_gradio_client_yields_rich_response_as_mixed_content():
 
     assert responses[0][0] == "Done"
     assert responses[0][1]["type"] == "file"
+
+
+@pytest.mark.asyncio
+async def test_gradio_client_hides_image_only_text_fallback():
+    client = _client()
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png")
+
+    class BackgroundTasks:
+        async def run_query(self, message, blocking):
+            return RichResponse(
+                f"[Image attachment: {attachment.filename}]", [attachment]
+            )
+
+    client.initialized = True
+    client.blocking = True
+    client.orchestrator = SimpleNamespace(background_tasks=BackgroundTasks())
+    client.session_manager = MagicMock()
+    try:
+        responses = [
+            response
+            async for response in client.process_message("render", [], MagicMock())
+        ]
+    finally:
+        client._attachment_cache.cleanup()
+
+    assert len(responses[0]) == 1
+    assert responses[0][0]["type"] == "file"

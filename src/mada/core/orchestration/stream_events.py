@@ -54,10 +54,10 @@ class InternalError(str):
 
 
 class InternalImageSignal(str):
-    """Empty stream chunk carrying an MCP image for rich interfaces."""
+    """Stream chunk carrying an MCP image and a safe text fallback."""
 
     def __new__(cls, attachment: ImageAttachment):
-        value = str.__new__(cls, "")
+        value = str.__new__(cls, f"[Image attachment: {attachment.filename}]")
         setattr(value, IMAGE_ATTACHMENT_ATTR, attachment)
         return value
 

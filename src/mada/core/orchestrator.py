@@ -13,9 +13,11 @@ persistence, and strategy selection. Mode-specific request handling lives in
 import asyncio
 import copy
 import logging
+import os
 import re
 import traceback
 from contextvars import ContextVar, Token
+from pathlib import Path
 from types import TracebackType
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Type
 from contextlib import AsyncExitStack
@@ -44,7 +46,12 @@ from mada.core.config import (
 )
 from mada.core.coordinator import MCPAgentManager
 from mada.core.database import ChatSessionManager
-from mada.core.media import ImageAttachment, RichResponse, extract_image_attachments
+from mada.core.media import (
+    ImageAttachment,
+    RichResponse,
+    extract_image_attachments,
+    strip_image_payload_text,
+)
 from mada.core.skills.skill_registry import SkillRegistry
 from mada.core.orchestration import (
     AgentAsToolOrchestrationStrategy,
@@ -383,14 +390,31 @@ class MADAOrchestrator(MCPAgentManager):
                 if not server_path:
                     LOG.error(f"No command/server_path for stdio server {server_name}")
                     continue
+                if server_path.endswith(".py"):
+                    candidate = Path(server_path).expanduser()
+                    if not candidate.is_file():
+                        repo_candidate = Path(__file__).resolve().parents[3] / candidate
+                        if repo_candidate.is_file():
+                            candidate = repo_candidate
+                    server_path = str(candidate)
                 is_python = server_path.endswith(".py")
-                command = server_config.python_executable if is_python else "node"
-                # -u for unbuffered output
-                args = ["-u", server_path] if is_python else [server_path]
+                is_node = Path(server_path).suffix.lower() in {".js", ".mjs", ".cjs"}
+                if is_python:
+                    command = server_config.python_executable
+                    args = ["-u", server_path]
+                elif is_node:
+                    command = "node"
+                    args = [server_path]
+                else:
+                    # A bare command may be an installed console script.
+                    command = server_path
+                    args = []
+                server_env = {**os.environ, **server_config.env}
                 mcp_tool = MCPStdioTool(
                     name=server_name,
                     command=command,
                     args=args,
+                    env=server_env,
                 )
             elif server_config.transport == "streamable-http":
                 if not server_config.url:
@@ -617,6 +641,8 @@ Manifest-based skills available via runtime tools:
 {skill_advertisement}
 """
 
+        image_routing_guidance = self._image_routing_guidance(participant_configs)
+
         # Always append up to date team description and guidelines so the planning
         # agent knows how to use the tools.
         instructions = f"""{base_instructions}
@@ -630,6 +656,7 @@ Remote A2A agents (available as tools):
 
 Guidelines:
 - Delegate to specialist agents when the request matches their expertise
+{image_routing_guidance}
 - Delegate to remote A2A agents when their descriptions match the request
 - Answer directly only for questions about the system itself
 - Avoid infinite loops between agents
@@ -775,6 +802,65 @@ Guidelines:
 
         return "\n".join(
             f"    {summary}" for summary in self.skill_registry.skill_summaries()
+        )
+
+    def _image_attachment_agent_names(
+        self, agent_configs: List[AgentConfig]
+    ) -> List[str]:
+        """Return specialists configured with the local-image MCP server."""
+        configured_servers = getattr(self, "mcp_servers", {}) or {}
+        connected_servers = getattr(self, "_mcp_tools_by_server", {}) or {}
+        owners = []
+        for agent_config in agent_configs:
+            image_server = False
+            for server_name in agent_config.mcp_servers or []:
+                server_config = configured_servers.get(server_name)
+                server_text = " ".join(
+                    str(value or "")
+                    for value in (
+                        server_name,
+                        getattr(server_config, "description", ""),
+                        getattr(server_config, "command", ""),
+                    )
+                ).lower()
+                normalized_server_text = server_text.replace("-", "_").replace(" ", "_")
+                connected_tool = connected_servers.get(server_name)
+                tool_names = {
+                    str(getattr(function, "name", "")).lower()
+                    for function in getattr(connected_tool, "_functions", [])
+                }
+                if (
+                    "read_image" in tool_names
+                    or server_name.lower() == "image_files"
+                    or "read_image" in normalized_server_text
+                    or "local_image" in normalized_server_text
+                    or "image_file" in normalized_server_text
+                ):
+                    image_server = True
+                    break
+
+            instruction_text = str(agent_config.instructions or "").lower()
+            if image_server or "read_image" in instruction_text:
+                owners.append(agent_config.agent_name)
+
+        return list(dict.fromkeys(owners))
+
+    def _image_routing_guidance(self, agent_configs: List[AgentConfig]) -> str:
+        """Build image-routing guidance for the configured specialist team."""
+        owners = self._image_attachment_agent_names(agent_configs)
+        if not owners:
+            return (
+                "- If a specialist's configured tools expose read_image, delegate "
+                "local-image requests to that specialist and return the result "
+                "as an attachment."
+            )
+
+        destination = owners[0] if len(owners) == 1 else "one of: " + ", ".join(owners)
+        return (
+            "- For requests to load, display, or return a local image, delegate "
+            f"the complete request to {destination}, which owns the configured "
+            "read_image MCP tool. Return its image result as an attachment.\n"
+            "  Do not paste base64 or a data URI into the response."
         )
 
     def _generate_remote_a2a_description(self) -> str:
@@ -1447,6 +1533,16 @@ Guidelines:
                     image_attachments.append(attachment)
                 continue
 
+            if type(response_chunk) is str:
+                text_attachments = extract_image_attachments(response_chunk)
+                for text_attachment in text_attachments:
+                    if text_attachment.digest not in image_digests:
+                        image_digests.add(text_attachment.digest)
+                        image_attachments.append(text_attachment)
+                response_chunk = strip_image_payload_text(response_chunk)
+                if not response_chunk:
+                    continue
+
             internal_tool_call_name = tool_call_name(response_chunk)
             if (
                 first_tool_call
@@ -1475,6 +1571,8 @@ Guidelines:
                 first_tool_call.set()
         response_text = "".join(response_chunks)
         if image_attachments:
+            if not response_text.strip():
+                response_text = self._image_attachment_transcript(image_attachments)
             return RichResponse(response_text, image_attachments)
         return response_text
 

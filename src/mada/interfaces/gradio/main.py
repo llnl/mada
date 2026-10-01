@@ -150,7 +150,13 @@ def create_gradio_app(config_path: str) -> gr.Blocks:
     gradio_interface = MADAMultiAgentGradioInterface(
         config.interface, config.agents, client
     )
-    return gradio_interface.create_interface()
+    interface = gradio_interface.create_interface()
+    # Keep the TemporaryDirectory alive with the app and expose the exact
+    # directory used by the client when it writes persisted image attachments.
+    # Embedded callers can pass this to Blocks.launch(allowed_paths=...).
+    interface.mada_attachment_cache = client._attachment_cache
+    interface.mada_allowed_paths = [client._attachment_cache.name]
+    return interface
 
 
 def gradio_entrypoint(port: int | None, share: bool, config_file: str):

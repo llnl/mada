@@ -8,7 +8,9 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -23,6 +25,13 @@ SUPPORTED_IMAGE_MEDIA_TYPES = {
     "image/png": ".png",
     "image/webp": ".webp",
 }
+_IMAGE_DATA_URI_RE = re.compile(
+    r"data:(image/(?:gif|jpeg|png|webp));base64,([^\s)]+)", re.IGNORECASE
+)
+_IMAGE_MARKDOWN_RE = re.compile(
+    r"!\[[^\]]*\]\(\s*(data:image/(?:gif|jpeg|png|webp);base64,[^)]*)\s*\)",
+    re.IGNORECASE,
+)
 
 
 def _matches_image_signature(data: bytes, media_type: str) -> bool:
@@ -73,6 +82,11 @@ class ImageAttachment:
 
         digest = hashlib.sha256(data).hexdigest()
         safe_filename = Path(filename).name if filename else None
+        if safe_filename:
+            safe_filename = "".join(
+                "_" if character in "[]" or not character.isprintable() else character
+                for character in safe_filename
+            ).strip()
         return cls(
             data=bytes(data),
             media_type=normalized_type,
@@ -125,6 +139,29 @@ def _decode_image_data(data: Any, media_type: Any) -> ImageAttachment | None:
         return None
 
 
+def _json_candidates(value: str) -> list[str]:
+    """Return possible JSON objects embedded in assistant text."""
+    candidates = [value.strip()]
+    start = value.find("{")
+    end = value.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(value[start : end + 1])
+    return candidates
+
+
+def _is_serialized_image_payload(value: Any) -> bool:
+    """Return whether a decoded JSON value describes an image payload."""
+    if not isinstance(value, dict):
+        return False
+    item_type = str(value.get("type") or "").lower()
+    media_type = value.get("media_type") or value.get("mimeType")
+    return item_type == "image" or (
+        item_type in {"data", "uri"}
+        and isinstance(media_type, str)
+        and media_type.lower().startswith("image/")
+    )
+
+
 def extract_image_attachments(value: Any) -> list[ImageAttachment]:
     """Extract image attachments from nested MCP/Agent Framework content.
 
@@ -144,7 +181,22 @@ def extract_image_attachments(value: Any) -> list[ImageAttachment]:
         found.append(attachment)
 
     def visit(item: Any) -> None:
-        if item is None or isinstance(item, (str, int, float, bool, bytes)):
+        if item is None or isinstance(item, (int, float, bool, bytes)):
+            return
+
+        if isinstance(item, str):
+            for match in _IMAGE_MARKDOWN_RE.finditer(item):
+                media_type, encoded = match.group(1).split(";", 1)
+                add(_decode_image_data(f"data:{media_type};{encoded}", media_type))
+            for match in _IMAGE_DATA_URI_RE.finditer(item):
+                add(_decode_image_data(match.group(2), match.group(1)))
+            for candidate in _json_candidates(item):
+                try:
+                    parsed = json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+                if parsed != item:
+                    visit(parsed)
             return
 
         item_id = id(item)
@@ -216,3 +268,22 @@ def extract_image_attachments(value: Any) -> list[ImageAttachment]:
 
     visit(value)
     return found
+
+
+def strip_image_payload_text(value: str) -> str:
+    """Remove serialized image payloads from assistant-visible text."""
+    cleaned = _IMAGE_MARKDOWN_RE.sub("", value)
+    cleaned = _IMAGE_DATA_URI_RE.sub("", cleaned)
+    cleaned = re.sub(r"!\[[^\]]*\]\(\s*\)", "", cleaned)
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        candidate = cleaned[start : end + 1]
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            parsed = None
+        if _is_serialized_image_payload(parsed) or extract_image_attachments(candidate):
+            cleaned = cleaned[:start] + cleaned[end + 1 :]
+    return cleaned.strip()

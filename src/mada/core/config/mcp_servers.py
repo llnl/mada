@@ -45,6 +45,7 @@ class MCPServerConfig:
     python_executable: str = sys.executable
     verify: bool | str = True
     headers: dict[str, str] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         """Expand environment variables in string-based verification settings."""
@@ -54,4 +55,9 @@ class MCPServerConfig:
             raise ValueError("'mcp_servers.<name>.headers' must be an object")
         self.headers = {
             str(key): expand_env_vars(str(value)) for key, value in self.headers.items()
+        }
+        if not isinstance(self.env, dict):
+            raise ValueError("'mcp_servers.<name>.env' must be an object")
+        self.env = {
+            str(key): expand_env_vars(str(value)) for key, value in self.env.items()
         }

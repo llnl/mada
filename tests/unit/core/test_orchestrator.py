@@ -20,6 +20,29 @@ from mada.core.orchestrator import MADAOrchestrator
 PNG_DATA = b"\x89PNG\r\n\x1a\n" + b"test-image-data"
 
 
+def test_image_routing_uses_configured_specialist_name():
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    orchestrator.mcp_servers = {
+        "local_files": MCPServerConfig(
+            transport="stdio",
+            command="mada-read-image-mcp",
+            description="Reads local images",
+        )
+    }
+    orchestrator._mcp_tools_by_server = {}
+
+    renderer = AgentConfig(
+        agent_name="Renderer",
+        description="Displays local images",
+        mcp_servers=["local_files"],
+    )
+
+    guidance = orchestrator._image_routing_guidance([renderer])
+
+    assert "Renderer" in guidance
+    assert "SimulationAgent" not in guidance
+
+
 @pytest.mark.asyncio
 async def test_create_chat_agent_passes_agent_extra_to_as_agent(monkeypatch):
     captured = {}

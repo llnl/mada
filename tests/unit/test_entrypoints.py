@@ -609,6 +609,12 @@ class TestMADAGradioCmd:
                 mock_iface_cls.assert_called_once()
                 mock_iface_instance.create_interface.assert_called_once()
                 assert result is dummy_blocks
+                assert result.mada_allowed_paths == [
+                    mock_client_cls.return_value._attachment_cache.name
+                ]
+                assert result.mada_attachment_cache is (
+                    mock_client_cls.return_value._attachment_cache
+                )
 
 
 @pytest.mark.unit
