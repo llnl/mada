@@ -105,6 +105,14 @@ class ChatSessionManager:
         """
         return str(uuid.uuid4())
 
+    def ensure_current_session_id(self) -> str:
+        """
+        Return the current writable session ID, generating one if needed.
+        """
+        if not self.current_session_id:
+            self.current_session_id = self.create_session_id()
+        return self.current_session_id
+
     def create_new_session(self, session_id: str = None):
         """
         Save an empty session to the database.
@@ -113,7 +121,7 @@ class ChatSessionManager:
             session_id (str): Specific session ID to assign to the new session.
         """
         if not session_id:
-            session_id = self.current_session_id
+            session_id = self.ensure_current_session_id()
         self.chat_db.create_session(session_id)
 
     @staticmethod
@@ -261,7 +269,7 @@ class ChatSessionManager:
             role (str): The role (user or assistant) to designate who wrote the message
             message (str): The message contents
         """
-        self.chat_db.add_message(self.current_session_id, role, message)
+        self.chat_db.add_message(self.ensure_current_session_id(), role, message)
 
     def list_sessions(self) -> List[Tuple[str, datetime]]:
         """

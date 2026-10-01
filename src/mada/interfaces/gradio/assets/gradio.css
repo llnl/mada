@@ -19,6 +19,58 @@ body.mada-resize-dragging {
   padding-bottom: 10px;
 }
 
+#mada-layout-shell {
+  align-items: flex-start;
+  gap: 20px;
+}
+
+#mada-left-sidebar,
+#mada-right-sidebar {
+  align-self: stretch;
+}
+
+#mada-center-pane {
+  min-width: 0;
+}
+
+#mada-session-list-panel {
+  overflow: visible;
+}
+
+#mada-session-list .wrap {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 6px;
+}
+
+#mada-context-panel {
+  border: 1px solid var(--border-color-primary, rgba(128, 128, 128, 0.3));
+}
+
+#mada-context-sessions {
+  position: relative;
+  z-index: 2;
+}
+
+#mada-context-status {
+  margin-top: 8px;
+}
+
+#mada-task-status-accordion {
+  margin-top: 12px;
+}
+
+@media (max-width: 900px) {
+  #mada-layout-shell {
+    gap: 12px;
+  }
+
+  #mada-session-list .wrap {
+    max-height: 220px;
+  }
+}
+
 #green_btn {
     background: green !important;
     color: white !important;

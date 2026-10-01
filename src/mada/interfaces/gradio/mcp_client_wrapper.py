@@ -191,6 +191,44 @@ class MCPGradioClientSession:
             for sid, ts in sessions
         ]
 
+    def _current_session_label(self) -> str | None:
+        """
+        Return the current primary session label if it exists in the session list.
+        """
+        current_session_id = self.session_manager.current_session_id
+        if not current_session_id:
+            return None
+
+        session_labels_by_id = {
+            self._extract_id_from_label(label): label for label in self.list_sessions()
+        }
+        return session_labels_by_id.get(current_session_id)
+
+    def ensure_active_session_visible(self) -> None:
+        """
+        Ensure the current primary session exists in storage.
+        """
+        current_session_id = self.session_manager.ensure_current_session_id()
+        known_session_ids = {
+            self._extract_id_from_label(label) for label in self.list_sessions()
+        }
+        if current_session_id and current_session_id not in known_session_ids:
+            self.session_manager.create_new_session(current_session_id)
+
+    @staticmethod
+    def _history_for_display(history: List[Dict[str, Any]] | None) -> List[Dict[str, str]]:
+        """
+        Convert persisted chat history into the shape expected by Gradio chat UI.
+        """
+        return [
+            {
+                "role": str(message.get("role") or "assistant"),
+                "content": str(message.get("content") or ""),
+            }
+            for message in history or []
+            if str(message.get("content") or "").strip()
+        ]
+
     def get_session_choices(self) -> List[str]:
         """
         List all chat sessions.
@@ -209,7 +247,9 @@ class MCPGradioClientSession:
         Returns:
             A gradio update object with new chat session choices.
         """
-        return gr.update(choices=self.list_sessions(), value=None)
+        return gr.update(
+            choices=self.list_sessions(), value=self._current_session_label()
+        )
 
     def get_context_session_choices(self, primary_session_label: str = None) -> List[str]:
         """
@@ -298,7 +338,7 @@ class MCPGradioClientSession:
         self,
         session_labels: List[str] | None,
         primary_session_label: str = None,
-    ) -> Tuple[gr.update, str]:
+    ) -> str:
         """
         Track additional read-only sessions to load into model context.
 
@@ -308,14 +348,11 @@ class MCPGradioClientSession:
                 writable chat out of the extra context selection.
 
         Returns:
-            Updated context-session choices and refreshed status markdown.
+            Refreshed status markdown for the current context-session selection.
         """
         session_ids = [self._extract_id_from_label(label) for label in session_labels or []]
         self.session_manager.set_context_sessions(session_ids)
-        return (
-            self.update_context_session_choices(primary_session_label),
-            self.get_context_status_markdown(),
-        )
+        return self.get_context_status_markdown()
 
     def create_new_session(self) -> Tuple[gr.update, gr.update, str, List]:
         """
@@ -332,8 +369,9 @@ class MCPGradioClientSession:
         self.session_manager.select_session(new_id)
         self.session_manager.set_context_sessions([])
         updated_sessions = self.list_sessions()
+        selected_label = self._current_session_label()
         return (
-            gr.update(choices=updated_sessions, value=None),
+            gr.update(choices=updated_sessions, value=selected_label),
             self.update_context_session_choices(),
             self.get_context_status_markdown(),
             [],
@@ -377,7 +415,7 @@ class MCPGradioClientSession:
         history = self.session_manager.select_session(session_id)
 
         return (
-            history,
+            self._history_for_display(history),
             self.update_context_session_choices(session_label),
             self.get_context_status_markdown(),
         )
@@ -400,7 +438,7 @@ class MCPGradioClientSession:
             # Return current state unchanged
             updated_sessions = self.list_sessions()
             return (
-                gr.update(choices=updated_sessions, value=None),
+                gr.update(choices=updated_sessions, value=self._current_session_label()),
                 self.update_context_session_choices(),
                 self.get_context_status_markdown(),
                 [],
@@ -419,7 +457,7 @@ class MCPGradioClientSession:
         )
         updated_sessions = self.list_sessions()
         return (
-            gr.update(choices=updated_sessions, value=None),
+            gr.update(choices=updated_sessions, value=self._current_session_label()),
             self.update_context_session_choices(),
             self.get_context_status_markdown(),
             [],
@@ -449,7 +487,7 @@ class MCPGradioClientSession:
             # Return current state unchanged if deletion fails
             current_sessions = self.list_sessions()
             return (
-                gr.update(choices=current_sessions),
+                gr.update(choices=current_sessions, value=self._current_session_label()),
                 self.update_context_session_choices(),
                 self.get_context_status_markdown(),
                 [],
@@ -523,7 +561,9 @@ class MCPGradioClientSession:
 
         return "\n".join(lines)
 
-    async def refresh_chat_and_task_status(self, history: List[Any]) -> Tuple[Any, str]:
+    async def refresh_chat_and_task_status(
+        self, history: List[Any], session_label: str | None
+    ) -> Tuple[Any, str, gr.update]:
         """
         Refresh chat history and background task status for the Gradio UI.
 
@@ -531,24 +571,28 @@ class MCPGradioClientSession:
             history: Current Gradio chat history.
 
         Returns:
-            Tuple containing the refreshed chat history or `gr.skip()`, and the
-            task status markdown.
+            Tuple containing the refreshed chat history or `gr.skip()`, the task
+            status markdown, and a session-list update.
 
         Raises:
             Exception: Propagates unexpected chat-history load failures.
         """
         task_status = await self.get_task_status_markdown()
+        session_list_update = gr.skip()
         if (
             not self.orchestrator
             or await self.orchestrator.background_tasks.count_pending_tasks() > 0
         ):
-            return gr.skip(), task_status
+            return gr.skip(), task_status, session_list_update
 
-        persisted_history = self.session_manager.load_history()
+        persisted_history = self._history_for_display(self.session_manager.load_history())
+        current_session_label = self._current_session_label()
+        if current_session_label != session_label:
+            session_list_update = self.update_session_choices()
         if persisted_history == list(history):
-            return gr.skip(), task_status
+            return gr.skip(), task_status, session_list_update
 
-        return persisted_history, task_status
+        return persisted_history, task_status, session_list_update
 
     async def cleanup(self) -> None:
         """
