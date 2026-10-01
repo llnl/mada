@@ -143,6 +143,18 @@ class TestSelectSession:
         assert history == [{"role": "user", "content": "hi"}]
         manager.chat_db.load_session.assert_called_once_with("session-2")
 
+    def test_select_session_removes_primary_from_context_sessions(self, mock_factory):
+        """Verify selecting a primary session prunes it from additional context."""
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
+        manager.set_context_sessions(["session-2", "current", "session-3"])
+
+        manager.select_session("session-2")
+
+        assert manager.current_session_id == "session-2"
+        assert manager.get_context_session_ids() == ["session-3"]
+
 
 class TestLoadHistory:
     """
@@ -167,6 +179,65 @@ class TestLoadHistory:
         manager.chat_db.load_session.return_value = expected
 
         assert manager.load_history() == expected
+
+    def test_load_history_accepts_explicit_session_id(self, mock_factory):
+        """Verify load_history can read a non-active session without switching state."""
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
+        expected = [{"role": "assistant", "content": "from other session"}]
+        manager.chat_db.load_session.return_value = expected
+
+        assert manager.load_history("other-session") == expected
+        assert manager.current_session_id == "current"
+        manager.chat_db.load_session.assert_called_once_with("other-session")
+
+
+class TestContextSessions:
+    """
+    Tests for the context-session helpers on `ChatSessionManager`.
+    """
+
+    def test_set_context_sessions_dedupes_and_skips_primary(self, mock_factory):
+        """Verify additional context sessions are normalized and exclude the primary."""
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="primary", type="sqlite")
+        )
+
+        selected = manager.set_context_sessions(["context-a", "primary", "context-a", ""])
+
+        assert selected == ["context-a"]
+        assert manager.get_context_session_ids() == ["context-a"]
+
+    def test_get_loaded_session_ids_returns_context_then_primary(self, mock_factory):
+        """Verify the full loaded-session list is deterministic."""
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="primary", type="sqlite")
+        )
+        manager.set_context_sessions(["context-a", "context-b"])
+
+        assert manager.get_loaded_session_ids() == [
+            "context-a",
+            "context-b",
+            "primary",
+        ]
+
+    def test_load_histories_reads_each_requested_session_once(self, mock_factory):
+        """Verify load_histories reads multiple sessions without mutating active state."""
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="primary", type="sqlite")
+        )
+        manager.chat_db.load_session.side_effect = lambda session_id: [
+            {"role": "assistant", "content": session_id}
+        ]
+
+        histories = manager.load_histories(["context-a", "context-a", "context-b"])
+
+        assert histories == {
+            "context-a": [{"role": "assistant", "content": "context-a"}],
+            "context-b": [{"role": "assistant", "content": "context-b"}],
+        }
+        assert manager.current_session_id == "primary"
 
 
 class TestAddMessage:

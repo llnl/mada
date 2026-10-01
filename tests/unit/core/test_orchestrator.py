@@ -1,6 +1,8 @@
 # Copyright 2026, Lawrence Livermore National Security, LLC and MADA contributors
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from types import SimpleNamespace
+
 import pytest
 
 from mada.core.config import (
@@ -217,3 +219,41 @@ async def test_collect_message_response_surfaces_internal_error(monkeypatch):
     response = await orchestrator.collect_message_response("hello")
 
     assert response == "Error processing message: boom"
+
+
+@pytest.mark.asyncio
+async def test_load_persisted_context_messages_merges_context_sessions_before_primary(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "mada.core.coordinator.chat_client_factory.create",
+        lambda _: object(),
+    )
+
+    session_manager = SimpleNamespace(
+        get_loaded_session_ids=lambda primary_session_id=None, context_session_ids=None: [
+            "context-a",
+            "context-b",
+            "primary",
+        ],
+        load_history=lambda session_id=None: [
+            {"role": "assistant", "content": f"from {session_id}"}
+        ],
+    )
+    orchestrator = MADAOrchestrator(
+        model_config=OpenAIModelConfig(
+            provider="openai",
+            model="gpt-4.1-mini",
+            api_key="sk-test",
+            base_url="https://example.invalid/v1",
+        ),
+        session_manager=session_manager,
+    )
+
+    messages = await orchestrator.load_persisted_context_messages()
+
+    assert messages == [
+        {"role": "assistant", "content": "from context-a"},
+        {"role": "assistant", "content": "from context-b"},
+        {"role": "assistant", "content": "from primary"},
+    ]
