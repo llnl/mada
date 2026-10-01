@@ -923,9 +923,13 @@ Guidelines:
         isolated_session: bool = False,
         persistence_session_id: str | None = None,
         stateless_session: bool = False,
+        context_session_ids: List[str] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message through a fresh Magentic workflow.
+
+        The workflow transcript is rebuilt from the primary persisted session
+        plus any additional read-only context sessions on every turn.
         """
         if not orchestrator.manager_agent:
             yield "Error: Orchestrator not initialized. Call initialize_orchestrator() first."
@@ -941,19 +945,19 @@ Guidelines:
             if isolated_session:
                 if stateless_session:
                     history = []
-                elif persistence_session_id is None:
-                    # Isolated without explicit session: load current history for context
-                    # (used by CLI/UI background follow-ups) but don't persist
-                    history = orchestrator.session_manager.load_history()
                 else:
-                    history = await orchestrator._load_history_for_session(
-                        persistence_session_id
+                    history = await orchestrator.load_persisted_context_messages(
+                        primary_session_id=persistence_session_id,
+                        context_session_ids=context_session_ids,
                     )
             else:
                 async with orchestrator._session_lock:
                     turn_id = orchestrator._next_turn_id
                     orchestrator._next_turn_id += 1
-                    history = orchestrator.session_manager.load_history()
+                    history = await orchestrator.load_persisted_context_messages(
+                        primary_session_id=persistence_session_id,
+                        context_session_ids=context_session_ids,
+                    )
 
             history = self._conversation_history_messages(history)
             transcript_messages = orchestrator._normalize_transcript_messages(

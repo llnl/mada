@@ -42,6 +42,18 @@ To resume a previous conversation, type `s` and press Enter. You will then be pr
 
 After you enter a number, the history for that session is loaded so you can pick up where you left off.
 
+After selecting the primary chat, MADA also lets you choose additional sessions to load into the model's context. These extra sessions are read-only context sources: new user and assistant turns are still written only to the selected primary chat.
+
+![CLI Load Session to Context](../../assets/images/cli-load-session-to-context.png)
+
+You can select one or more sessions to load into context using a comma-delimited list. For example, to select sessions 1, 2, and 5 you would enter "1,2,5".
+
 To delete a session, type `d` and press Enter at the initial session management prompt shown when you start MADA in CLI mode. As with selecting a session, you will then be prompted to enter a number from the list of existing sessions:
 
 ![CLI Session Deletion](../../assets/images/cli-session-deletion.png)
+
+While chatting, type `context` to reconfigure which additional sessions are loaded into model context for subsequent turns.
+
+![CLI Context Keyword](../../assets/images/cli-context-keyword.png)
+
+From here, select the chat histories you want to load into context using a comma-delimted list.

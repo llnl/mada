@@ -9,10 +9,13 @@
 - Test coverage for Magentic orchestration
 - OpenTelemetry-based observability
 - Ability to check version via `mada -v` or `mada --version`
+- Support for Hubcast & GitLab Tests
 
 ### Changed
 - OpenAI-compatible model configs and streamable MCP server configs now support a `verify` setting for TLS verification control.
 - MADA now depends on `httpx2` for its direct HTTP client usage, and A2A examples target `fastmcp>=4.0.0` for MCP 2 compatibility.
+- All tests now run on LLNL machines except tests running on Windows OS
+- CLI and Gradio interfaces now support loading additional chat sessions as read-only model context while keeping one primary writable chat session.
 
 ### Fixed
 - OpenAI-compatible HTTP clients and streamable MCP HTTP clients now honor configured `verify` values when resolving TLS verification.
@@ -21,6 +24,7 @@
 - Tool call detection in nested Agent Framework event structures (including typed records)
 - Incomplete streaming when final result differs from accumulated chunks
 - MCP server initialization now shims the legacy `InitializeResult.protocolVersion` attribute expected by current Agent Framework releases when running against MCP 2.x.
+- Gradio chat startup and session refresh handling now keep the primary chat list and visible transcript in sync when starting from a blank chat.
 
 ## 0.3.0 - 2026-09-09
 

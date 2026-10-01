@@ -1739,6 +1739,26 @@ class TestMADACLICmd:
                 assert "unsupported orchestration mode: magentic" in printed
 
     class TestMADACLIInterface:
+        def test_configure_context_sessions_keeps_current_selection_on_empty_input(
+            self, create_dummy_config: Callable
+        ):
+            """Pressing Enter leaves the current extra context-session selection unchanged."""
+            cli = MADACLIInterface(create_dummy_config())
+            cli.session_manager = MagicMock()
+            cli.session_manager.current_session_id = "primary"
+            cli.session_manager.get_context_session_ids.return_value = ["context-a"]
+            cli.list_sessions = MagicMock(
+                return_value=[
+                    "2026-01-01 00:00:00 | primary",
+                    "2026-01-01 00:01:00 | context-a",
+                ]
+            )
+
+            with patch("builtins.input", return_value=""):
+                cli.configure_context_sessions()
+
+            cli.session_manager.set_context_sessions.assert_not_called()
+
         @pytest.mark.asyncio
         async def test_cli_interface_run_quit_immediately(
             self, create_dummy_config: Callable
