@@ -22,6 +22,7 @@ dependencies = [
     "agent-framework-openai",
     "agent-framework-orchestrations",
     "fastapi",
+    "fastmcp>=4.0.0",
     "gradio>=6.2.0",
     "httpx2",
     "openai",
@@ -37,8 +38,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-license = "Apache-2.0 WITH LLVM-exception"
-license-files = ["LICENSE"]
+license = { text = "Apache-2.0 WITH LLVM-exception" }
 
 [project.urls]
 Homepage = "https://github.com/llnl/mada"
@@ -47,6 +47,10 @@ Issues = "https://github.com/llnl/mada/issues"
 "Release Notes" = "https://github.com/llnl/mada/releases"
 
 [project.optional-dependencies]
+image-tools = [
+    "fastmcp>=4.0.0",
+]
+
 # Testing requirements
 tests = [
     "pytest",
@@ -91,7 +95,7 @@ telemetry = [
 ]
 
 # All requirements
-all = ["mada[tests, docs, a2a-examples, telemetry]"]
+all = ["mada[tests, docs, a2a-examples, image-tools, telemetry]"]
 
 [project.scripts]
 mada = "mada.main:main"
@@ -99,9 +103,16 @@ mada-gradio = "mada.interfaces.gradio.main:main"
 mada-cli = "mada.interfaces.cli.main:main"
 mada-openai-api = "mada.interfaces.openai_api.main:main"
 mada-a2a = "mada.interfaces.a2a.main:main"
+mada-read-image-mcp = "mada.examples.read_image_mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 mada = ["interfaces/gradio/assets/*.css", "interfaces/gradio/assets/*.js"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
