@@ -55,7 +55,7 @@ src/
 
 ## Orchestration Modes
 
-`src/mada/core/orchestration/` contains the internal strategy boundary for MADA orchestration, while `src/mada/core/orchestrator.py` owns shared state, MCP connection primitives, agent creation helpers, and session persistence. The current implementation supports two modes:
+`src/mada/core/orchestration/` contains the internal strategy boundary for MADA orchestration, while `src/mada/core/orchestrator.py` owns shared state, MCP connection primitives, agent creation helpers, and session persistence. Interactive session state now distinguishes between one writable primary chat session and zero or more additional read-only context sessions that can be merged into the model transcript. The current implementation supports two modes:
 
 - `agent-as-tool`: builds a reusable planning-agent session and exposes specialist agents as tools
 - `magentic`: builds a fresh peer-agent workflow per request and uses `PlanningAgent` only as the hidden manager configuration source

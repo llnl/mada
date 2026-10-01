@@ -54,7 +54,7 @@ Copy the URL that's shown in the console output and paste it into a browser wind
 
 Once the window is loaded, open the connection accordion dropdown labeled "Connect to MCP Servers" if it's not already open. This will show every agent that you've provided in your configuration, a button saying "Connect to MCP Servers", and an empty "Connection Status" box.
 
-Click the "Connect to MCP Servers" button to start the MCP servers for your agents. Once this finishes, you'll see the "Connection Status" box be populated with information about your agents and the MCP tools that were found. Below is an example of this:
+Click the "Connect to MCP Servers" button to start the MCP servers for your agents. Once this finishes, the button will turn green and display the orchestration mode, as well as information about the MCP servers/agents in your configuration. Below is an example of this:
 
 ![Gradio Connection Status](../../assets/images/gradio-connection-status.png)
 
@@ -62,11 +62,23 @@ Now that your agents are connected, you're free to start entering prompts into t
 
 If your configuration uses `magentic` orchestration, the Gradio interface still shows the active specialist agents in the table. The hidden Magentic manager is not displayed as a participant, and only the final assistant answer is streamed back into the chat UI.
 
+### Background Task Running
+
+When you enter prompts, the agent(s) will run them as background processes so that you can have them do multiple tasks at once. The agent(s) will display a message showing that the process is running in the background so that you're aware it's being ran:
+
+![Gradio Background Tasks](../../assets/images/gradio-background-tasks.png)
+
+All background tasks can be tracked in the "Task Status" collapsible window on the right side of the screen, as shown above.
+
+When tasks finish running, the output from the agent will be displayed in the chat window:
+
+![Gradio Completed Background Tasks](../../assets/images/gradio-completed-tasks.png)
+
 ## Managing Chat Histories
 
 When you chat with agents, the history for that chat session is stored in a configurable database (see [Database Configuration](../configuration.md#optional-database-configuration)).
 
-To create a new chat, either start typing in the empty chat window on the right when the Gradio app first starts, or click the "New chat" button at the top left of the screen:
+To create a new chat, either start typing in the empty chat window in the middle when the Gradio app first starts, or click the "New chat" button at the top left of the screen:
 
 ![Gradio New Chat](../../assets/images/gradio-new-chat.png)
 
@@ -76,9 +88,19 @@ Existing chat histories are loaded and displayed as a list on the left side of t
 
 To resume a previous conversation, select a chat from this list; its history will be loaded so you can pick up where you left off.
 
+You can also select one or more additional sessions in the "Load Into Context" panel. Those sessions are attached as read-only model context for future turns, while the selected chat remains the only session that receives newly persisted messages. Below is an example:
+
+![Gradio Load Chats Into Context](../../assets/images/gradio-load-into-context.png)
+
+In this example, the older chat session "2026-10-01 11:23:53" is loaded into the model's context for the current primary chat "2026-10-01 11:24:11".
+
 To delete a chat session, first select it from the list on the left, then click the "Delete selected chat" button:
 
 ![Gradio Delete Chat](../../assets/images/gradio-delete-chat.png)
+
+Additionally, you can delete all existing chat sessions with the "Delete ALL chats" button. When you press this button, a confirmation prompt will be displayed:
+
+![Gradio Delete All Chats](../../assets/images/gradio-delete-all-chats.png)
 
 ## Customizing the Interface
 
