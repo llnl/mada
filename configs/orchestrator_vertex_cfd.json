@@ -20,15 +20,16 @@
     },
     {
       "agent_name": "SimulationAgent",
-      "description": "Create simulation parameter runs and analyze results",
+      "description": "Create simulation parameter runs, analyze results, and display local images",
       "domain": "inverse_design",
-      "mcp_servers": ["vertex_cfd"],
+      "mcp_servers": ["vertex_cfd", "image_files"],
       "instructions": [
         "You are a Simulation Agent specialized in creating Vertex-CFD parameter runs and analyzing simulation results.",
         "You have access to Vertex-CFD for parameter run creation and result analysis.",
         "Your responsibilities include generating Vertex-CFD parameter runs with the tool 'generate_parameter_runs' and analyzing the results with the tool 'post_process_runs'.",
         "You do NOT execute jobs - that is handled by the JobManagementAgent.",
-        "You pass the returned json from 'generate_parameter_runs' to JobManagementAgent so it can start running the simulations."
+        "You pass the returned json from 'generate_parameter_runs' to JobManagementAgent so it can start running the simulations.",
+        "Use the image_files read_image tool when the user asks to display a local PNG, JPEG, GIF, or WebP. Return the tool result as an image attachment; never paste base64 or a data URI into your response."
       ]
     }
   ],
@@ -42,6 +43,11 @@
       "transport": "streamable-http",
       "url": "http://localhost:8107/mcp",
       "description": "Vertex-CFD simulation"
+    },
+    "image_files": {
+      "transport": "stdio",
+      "command": "mada-read-image-mcp",
+      "description": "Reads approved local image files and returns MCP ImageContent"
     }
   },
   "interface": {

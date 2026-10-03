@@ -533,6 +533,7 @@ class TestMADAGradioCmd:
                     debug=True,
                     css=ANY,
                     js=ANY,
+                    allowed_paths=[mock_client_cls.return_value._attachment_cache.name],
                 )
 
         def test_run_gradio_launches_interface_with_configured_port_and_share(
@@ -547,7 +548,9 @@ class TestMADAGradioCmd:
 
             mock_blocks = MagicMock()
             with (
-                patch("mada.interfaces.gradio.main.MCPGradioClientSession"),
+                patch(
+                    "mada.interfaces.gradio.main.MCPGradioClientSession"
+                ) as mock_client_cls,
                 patch(
                     "mada.interfaces.gradio.main.MADAMultiAgentGradioInterface"
                 ) as mock_iface_cls,
@@ -570,6 +573,7 @@ class TestMADAGradioCmd:
                     debug=True,
                     css=ANY,
                     js=ANY,
+                    allowed_paths=[mock_client_cls.return_value._attachment_cache.name],
                 )
 
     class TestCreateGradioApp:
@@ -605,6 +609,12 @@ class TestMADAGradioCmd:
                 mock_iface_cls.assert_called_once()
                 mock_iface_instance.create_interface.assert_called_once()
                 assert result is dummy_blocks
+                assert result.mada_allowed_paths == [
+                    mock_client_cls.return_value._attachment_cache.name
+                ]
+                assert result.mada_attachment_cache is (
+                    mock_client_cls.return_value._attachment_cache
+                )
 
 
 @pytest.mark.unit

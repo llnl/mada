@@ -9,10 +9,12 @@ for the Gradio interface, adapted to work with MADA's architecture.
 """
 
 import logging
+import tempfile
 import traceback
 from typing import Any, AsyncGenerator, Dict, List, Tuple
 
 import gradio as gr
+from gradio import processing_utils
 
 from mada.core.config import (
     AgentConfig,
@@ -24,6 +26,7 @@ from mada.core.config import (
 )
 from mada.core.background_tasks import is_background_task_start_ack
 from mada.core.database import ChatSessionManager
+from mada.core.media import ImageAttachment, RichResponse
 from mada.core.orchestrator import MADAOrchestrator
 from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
 from mada.core.skills.skill_registry import SkillRegistry
@@ -82,6 +85,90 @@ class MCPGradioClientSession:
         self.session_bearer_token = None  # Store session bearer token
         self.skill_registry = skill_registry or SkillRegistry()
         self.skill_tools = list(skill_tools or [])
+        self._attachment_cache = tempfile.TemporaryDirectory(
+            prefix="mada-gradio-images-"
+        )
+
+    def _attachment_file_message(self, attachment: ImageAttachment) -> Dict[str, Any]:
+        """Save an attachment in Gradio's cache and return chat file content."""
+        path = processing_utils.save_bytes_to_cache(
+            attachment.data,
+            attachment.filename,
+            self._attachment_cache.name,
+        )
+        return {
+            "type": "file",
+            "alt_text": attachment.filename,
+            "file": {
+                "path": path,
+                "orig_name": attachment.filename,
+                "mime_type": attachment.media_type,
+            },
+        }
+
+    @staticmethod
+    def _coerce_attachment(value: Any) -> ImageAttachment:
+        """Normalize attachments loaded from database implementations."""
+        if isinstance(value, ImageAttachment):
+            return value
+        return ImageAttachment.from_data(
+            bytes(value["data"]),
+            str(value["media_type"]),
+            filename=str(value["filename"]),
+        )
+
+    def _format_message_content(
+        self, text: str, attachments: List[Any]
+    ) -> str | List[Any]:
+        """Build native mixed text/file content for a Gradio Chatbot message."""
+        if not attachments:
+            return text
+
+        content: List[Any] = []
+        if text:
+            content.append(text)
+        content.extend(
+            self._attachment_file_message(self._coerce_attachment(attachment))
+            for attachment in attachments
+        )
+        return content
+
+    @staticmethod
+    def _is_image_attachment_placeholder(text: str) -> bool:
+        """Return whether text consists only of internal image markers."""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return bool(lines) and all(
+            line.startswith("[Image attachment: ") and line.endswith("]")
+            for line in lines
+        )
+
+    def _format_history_for_gradio(
+        self, history: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Convert persisted image bytes into Gradio chat file messages."""
+        formatted = []
+        for message in history:
+            attachments = list(message.get("attachments") or [])
+            if not attachments:
+                content = str(message.get("content") or "")
+                if content.strip():
+                    formatted.append(
+                        {
+                            "role": str(message.get("role") or "assistant"),
+                            "content": content,
+                        }
+                    )
+                continue
+            text = str(message.get("content", ""))
+            if self._is_image_attachment_placeholder(text):
+                text = ""
+            formatted.append(
+                {
+                    "role": str(message.get("role") or "assistant"),
+                    "content": self._format_message_content(text, attachments),
+                }
+            )
+        return formatted
 
     async def connect_servers(
         self, agent_table: gr.Dataframe, request: gr.Request
@@ -394,7 +481,7 @@ class MCPGradioClientSession:
 
         return session_id
 
-    def select_session(self, session_label: str) -> Tuple[List[Dict[str, str]], gr.update, str]:
+    def select_session(self, session_label: str) -> Tuple[List[Dict[str, Any]], gr.update, str]:
         """
         Given a label like 'timestamp | session_id', select that session as the
         primary chat and return its history.
@@ -415,7 +502,7 @@ class MCPGradioClientSession:
         history = self.session_manager.select_session(session_id)
 
         return (
-            self._history_for_display(history),
+            self._format_history_for_gradio(history),
             self.update_context_session_choices(session_label),
             self.get_context_status_markdown(),
         )
@@ -528,7 +615,13 @@ class MCPGradioClientSession:
             if is_background_task_start_ack(response):
                 self.session_manager.add_message("user", message)
                 self.session_manager.add_message("assistant", response)
-            yield response
+            if isinstance(response, RichResponse) and response.images:
+                text = str(response)
+                if self._is_image_attachment_placeholder(text):
+                    text = ""
+                yield self._format_message_content(text, list(response.images))
+            else:
+                yield response
 
         except Exception as e:
             error_msg = f"Error processing message: {e}"
@@ -585,7 +678,9 @@ class MCPGradioClientSession:
         ):
             return gr.skip(), task_status, session_list_update
 
-        persisted_history = self._history_for_display(self.session_manager.load_history())
+        persisted_history = self._format_history_for_gradio(
+            self.session_manager.load_history()
+        )
         current_session_label = self._current_session_label()
         if current_session_label != session_label:
             session_list_update = self.update_session_choices()
@@ -610,4 +705,5 @@ class MCPGradioClientSession:
                 )
             except Exception as e:
                 LOG.error(f"Error during cleanup: {e}")
+        self._attachment_cache.cleanup()
         self.initialized = False

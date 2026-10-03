@@ -15,10 +15,11 @@ work with chat sessions using a simple API
 
 import uuid
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 from mada.core.database import BaseChatDatabase, ChatDatabaseFactory
 from mada.core.config import DatabaseConfig, SQLiteConfig
+from mada.core.media import ImageAttachment
 
 
 class ChatSessionManager:
@@ -261,15 +262,30 @@ class ChatSessionManager:
             for session_id in self._dedupe_session_ids(session_ids)
         }
 
-    def add_message(self, role: str, message: str):
+    def add_message(
+        self,
+        role: str,
+        message: str,
+        attachments: Sequence[ImageAttachment] | None = None,
+    ):
         """
         Add a message to the database.
 
         Args:
             role (str): The role (user or assistant) to designate who wrote the message
             message (str): The message contents
+            attachments: Optional images associated with the message.
         """
-        self.chat_db.add_message(self.ensure_current_session_id(), role, message)
+        session_id = self.ensure_current_session_id()
+        if attachments:
+            self.chat_db.add_message(
+                session_id,
+                role,
+                message,
+                attachments=attachments,
+            )
+        else:
+            self.chat_db.add_message(session_id, role, message)
 
     def list_sessions(self) -> List[Tuple[str, datetime]]:
         """

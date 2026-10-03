@@ -8,9 +8,10 @@ SQLite database implementation for chat history management.
 import logging
 import sqlite3
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Sequence, Tuple
 
 from mada.core.database.base_db import BaseChatDatabase
+from mada.core.media import ImageAttachment
 
 LOG = logging.getLogger(__name__)
 
@@ -67,9 +68,26 @@ class SQLiteChatDatabase(BaseChatDatabase):
                     FOREIGN KEY(session_id) REFERENCES sessions(session_id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS message_attachments (
+                    attachment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL,
+                    position INTEGER NOT NULL,
+                    filename TEXT NOT NULL,
+                    media_type TEXT NOT NULL,
+                    data BLOB NOT NULL,
+                    FOREIGN KEY(message_id) REFERENCES messages(message_id)
+                        ON DELETE CASCADE
+                )
+            """)
 
     def add_message(
-        self, session_id: str, role: str, content: str, timestamp: datetime = None
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        timestamp: datetime = None,
+        attachments: Sequence[ImageAttachment] | None = None,
     ):
         """
         Add a single message to the messages table in the database.
@@ -79,6 +97,7 @@ class SQLiteChatDatabase(BaseChatDatabase):
             role (str): The role (user or assistant) to designate who wrote the message
             content (str): The message contents
             timestamp (datetime): The time that the message was created
+            attachments: Optional images associated with the message.
         """
         if timestamp is None:
             timestamp = datetime.now()
@@ -92,13 +111,29 @@ class SQLiteChatDatabase(BaseChatDatabase):
                 (session_id, timestamp),
             )
             # Insert the message
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO messages (session_id, role, content, timestamp)
                 VALUES (?, ?, ?, ?)
             """,
                 (session_id, role, content, timestamp),
             )
+            message_id = cursor.lastrowid
+            for position, attachment in enumerate(attachments or []):
+                conn.execute(
+                    """
+                    INSERT INTO message_attachments
+                        (message_id, position, filename, media_type, data)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        message_id,
+                        position,
+                        attachment.filename,
+                        attachment.media_type,
+                        attachment.data,
+                    ),
+                )
             # Update last_updated in sessions
             conn.execute(
                 """
@@ -137,16 +172,45 @@ class SQLiteChatDatabase(BaseChatDatabase):
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                SELECT role, content, timestamp FROM messages
+                SELECT message_id, role, content, timestamp FROM messages
                 WHERE session_id = ?
                 ORDER BY message_id ASC
             """,
                 (session_id,),
             )
-            return [
-                {"role": row[0], "content": row[1], "timestamp": row[2]}
-                for row in cursor.fetchall()
-            ]
+            messages = []
+            messages_by_id = {}
+            for message_id, role, content, timestamp in cursor.fetchall():
+                message = {
+                    "role": role,
+                    "content": content,
+                    "timestamp": timestamp,
+                }
+                messages.append(message)
+                messages_by_id[message_id] = message
+
+            if not messages_by_id:
+                return messages
+
+            attachment_rows = conn.execute(
+                """
+                SELECT a.message_id, a.filename, a.media_type, a.data
+                FROM message_attachments AS a
+                JOIN messages AS m ON m.message_id = a.message_id
+                WHERE m.session_id = ?
+                ORDER BY a.message_id ASC, a.position ASC
+                """,
+                (session_id,),
+            ).fetchall()
+            for message_id, filename, media_type, data in attachment_rows:
+                message = messages_by_id.get(message_id)
+                if message is not None:
+                    message.setdefault("attachments", []).append(
+                        ImageAttachment.from_data(
+                            bytes(data), media_type, filename=filename
+                        )
+                    )
+            return messages
 
     def list_sessions(self) -> List[Tuple[str, datetime]]:
         """
@@ -172,6 +236,15 @@ class SQLiteChatDatabase(BaseChatDatabase):
             session_id (str): The ID of the session to delete.
         """
         with self._connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM message_attachments
+                WHERE message_id IN (
+                    SELECT message_id FROM messages WHERE session_id = ?
+                )
+                """,
+                (session_id,),
+            )
             conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
 
@@ -190,6 +263,7 @@ class SQLiteChatDatabase(BaseChatDatabase):
         def _flush_db():
             LOG.info("Flushing the database...")
             with self._connect() as conn:
+                conn.execute("DELETE FROM message_attachments")
                 conn.execute("DELETE FROM messages")
                 conn.execute("DELETE FROM sessions")
             LOG.info("Database successfully flushed.")
