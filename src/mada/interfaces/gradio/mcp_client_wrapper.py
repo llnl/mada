@@ -165,6 +165,15 @@ class MCPGradioClientSession:
 
         return formatted
 
+    @staticmethod
+    def _history_is_prefix(
+        persisted_history: List[Dict[str, Any]], current_history: List[Any]
+    ) -> bool:
+        """Return whether persisted history lags behind optimistic Gradio state."""
+        if len(persisted_history) > len(current_history):
+            return False
+        return list(current_history[: len(persisted_history)]) == persisted_history
+
     async def connect_servers(
         self, agent_table: gr.Dataframe, request: gr.Request
     ) -> Tuple[str, str]:
@@ -662,10 +671,16 @@ class MCPGradioClientSession:
         persisted_history = self._format_history_for_gradio(
             self.session_manager.load_history()
         )
+        current_history = list(history or [])
         current_session_label = self._current_session_label()
         if current_session_label != session_label:
             session_list_update = self.update_session_choices()
-        if persisted_history == list(history):
+
+        # Keep optimistic UI messages visible while persistence catches up.
+        if self._history_is_prefix(persisted_history, current_history):
+            return gr.skip(), task_status, session_list_update
+
+        if persisted_history == current_history:
             return gr.skip(), task_status, session_list_update
 
         return persisted_history, task_status, session_list_update

@@ -1,7 +1,12 @@
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
-from mada.core.media import ImageAttachment
+import gradio as gr
+import pytest
+
 from mada.core.config import MCPServerConfig, OpenAIModelConfig, OrchestrationConfig, SQLiteConfig
+from mada.core.media import ImageAttachment
 from mada.interfaces.gradio.mcp_client_wrapper import MCPGradioClientSession
 
 
@@ -23,6 +28,18 @@ def _create_client(tmp_path: Path) -> MCPGradioClientSession:
 
 
 class TestMCPGradioClientSession:
+    def test_history_is_prefix_detects_optimistic_chat_state(self):
+        """Timer refresh should not overwrite newer local chat state with stale DB rows."""
+        persisted_history = [{"role": "user", "content": "hello"}]
+        current_history = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": ""},
+        ]
+
+        assert MCPGradioClientSession._history_is_prefix(
+            persisted_history, current_history
+        )
+
     def test_format_history_for_gradio_strips_non_chat_fields(self, tmp_path: Path):
         """Persisted history is normalized to role/content pairs for Gradio chat."""
         client = _create_client(tmp_path)
@@ -66,6 +83,37 @@ class TestMCPGradioClientSession:
         assert history[0]["role"] == "assistant"
         assert history[0]["content"][0] == "Rendered image"
         assert history[0]["content"][1]["file"]["mime_type"] == "image/png"
+
+    @pytest.mark.asyncio
+    async def test_refresh_chat_preserves_optimistic_history_before_task_registration(
+        self, tmp_path: Path
+    ):
+        """The refresh timer should not blank the chat while the send path is still persisting."""
+        client = _create_client(tmp_path)
+        client.session_manager.create_new_session("session-1")
+        client.session_manager.select_session("session-1")
+        client.orchestrator = SimpleNamespace(
+            background_tasks=SimpleNamespace(
+                get_task_snapshot=AsyncMock(return_value={}),
+                count_pending_tasks=AsyncMock(return_value=0),
+            )
+        )
+
+        optimistic_history = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": ""},
+        ]
+
+        refreshed_history, task_status, session_update = (
+            await client.refresh_chat_and_task_status(
+                optimistic_history,
+                client._current_session_label(),
+            )
+        )
+
+        assert refreshed_history == gr.skip()
+        assert task_status == "### Task Status\nNo background tasks yet."
+        assert session_update == gr.skip()
 
     def test_update_session_choices_selects_current_session(self, tmp_path: Path):
         """The session list update keeps the current primary chat selected."""

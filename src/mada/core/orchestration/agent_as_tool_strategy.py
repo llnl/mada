@@ -21,6 +21,7 @@ from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
 from mada.core.orchestration.stream_events import (
     InternalImageSignal,
     InternalResponseReplacement,
+    InternalToolCallSignal,
 )
 
 if TYPE_CHECKING:
@@ -59,6 +60,121 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         '[{"mimeType":"image/',
         '[{"media_type":"image/',
     )
+
+    _TOOL_CALL_KEYS = (
+        "function_call",
+        "tool_call",
+        "function_calls",
+        "tool_calls",
+    )
+    _TOOL_COLLECTION_KEYS = ("tool_calls", "tools", "function_calls", "functions")
+    _TOOL_RECURSION_KEYS = ("contents", "items", "messages", "data", "content")
+
+    @staticmethod
+    def _payload_value(payload: Any, key: str) -> Any:
+        if isinstance(payload, dict):
+            return payload.get(key)
+        return getattr(payload, key, None)
+
+    @classmethod
+    def _has_tool_call_payload(cls, value: Any) -> bool:
+        """Return whether a tool-call field contains an actual call payload."""
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, dict):
+            return bool(value)
+        if isinstance(value, (list, tuple, set)):
+            return any(cls._has_tool_call_payload(item) for item in value)
+        return True
+
+    @classmethod
+    def _contains_tool_call(cls, payload: Any) -> bool:
+        """Return whether payload or nested contents describe a tool/function call."""
+        payload_type = cls._payload_value(payload, "type")
+        if isinstance(payload_type, str) and payload_type in ("function_call", "tool_call"):
+            return True
+
+        if any(
+            cls._has_tool_call_payload(cls._payload_value(payload, key))
+            for key in cls._TOOL_CALL_KEYS
+        ):
+            return True
+
+        for key in cls._TOOL_RECURSION_KEYS:
+            value = cls._payload_value(payload, key)
+            if isinstance(value, (list, tuple)):
+                if any(cls._contains_tool_call(item) for item in value):
+                    return True
+            elif isinstance(value, dict) and cls._contains_tool_call(value):
+                return True
+            elif hasattr(value, "to_dict"):
+                try:
+                    if cls._contains_tool_call(value.to_dict()):
+                        return True
+                except (TypeError, ValueError):
+                    pass
+
+        if hasattr(payload, "to_dict"):
+            try:
+                return cls._contains_tool_call(payload.to_dict())
+            except (TypeError, ValueError):
+                return False
+
+        return False
+
+    @classmethod
+    def _tool_call_name_from_payload(cls, payload: Any) -> str | None:
+        """Return the MCP function/tool name from a nested tool-call payload."""
+        if payload is None:
+            return None
+
+        if isinstance(payload, str):
+            return payload.strip() or None
+
+        if isinstance(payload, (list, tuple, set)):
+            for item in payload:
+                if name := cls._tool_call_name_from_payload(item):
+                    return name
+            return None
+
+        if not any(
+            cls._payload_value(payload, key) is not None
+            for key in ("executor_id", "agent_id")
+        ):
+            for key in ("name", "function_name", "tool_name"):
+                value = cls._payload_value(payload, key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+        for key in ("function", "tool"):
+            if name := cls._tool_call_name_from_payload(cls._payload_value(payload, key)):
+                return name
+
+        payload_type = cls._payload_value(payload, "type")
+        if (
+            isinstance(payload_type, str)
+            and payload_type in {"function_call", "tool_call"}
+        ) or any(
+            cls._payload_value(payload, key) is not None for key in cls._TOOL_CALL_KEYS
+        ):
+            for key in ("name", "function_name", "tool_name"):
+                value = cls._payload_value(payload, key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+        for key in (*cls._TOOL_CALL_KEYS, *cls._TOOL_COLLECTION_KEYS, *cls._TOOL_RECURSION_KEYS):
+            if name := cls._tool_call_name_from_payload(cls._payload_value(payload, key)):
+                return name
+
+        if hasattr(payload, "to_dict"):
+            try:
+                return cls._tool_call_name_from_payload(payload.to_dict())
+            except (TypeError, ValueError):
+                return None
+
+        return None
 
     @classmethod
     def _serialized_image_start(cls, text: str) -> int | None:
@@ -159,32 +275,33 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         ]
 
     @staticmethod
-    def _tool_call_notices_from_chunk(chunk: Any, tool_calls: List[Any]) -> List[str]:
+    def _tool_call_notices_from_chunk(chunk: Any, tool_calls: List[Any]) -> List[Any]:
         """
         Return tool-call notices for first appearances of tool calls in a chunk.
         """
-        if not hasattr(chunk, "contents") or not chunk.contents:
-            return []
+        candidates = [chunk]
+        contents = getattr(chunk, "contents", None)
+        if isinstance(contents, (list, tuple)):
+            candidates.extend(contents)
 
         notices = []
-        for content in chunk.contents:
-            if not hasattr(content, "to_dict"):
+        for candidate in candidates:
+            if not AgentAsToolOrchestrationStrategy._contains_tool_call(candidate):
                 continue
 
-            item = content.to_dict()
-            if item.get("type") not in ("function_call", "tool_call"):
-                continue
-
-            name = item.get("name")
+            name = AgentAsToolOrchestrationStrategy._tool_call_name_from_payload(
+                candidate
+            )
             if not name:
                 continue
 
-            call_id = item.get("call_id")
+            call_id = AgentAsToolOrchestrationStrategy._payload_value(candidate, "call_id")
             call_key = call_id or name
             if call_key in tool_calls:
                 continue
 
             tool_calls.append(call_key)
+            notices.append(InternalToolCallSignal(name))
             notices.append(f"\n[Calling: {name}]\n")
 
         return notices
@@ -208,6 +325,10 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         image_digests: set[str] = set()
         stream = orchestrator.planning_agent.run(prompt, session=session, stream=True)
         async for chunk in stream:
+            if include_tool_notices:
+                for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
+                    yield notice
+
             for attachment in extract_image_attachments(chunk):
                 if attachment.digest in image_digests:
                     continue
@@ -229,12 +350,6 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                     emitted_text += safe_text
                     yield safe_text
                 continue
-
-            if not include_tool_notices:
-                continue
-
-            for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
-                yield notice
 
         assembled_text = "".join(text_chunks)
         for attachment in extract_image_attachments(assembled_text):
@@ -399,6 +514,9 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 prompt, session=run_session, stream=True
             )
             async for chunk in stream:
+                for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
+                    yield notice
+
                 available_images = [
                     *captured_images[captured_image_index:],
                     *extract_image_attachments(chunk),
@@ -429,9 +547,6 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                         emitted_text += safe_text
                         yield safe_text
                     continue
-
-                for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
-                    yield notice
 
             for attachment in captured_images[captured_image_index:]:
                 if attachment.digest in image_digests:
