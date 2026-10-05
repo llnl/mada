@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from mada.core.media import ImageAttachment
 from mada.core.config import MCPServerConfig, OpenAIModelConfig, OrchestrationConfig, SQLiteConfig
 from mada.interfaces.gradio.mcp_client_wrapper import MCPGradioClientSession
 
@@ -22,9 +23,11 @@ def _create_client(tmp_path: Path) -> MCPGradioClientSession:
 
 
 class TestMCPGradioClientSession:
-    def test_history_for_display_strips_non_chat_fields(self):
+    def test_format_history_for_gradio_strips_non_chat_fields(self, tmp_path: Path):
         """Persisted history is normalized to role/content pairs for Gradio chat."""
-        history = MCPGradioClientSession._history_for_display(
+        client = _create_client(tmp_path)
+
+        history = client._format_history_for_gradio(
             [
                 {
                     "role": "user",
@@ -43,6 +46,26 @@ class TestMCPGradioClientSession:
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "world"},
         ]
+
+    def test_select_session_formats_attachments_for_gradio(self, tmp_path: Path):
+        """Reloading a stored session rehydrates image attachments for the chatbot."""
+        client = _create_client(tmp_path)
+        attachment = ImageAttachment.from_data(
+            b"\x89PNG\r\n\x1a\nattachment", "image/png"
+        )
+
+        session_id = client.session_manager.create_session_id()
+        client.session_manager.create_new_session(session_id)
+        client.session_manager.add_message("assistant", "Rendered image", [attachment])
+
+        session_update = client.update_session_choices()
+        session_label = session_update["value"]
+
+        history, _, _ = client.select_session(session_label)
+
+        assert history[0]["role"] == "assistant"
+        assert history[0]["content"][0] == "Rendered image"
+        assert history[0]["content"][1]["file"]["mime_type"] == "image/png"
 
     def test_update_session_choices_selects_current_session(self, tmp_path: Path):
         """The session list update keeps the current primary chat selected."""

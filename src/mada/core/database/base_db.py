@@ -7,9 +7,12 @@ Base class for chat history database implementations.
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Tuple
+from typing import TYPE_CHECKING, List, Sequence, Tuple
 
 from mada.core.config import DatabaseConfig
+
+if TYPE_CHECKING:
+    from mada.core.media import ImageAttachment
 
 
 class BaseChatDatabase(ABC):
@@ -54,7 +57,12 @@ class BaseChatDatabase(ABC):
 
     @abstractmethod
     def add_message(
-        self, session_id: str, role: str, content: str, timestamp: datetime = None
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        timestamp: datetime = None,
+        attachments: Sequence["ImageAttachment"] | None = None,
     ):
         """
         Add a single message to the messages table in the database.
@@ -64,6 +72,7 @@ class BaseChatDatabase(ABC):
             role (str): The role (user or assistant) to designate who wrote the message
             content (str): The message contents
             timestamp (datetime): The time that the message was created
+            attachments: Optional images associated with the message.
         """
 
     @abstractmethod
