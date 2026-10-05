@@ -341,6 +341,7 @@ class BackgroundTaskManager:
         # Capture the chat before scheduling the task. An isolated follow-up
         # can start after the interface has switched to another chat session.
         originating_session_id = self.session_manager.current_session_id
+        originating_context_session_ids = self.session_manager.get_context_session_ids()
 
         async with self._task_lock:
             use_isolated_session = self._active_agent_queries > 0 or any(
@@ -359,6 +360,9 @@ class BackgroundTaskManager:
                 isolated_session=use_isolated_session,
                 persistence_session_id=(
                     originating_session_id if use_isolated_session else None
+                ),
+                context_session_ids=(
+                    originating_context_session_ids if use_isolated_session else None
                 ),
                 first_tool_call=first_tool_call,
                 first_tool_state=first_tool_state,

@@ -180,9 +180,12 @@ class TestLoadSession:
         db, mock_conn = sqlite_db
 
         mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = [
-            ("user", "Hello", datetime(2025, 12, 18, 17, 58, 43)),
-            ("assistant", "Hi", datetime(2025, 12, 18, 17, 58, 44)),
+        mock_cursor.fetchall.side_effect = [
+            [
+                (1, "user", "Hello", datetime(2025, 12, 18, 17, 58, 43)),
+                (2, "assistant", "Hi", datetime(2025, 12, 18, 17, 58, 44)),
+            ],
+            [],
         ]
         mock_conn.execute.return_value = mock_cursor
 
@@ -202,9 +205,9 @@ class TestLoadSession:
             },
         ]
 
-        sql, params = mock_conn.execute.call_args[0]
+        sql, params = mock_conn.execute.call_args_list[0].args
         assert normalize_sql(sql) == normalize_sql("""
-            SELECT role, content, timestamp FROM messages
+            SELECT message_id, role, content, timestamp FROM messages
             WHERE session_id = ?
             ORDER BY message_id ASC
         """)
@@ -224,7 +227,7 @@ class TestLoadSession:
 
         sql, params = mock_conn.execute.call_args[0]
         assert normalize_sql(sql) == normalize_sql("""
-            SELECT role, content, timestamp FROM messages
+            SELECT message_id, role, content, timestamp FROM messages
             WHERE session_id = ?
             ORDER BY message_id ASC
         """)

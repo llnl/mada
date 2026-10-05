@@ -14,8 +14,11 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import re
 import traceback
+from contextvars import ContextVar, Token
+from pathlib import Path
 from types import TracebackType
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Type
 from contextlib import AsyncExitStack
@@ -44,6 +47,12 @@ from mada.core.config import (
 )
 from mada.core.coordinator import MCPAgentManager
 from mada.core.database import ChatSessionManager
+from mada.core.media import (
+    ImageAttachment,
+    RichResponse,
+    extract_image_attachments,
+    strip_image_payload_text,
+)
 from mada.core.skills.skill_registry import SkillRegistry
 from mada.core.orchestration import (
     AgentAsToolOrchestrationStrategy,
@@ -52,6 +61,7 @@ from mada.core.orchestration import (
 )
 from mada.core.orchestration.stream_events import (
     apply_text_control,
+    image_attachment,
     tool_call_name,
 )
 from mada.core.tls import resolve_httpx_verify_value
@@ -134,10 +144,15 @@ class MADAOrchestrator(MCPAgentManager):
         self._a2a_clients_by_agent: Dict[str, RemoteA2AClient] = {}
         self._agent_descriptions = {}
         self._mcp_tool_count = 0
+        self._image_capture: ContextVar[List[ImageAttachment] | None] = ContextVar(
+            "mada_image_capture", default=None
+        )
         self.orchestration = orchestration_config or OrchestrationConfig()
         self.orchestration_strategy = self._build_orchestration_strategy(
             self.orchestration.mode
         )
+        self._shared_session_context_signature: Tuple[str, ...] | None = None
+        self._shared_session_requires_context_rebuild = True
         # Initialize the database
         self.session_manager = session_manager or ChatSessionManager(database_config)
         self.background_tasks = BackgroundTaskManager(
@@ -378,14 +393,31 @@ class MADAOrchestrator(MCPAgentManager):
                 if not server_path:
                     LOG.error(f"No command/server_path for stdio server {server_name}")
                     continue
+                if server_path.endswith(".py"):
+                    candidate = Path(server_path).expanduser()
+                    if not candidate.is_file():
+                        repo_candidate = Path(__file__).resolve().parents[3] / candidate
+                        if repo_candidate.is_file():
+                            candidate = repo_candidate
+                    server_path = str(candidate)
                 is_python = server_path.endswith(".py")
-                command = server_config.python_executable if is_python else "node"
-                # -u for unbuffered output
-                args = ["-u", server_path] if is_python else [server_path]
+                is_node = Path(server_path).suffix.lower() in {".js", ".mjs", ".cjs"}
+                if is_python:
+                    command = server_config.python_executable
+                    args = ["-u", server_path]
+                elif is_node:
+                    command = "node"
+                    args = [server_path]
+                else:
+                    # A bare command may be an installed console script.
+                    command = server_path
+                    args = []
+                server_env = {**os.environ, **server_config.env}
                 mcp_tool = MCPStdioTool(
                     name=server_name,
                     command=command,
                     args=args,
+                    env=server_env,
                 )
             elif server_config.transport == "streamable-http":
                 if not server_config.url:
@@ -398,6 +430,7 @@ class MADAOrchestrator(MCPAgentManager):
                     "Accept": "text/event-stream, application/json",
                     "Cache-Control": "no-cache",
                 }
+                headers.update(server_config.headers)
 
                 # Add bearer token if provided
                 if self.bearer_token:
@@ -568,11 +601,16 @@ class MADAOrchestrator(MCPAgentManager):
             description = self._agent_descriptions.get(
                 agent.name, f"Specialist agent: {agent.name}"
             )
+
+            async def capture_specialist_update(update: Any) -> None:
+                self._capture_image_attachments(update)
+
             agent_tool = agent.as_tool(
                 name=agent.name,
                 description=description,
                 arg_name="task",
                 arg_description="The task to delegate to this agent",
+                stream_callback=capture_specialist_update,
             )
             agent_tools.append(agent_tool)
 
@@ -606,6 +644,8 @@ Manifest-based skills available via runtime tools:
 {skill_advertisement}
 """
 
+        image_routing_guidance = self._image_routing_guidance(participant_configs)
+
         # Always append up to date team description and guidelines so the planning
         # agent knows how to use the tools.
         instructions = f"""{base_instructions}
@@ -619,6 +659,7 @@ Remote A2A agents (available as tools):
 
 Guidelines:
 - Delegate to specialist agents when the request matches their expertise
+{image_routing_guidance}
 - Delegate to remote A2A agents when their descriptions match the request
 - Answer directly only for questions about the system itself
 - Avoid infinite loops between agents
@@ -641,6 +682,28 @@ Guidelines:
         )
 
         return planning_agent
+
+    def _begin_image_capture(
+        self,
+    ) -> Tuple[Token, List[ImageAttachment]]:
+        """Start a task-local image collection for nested specialist streams."""
+        attachments: List[ImageAttachment] = []
+        return self._image_capture.set(attachments), attachments
+
+    def _end_image_capture(self, token: Token) -> None:
+        """Restore the previous task-local image collection."""
+        self._image_capture.reset(token)
+
+    def _capture_image_attachments(self, value: Any) -> None:
+        """Capture unique images emitted by a nested specialist agent."""
+        attachments = self._image_capture.get()
+        if attachments is None:
+            return
+        existing = {attachment.digest for attachment in attachments}
+        for attachment in extract_image_attachments(value):
+            if attachment.digest not in existing:
+                existing.add(attachment.digest)
+                attachments.append(attachment)
 
     def _create_remote_a2a_agent_tools(self) -> List[Any]:
         """
@@ -742,6 +805,65 @@ Guidelines:
 
         return "\n".join(
             f"    {summary}" for summary in self.skill_registry.skill_summaries()
+        )
+
+    def _image_attachment_agent_names(
+        self, agent_configs: List[AgentConfig]
+    ) -> List[str]:
+        """Return specialists configured with the local-image MCP server."""
+        configured_servers = getattr(self, "mcp_servers", {}) or {}
+        connected_servers = getattr(self, "_mcp_tools_by_server", {}) or {}
+        owners = []
+        for agent_config in agent_configs:
+            image_server = False
+            for server_name in agent_config.mcp_servers or []:
+                server_config = configured_servers.get(server_name)
+                server_text = " ".join(
+                    str(value or "")
+                    for value in (
+                        server_name,
+                        getattr(server_config, "description", ""),
+                        getattr(server_config, "command", ""),
+                    )
+                ).lower()
+                normalized_server_text = server_text.replace("-", "_").replace(" ", "_")
+                connected_tool = connected_servers.get(server_name)
+                tool_names = {
+                    str(getattr(function, "name", "")).lower()
+                    for function in getattr(connected_tool, "_functions", [])
+                }
+                if (
+                    "read_image" in tool_names
+                    or server_name.lower() == "image_files"
+                    or "read_image" in normalized_server_text
+                    or "local_image" in normalized_server_text
+                    or "image_file" in normalized_server_text
+                ):
+                    image_server = True
+                    break
+
+            instruction_text = str(agent_config.instructions or "").lower()
+            if image_server or "read_image" in instruction_text:
+                owners.append(agent_config.agent_name)
+
+        return list(dict.fromkeys(owners))
+
+    def _image_routing_guidance(self, agent_configs: List[AgentConfig]) -> str:
+        """Build image-routing guidance for the configured specialist team."""
+        owners = self._image_attachment_agent_names(agent_configs)
+        if not owners:
+            return (
+                "- If a specialist's configured tools expose read_image, delegate "
+                "local-image requests to that specialist and return the result "
+                "as an attachment."
+            )
+
+        destination = owners[0] if len(owners) == 1 else "one of: " + ", ".join(owners)
+        return (
+            "- For requests to load, display, or return a local image, delegate "
+            f"the complete request to {destination}, which owns the configured "
+            "read_image MCP tool. Return its image result as an attachment.\n"
+            "  Do not paste base64 or a data URI into the response."
         )
 
     def _generate_remote_a2a_description(self) -> str:
@@ -920,6 +1042,14 @@ Guidelines:
                 for key in tool_metadata_keys
                 if key in message and message[key] is not None
             }
+            attachment_transcript = self._image_attachment_transcript(
+                message.get("attachments") or []
+            )
+            if attachment_transcript:
+                if content and content != attachment_transcript:
+                    content = f"{content}\n{attachment_transcript}"
+                else:
+                    content = attachment_transcript
             if not content and not tool_metadata:
                 continue
             normalized_message = {"role": role, "content": content}
@@ -927,6 +1057,15 @@ Guidelines:
             transcript.append(normalized_message)
 
         return transcript
+
+    @staticmethod
+    def _image_attachment_transcript(
+        attachments: List[ImageAttachment],
+    ) -> str:
+        """Render image attachments as compact transcript placeholders."""
+        return "\n".join(
+            f"[Image attachment: {attachment.filename}]" for attachment in attachments
+        )
 
     def build_prompt_from_transcript(self, messages: List[Dict[str, Any]]) -> str:
         """
@@ -972,6 +1111,86 @@ Guidelines:
             f"{conversation}"
         )
 
+    def resolve_loaded_session_ids(
+        self,
+        primary_session_id: Optional[str] = None,
+        context_session_ids: Optional[List[str]] = None,
+    ) -> List[str]:
+        """
+        Resolve the persisted chat sessions that should be loaded into context.
+
+        Args:
+            primary_session_id: Optional explicit primary session. Defaults to the
+                active writable session.
+            context_session_ids: Optional explicit additional context sessions.
+
+        Returns:
+            Ordered session IDs with read-only context sessions first and the
+            writable primary session last.
+        """
+        return self.session_manager.get_loaded_session_ids(
+            primary_session_id=primary_session_id,
+            context_session_ids=context_session_ids,
+        )
+
+    async def load_persisted_context_messages(
+        self,
+        primary_session_id: Optional[str] = None,
+        context_session_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Load and merge persisted chat history for the selected session context.
+
+        Args:
+            primary_session_id: Optional explicit primary session whose history
+                should be appended after any additional context sessions.
+            context_session_ids: Optional explicit additional read-only sessions
+                to merge ahead of the primary session.
+
+        Returns:
+            Flat list of persisted messages ordered by session selection, with
+            messages preserved in each session's stored order.
+        """
+        merged_messages = []
+        for session_id in self.resolve_loaded_session_ids(
+            primary_session_id=primary_session_id,
+            context_session_ids=context_session_ids,
+        ):
+            merged_messages.extend(self.session_manager.load_history(session_id))
+        return merged_messages
+
+    async def build_persisted_context_transcript(
+        self,
+        latest_user_message: Optional[str] = None,
+        primary_session_id: Optional[str] = None,
+        context_session_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Build a normalized transcript from the selected persisted session context.
+
+        Args:
+            latest_user_message: Optional user message to append after the loaded
+                persisted history.
+            primary_session_id: Optional explicit primary session whose history
+                should be loaded last.
+            context_session_ids: Optional explicit additional read-only sessions
+                to load ahead of the primary session.
+
+        Returns:
+            Normalized role/content transcript messages ready for prompt
+            construction.
+        """
+        transcript_messages = await self.load_persisted_context_messages(
+            primary_session_id=primary_session_id,
+            context_session_ids=context_session_ids,
+        )
+        if latest_user_message is not None:
+            transcript_messages = [
+                *transcript_messages,
+                {"role": "user", "content": latest_user_message},
+            ]
+        return self._normalize_transcript_messages(transcript_messages)
+
     async def process_openai_messages(
         self,
         messages: List[Dict[str, Any]],
@@ -990,9 +1209,25 @@ Guidelines:
         isolated_session: bool = False,
         persistence_session_id: Optional[str] = None,
         stateless_session: bool = False,
+        context_session_ids: Optional[List[str]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message using the configured strategy.
+
+        Args:
+            message: User message to process.
+            isolated_session: If True, process with a fresh agent session rather
+                than the shared interactive session.
+            persistence_session_id: Optional explicit primary session where an
+                isolated turn should be persisted.
+            stateless_session: If True, avoid loading persisted history and do
+                not persist the result.
+            context_session_ids: Optional additional read-only sessions to merge
+                into model context for this turn.
+
+        Yields:
+            Streamed response chunks emitted by the active orchestration
+            strategy.
         """
         async for chunk in self.orchestration_strategy.process_message(
             self,
@@ -1000,6 +1235,7 @@ Guidelines:
             isolated_session=isolated_session,
             persistence_session_id=persistence_session_id,
             stateless_session=stateless_session,
+            context_session_ids=context_session_ids,
         ):
             yield chunk
 
@@ -1057,7 +1293,9 @@ Guidelines:
     async def _create_run_session(
         self,
         isolated_session: bool,
-    ) -> Tuple[Optional[int], AgentSession, Dict[str, int]]:
+        primary_session_id: Optional[str] = None,
+        context_session_ids: Optional[List[str]] = None,
+    ) -> Tuple[Optional[int], AgentSession, Dict[str, int], bool]:
         """
         Create the agent session used for one message turn.
 
@@ -1065,27 +1303,52 @@ Guidelines:
             isolated_session: If True, create a fresh session. Otherwise, copy
                 the shared orchestrator session and reserve a turn ID for later
                 ordered commit.
+            primary_session_id: Optional explicit primary persisted session used
+                to determine whether the shared session must be rebuilt.
+            context_session_ids: Optional additional read-only sessions used to
+                determine whether the shared session must be rebuilt.
 
         Returns:
-            Tuple containing the turn ID, the run session, and provider message
-            history lengths captured before streaming.
+            Tuple containing the turn ID, the run session, provider message
+            history lengths captured before streaming, and whether the next
+            prompt should be rebuilt from persisted transcript history.
 
         Raises:
             RuntimeError: If the shared orchestrator session is not initialized.
         """
         if isolated_session:
-            return None, self.planning_agent.create_session(), {}
+            return None, self.planning_agent.create_session(), {}, False
 
         async with self._session_lock:
             if self.session is None:
                 raise RuntimeError("Orchestrator session not initialized.")
 
+            selected_session_signature = tuple(
+                self.resolve_loaded_session_ids(
+                    primary_session_id=primary_session_id,
+                    context_session_ids=context_session_ids,
+                )
+            )
+            if self._shared_session_context_signature != selected_session_signature:
+                self.session = self.planning_agent.create_session()
+                self._shared_session_context_signature = selected_session_signature
+                self._shared_session_requires_context_rebuild = True
+
             turn_id = self._next_turn_id
             self._next_turn_id += 1
             run_session = AgentSession.from_dict(self.session.to_dict())
             history_lengths = self._provider_message_lengths(run_session)
+            rebuild_from_persisted_context = (
+                self._shared_session_requires_context_rebuild
+            )
+            self._shared_session_requires_context_rebuild = False
 
-        return turn_id, run_session, history_lengths
+        return (
+            turn_id,
+            run_session,
+            history_lengths,
+            rebuild_from_persisted_context,
+        )
 
     async def _load_history_for_session(self, session_id: str) -> List[Dict]:
         """
@@ -1097,13 +1360,7 @@ Guidelines:
         Returns:
             Stored chat history for the session.
         """
-        async with self._session_lock:
-            previous_session_id = self.session_manager.current_session_id
-            self.session_manager.current_session_id = session_id
-            try:
-                return self.session_manager.load_history()
-            finally:
-                self.session_manager.current_session_id = previous_session_id
+        return self.session_manager.load_history(session_id)
 
     @staticmethod
     def _provider_message_lengths(session: AgentSession) -> Dict[str, int]:
@@ -1128,6 +1385,7 @@ Guidelines:
         self,
         message: str,
         assistant_reply: str,
+        image_attachments: Optional[List[ImageAttachment]] = None,
         background_task_descriptors: Optional[List[str]] = None,
         session_id: Optional[str] = None,
     ) -> None:
@@ -1137,6 +1395,7 @@ Guidelines:
         Args:
             message: User message for the isolated turn.
             assistant_reply: Aggregated assistant response text.
+            image_attachments: Images returned by MCP tools during the turn.
             background_task_descriptors: Optional hidden MCP background task
                 descriptors that should start polling but not be stored as
                 assistant-visible text.
@@ -1157,6 +1416,7 @@ Guidelines:
                     await self._persist_isolated_response(
                         message,
                         assistant_reply,
+                        image_attachments=image_attachments,
                         background_task_descriptors=background_task_descriptors,
                     )
                 finally:
@@ -1172,16 +1432,27 @@ Guidelines:
             self.session_manager.add_message("user", message)
 
         # Skip persisting duplicate background ACKs
-        if assistant_reply.strip():
+        if assistant_reply.strip() or image_attachments:
             from mada.core.background_tasks import is_background_task_start_ack
 
             is_bg_ack = is_background_task_start_ack(assistant_reply)
             if already_started and is_bg_ack:
                 _, separator, answer = assistant_reply.partition("\n")
                 if separator and answer.strip():
-                    self.session_manager.add_message("assistant", answer.strip())
+                    self.session_manager.add_message(
+                        "assistant",
+                        answer.strip(),
+                        attachments=image_attachments,
+                    )
             else:
-                self.session_manager.add_message("assistant", assistant_reply)
+                persisted_reply = (
+                    assistant_reply
+                    if assistant_reply.strip()
+                    else self._image_attachment_transcript(image_attachments or [])
+                )
+                self.session_manager.add_message(
+                    "assistant", persisted_reply, attachments=image_attachments
+                )
 
         self.background_tasks.start_background_tool_poll_from_reply_if_needed(
             assistant_reply
@@ -1198,6 +1469,7 @@ Guidelines:
         assistant_reply: str,
         run_session: Optional[AgentSession],
         history_lengths: Dict[str, int],
+        image_attachments: Optional[List[ImageAttachment]] = None,
         background_task_descriptors: Optional[List[str]] = None,
     ) -> None:
         """
@@ -1209,6 +1481,7 @@ Guidelines:
             assistant_reply: Aggregated assistant response text.
             run_session: Agent session used to process the turn.
             history_lengths: Provider message counts captured before streaming.
+            image_attachments: Images returned by MCP tools during the turn.
             background_task_descriptors: Optional hidden MCP background task
                 descriptors that should start polling but not be stored as
                 assistant-visible text.
@@ -1235,6 +1508,7 @@ Guidelines:
                 "assistant_reply": assistant_reply,
                 "run_session": run_session,
                 "history_lengths": history_lengths,
+                "image_attachments": image_attachments or [],
                 "background_task_descriptors": background_task_descriptors or [],
             }
 
@@ -1333,6 +1607,7 @@ Guidelines:
         """
         message = completed["message"]
         assistant_reply = completed["assistant_reply"]
+        image_attachments = completed.get("image_attachments", [])
         background_task_descriptors = completed.get("background_task_descriptors", [])
 
         # Check if interface layer already persisted a background-start ACK
@@ -1344,16 +1619,27 @@ Guidelines:
             self.session_manager.add_message("user", message)
 
         # Skip persisting duplicate background ACKs
-        if assistant_reply.strip():
+        if assistant_reply.strip() or image_attachments:
             from mada.core.background_tasks import is_background_task_start_ack
 
             is_bg_ack = is_background_task_start_ack(assistant_reply)
             if already_started and is_bg_ack:
                 _, separator, answer = assistant_reply.partition("\n")
                 if separator and answer.strip():
-                    self.session_manager.add_message("assistant", answer.strip())
+                    self.session_manager.add_message(
+                        "assistant",
+                        answer.strip(),
+                        attachments=image_attachments,
+                    )
             else:
-                self.session_manager.add_message("assistant", assistant_reply)
+                persisted_reply = (
+                    assistant_reply
+                    if assistant_reply.strip()
+                    else self._image_attachment_transcript(image_attachments)
+                )
+                self.session_manager.add_message(
+                    "assistant", persisted_reply, attachments=image_attachments
+                )
 
         self.background_tasks.start_background_tool_poll_from_reply_if_needed(
             assistant_reply
@@ -1369,6 +1655,7 @@ Guidelines:
         isolated_session: bool = False,
         persistence_session_id: Optional[str] = None,
         stateless_session: bool = False,
+        context_session_ids: Optional[List[str]] = None,
         first_tool_call: Optional[asyncio.Event] = None,
         first_tool_state: Optional[Dict[str, str]] = None,
     ) -> str:
@@ -1390,6 +1677,8 @@ Guidelines:
                 request output should be persisted.
             stateless_session: If True, isolated processing starts with no chat
                 history and does not persist output.
+            context_session_ids: Optional additional read-only sessions to merge
+                into model context for this request.
             first_tool_call: Optional event set when the streamed response first
                 reports a tool call.
             first_tool_state: Optional mutable mapping populated with the first
@@ -1403,12 +1692,32 @@ Guidelines:
             Exception: Propagates unexpected failures from `process_message`.
         """
         response_chunks = []
+        image_attachments = []
+        image_digests = set()
         async for response_chunk in self.process_message(
             message,
             isolated_session=isolated_session,
             persistence_session_id=persistence_session_id,
             stateless_session=stateless_session,
+            context_session_ids=context_session_ids,
         ):
+            attachment = image_attachment(response_chunk)
+            if attachment is not None:
+                if attachment.digest not in image_digests:
+                    image_digests.add(attachment.digest)
+                    image_attachments.append(attachment)
+                continue
+
+            if type(response_chunk) is str:
+                text_attachments = extract_image_attachments(response_chunk)
+                for text_attachment in text_attachments:
+                    if text_attachment.digest not in image_digests:
+                        image_digests.add(text_attachment.digest)
+                        image_attachments.append(text_attachment)
+                response_chunk = strip_image_payload_text(response_chunk)
+                if not response_chunk:
+                    continue
+
             internal_tool_call_name = tool_call_name(response_chunk)
             if (
                 first_tool_call
@@ -1435,7 +1744,12 @@ Guidelines:
                     str(response_chunk).strip()[len("[Calling:") :].rstrip("]").strip()
                 )
                 first_tool_call.set()
-        return "".join(response_chunks)
+        response_text = "".join(response_chunks)
+        if image_attachments:
+            if not response_text.strip():
+                response_text = self._image_attachment_transcript(image_attachments)
+            return RichResponse(response_text, image_attachments)
+        return response_text
 
     async def cleanup(self) -> None:
         """

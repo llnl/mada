@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Inline, persisted Gradio display of images returned by MCP tools as `ImageContent`.
 - DOI link to README
 - Magentic Orchestration Functionality
 - Runtime isolation for agents participating in Magentic workflows
@@ -17,6 +18,7 @@
 - MADA now depends on `httpx2` for its direct HTTP client usage, and A2A examples target `fastmcp>=4.0.0` for MCP 2 compatibility.
 - All tests now run on LLNL machines except tests running on Windows OS
 - The sample configuration now uses LivAI with Magentic orchestration and the documented local MCP server ports.
+- CLI and Gradio interfaces now support loading additional chat sessions as read-only model context while keeping one primary writable chat session.
 
 ### Fixed
 - Magentic runtime-agent cloning now preserves tools and instructions across Agent Framework constructor layouts.
@@ -26,6 +28,7 @@
 - Tool call detection in nested Agent Framework event structures (including typed records)
 - Incomplete streaming when final result differs from accumulated chunks
 - MCP server initialization now shims the legacy `InitializeResult.protocolVersion` attribute expected by current Agent Framework releases when running against MCP 2.x.
+- Gradio chat startup and session refresh handling now keep the primary chat list and visible transcript in sync when starting from a blank chat.
 
 ## 0.3.0 - 2026-09-09
 

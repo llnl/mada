@@ -7,11 +7,12 @@ PostgreSQL database implementation for chat history management.
 
 import logging
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Sequence, Tuple
 
 import psycopg2
 
 from mada.core.database.base_db import BaseChatDatabase
+from mada.core.media import ImageAttachment
 
 
 LOG = logging.getLogger(__name__)
@@ -71,10 +72,26 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
                         timestamp TIMESTAMP
                     )
                 """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS message_attachments (
+                        attachment_id SERIAL PRIMARY KEY,
+                        message_id INTEGER NOT NULL REFERENCES messages(message_id)
+                            ON DELETE CASCADE,
+                        position INTEGER NOT NULL,
+                        filename TEXT NOT NULL,
+                        media_type TEXT NOT NULL,
+                        data BYTEA NOT NULL
+                    )
+                """)
             conn.commit()
 
     def add_message(
-        self, session_id: str, role: str, content: str, timestamp: datetime = None
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        timestamp: datetime = None,
+        attachments: Sequence[ImageAttachment] | None = None,
     ):
         """
         Add a single message to the messages table in the database.
@@ -84,6 +101,7 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
             role (str): The role (user or assistant) to designate who wrote the message
             content (str): The message contents
             timestamp (datetime): The time that the message was created
+            attachments: Optional images associated with the message.
         """
         if timestamp is None:
             timestamp = datetime.now()
@@ -99,13 +117,39 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
                     (session_id, timestamp),
                 )
                 # Insert the message
-                cursor.execute(
-                    """
+                if attachments:
+                    cursor.execute(
+                        """
+                        INSERT INTO messages (session_id, role, content, timestamp)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING message_id
+                        """,
+                        (session_id, role, content, timestamp),
+                    )
+                    message_id = cursor.fetchone()[0]
+                    for position, attachment in enumerate(attachments):
+                        cursor.execute(
+                            """
+                            INSERT INTO message_attachments
+                                (message_id, position, filename, media_type, data)
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (
+                                message_id,
+                                position,
+                                attachment.filename,
+                                attachment.media_type,
+                                psycopg2.Binary(attachment.data),
+                            ),
+                        )
+                else:
+                    cursor.execute(
+                        """
                     INSERT INTO messages (session_id, role, content, timestamp)
                     VALUES (%s, %s, %s, %s)
                 """,
-                    (session_id, role, content, timestamp),
-                )
+                        (session_id, role, content, timestamp),
+                    )
                 # Update session's last_updated
                 cursor.execute(
                     """
@@ -147,16 +191,45 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT role, content, timestamp FROM messages
+                    SELECT message_id, role, content, timestamp FROM messages
                     WHERE session_id = %s
                     ORDER BY message_id ASC
                 """,
                     (session_id,),
                 )
-                return [
-                    {"role": row[0], "content": row[1], "timestamp": row[2]}
-                    for row in cursor.fetchall()
-                ]
+                messages = []
+                messages_by_id = {}
+                for message_id, role, content, timestamp in cursor.fetchall():
+                    message = {
+                        "role": role,
+                        "content": content,
+                        "timestamp": timestamp,
+                    }
+                    messages.append(message)
+                    messages_by_id[message_id] = message
+
+                if not messages_by_id:
+                    return messages
+
+                cursor.execute(
+                    """
+                    SELECT a.message_id, a.filename, a.media_type, a.data
+                    FROM message_attachments AS a
+                    JOIN messages AS m ON m.message_id = a.message_id
+                    WHERE m.session_id = %s
+                    ORDER BY a.message_id ASC, a.position ASC
+                    """,
+                    (session_id,),
+                )
+                for message_id, filename, media_type, data in cursor.fetchall():
+                    message = messages_by_id.get(message_id)
+                    if message is not None:
+                        message.setdefault("attachments", []).append(
+                            ImageAttachment.from_data(
+                                bytes(data), media_type, filename=filename
+                            )
+                        )
+                return messages
 
     def list_sessions(self) -> List[Tuple[str, datetime]]:
         """
@@ -185,6 +258,15 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
         with self._connect() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
+                    """
+                    DELETE FROM message_attachments
+                    WHERE message_id IN (
+                        SELECT message_id FROM messages WHERE session_id = %s
+                    )
+                    """,
+                    (session_id,),
+                )
+                cursor.execute(
                     "DELETE FROM messages WHERE session_id = %s", (session_id,)
                 )
                 cursor.execute(
@@ -208,6 +290,7 @@ class PostgreSQLChatDatabase(BaseChatDatabase):
             LOG.info("Flushing the database...")
             with self._connect() as conn:
                 with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM message_attachments")
                     cursor.execute("DELETE FROM messages")
                     cursor.execute("DELETE FROM sessions")
                 conn.commit()
