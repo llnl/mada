@@ -655,13 +655,19 @@ class MCPGradioClientSession:
         return "\n".join(lines)
 
     async def refresh_chat_and_task_status(
-        self, history: List[Any], session_label: str | None
+        self,
+        history: List[Any],
+        session_label: str | None,
+        awaiting_response: bool = False,
     ) -> Tuple[Any, str, gr.update]:
         """
         Refresh chat history and background task status for the Gradio UI.
 
         Args:
             history: Current Gradio chat history.
+            session_label: Currently selected primary-session label.
+            awaiting_response: Whether an optimistic user message is waiting for
+                its first assistant response and must not be overwritten.
 
         Returns:
             Tuple containing the refreshed chat history or `gr.skip()`, the task
@@ -673,7 +679,8 @@ class MCPGradioClientSession:
         task_status = await self.get_task_status_markdown()
         session_list_update = gr.skip()
         if (
-            not self.orchestrator
+            awaiting_response
+            or not self.orchestrator
             or await self.orchestrator.background_tasks.count_pending_tasks() > 0
         ):
             return gr.skip(), task_status, session_list_update

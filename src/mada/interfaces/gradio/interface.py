@@ -120,39 +120,57 @@ class MADAMultiAgentGradioInterface:
             placeholder=placeholder,
             elem_id="mada-message-box",
         )
+        pending_message = gr.State("")
+        self.awaiting_response = gr.State(False)
         message_box.submit(
-            fn=self._send_message,
+            fn=self._stage_user_message,
             inputs=[
                 message_box,
                 chatbot,
+            ],
+            outputs=[message_box, chatbot, pending_message, self.awaiting_response],
+            show_progress="hidden",
+            queue=False,
+        ).then(
+            fn=self._stream_response,
+            inputs=[
+                pending_message,
+                chatbot,
                 *self.get_additional_chat_inputs(agent_table),
             ],
-            outputs=[message_box, chatbot],
+            outputs=[chatbot, self.awaiting_response],
             show_progress="hidden",
         )
 
         return chatbot
 
-    async def _send_message(
+    @staticmethod
+    def _stage_user_message(message: str, history: List[Any]):
+        """Render a submitted user message before starting response work."""
+        if not message or not message.strip():
+            return gr.skip(), history, "", False
+
+        updated_history = list(history or [])
+        updated_history.append({"role": "user", "content": message})
+        updated_history.append({"role": "assistant", "content": "…"})
+        return "", updated_history, message, True
+
+    async def _stream_response(
         self,
         message: str,
         history: List[Any],
         *additional_inputs: Any,
     ):
         """
-        Add the user message and stream the assistant response.
+        Stream the assistant response after the user message has rendered.
         """
         if not message or not message.strip():
-            yield gr.skip(), history
+            yield history, False
             return
 
         self.client.ensure_active_session_visible()
 
         updated_history = list(history or [])
-        updated_history.append({"role": "user", "content": message})
-        yield "", updated_history
-
-        updated_history.append({"role": "assistant", "content": ""})
         async for response in self.client.process_message(
             message, updated_history, *additional_inputs
         ):
@@ -160,7 +178,20 @@ class MADAMultiAgentGradioInterface:
                 "role": "assistant",
                 "content": response,
             }
-            yield gr.skip(), updated_history
+            yield updated_history, False
+
+    @staticmethod
+    def _toggle_focus_mode(is_focused: bool):
+        """Toggle the session sidebars and update the focus-mode control."""
+        next_is_focused = not bool(is_focused)
+        sidebars_visible = not next_is_focused
+        button_label = "↔ Show sidebars" if next_is_focused else "⛶ Focus chat"
+        return (
+            gr.update(visible=sidebars_visible),
+            gr.update(visible=sidebars_visible),
+            gr.update(value=button_label),
+            next_is_focused,
+        )
 
     def create_interface(self) -> gr.Blocks:
         """
@@ -228,9 +259,13 @@ class MADAMultiAgentGradioInterface:
             # Custom components (subclasses can add their own)
             self.create_custom_components(demo)
 
+            focus_mode = gr.State(False)
+
             with gr.Row(equal_height=False, elem_id="mada-layout-shell"):
                 # Left sidebar for sessions
-                with gr.Column(scale=2, min_width=240, elem_id="mada-left-sidebar"):
+                with gr.Column(
+                    scale=2, min_width=240, elem_id="mada-left-sidebar"
+                ) as left_sidebar:
                     gr.Markdown("### Chats")
 
                     new_chat_btn = gr.Button("➕ New chat", variant="secondary")
@@ -262,10 +297,18 @@ class MADAMultiAgentGradioInterface:
 
                 # Center chat column
                 with gr.Column(scale=6, min_width=420, elem_id="mada-center-pane"):
+                    focus_mode_btn = gr.Button(
+                        "⛶ Focus chat",
+                        variant="secondary",
+                        size="sm",
+                        elem_id="mada-focus-mode-btn",
+                    )
                     chatbot = self.create_chat_interface(agent_table)
 
                 # Right sidebar for context and runtime state
-                with gr.Column(scale=3, min_width=280, elem_id="mada-right-sidebar"):
+                with gr.Column(
+                    scale=3, min_width=280, elem_id="mada-right-sidebar"
+                ) as right_sidebar:
                     with gr.Group(elem_id="mada-context-panel"):
                         gr.Markdown("### Context Sessions")
                         gr.Markdown(
@@ -289,11 +332,23 @@ class MADAMultiAgentGradioInterface:
                             elem_id="mada-task-status",
                         )
 
+            focus_mode_btn.click(
+                fn=self._toggle_focus_mode,
+                inputs=[focus_mode],
+                outputs=[
+                    left_sidebar,
+                    right_sidebar,
+                    focus_mode_btn,
+                    focus_mode,
+                ],
+                show_progress="hidden",
+            )
+
             task_refresh = gr.Timer(value=0.5)
 
             task_refresh.tick(
                 fn=self.client.refresh_chat_and_task_status,
-                inputs=[chatbot, session_list],
+                inputs=[chatbot, session_list, self.awaiting_response],
                 outputs=[chatbot, task_status, session_list],
                 show_progress="hidden",
                 concurrency_limit=1,

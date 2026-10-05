@@ -19,6 +19,18 @@ body.mada-resize-dragging {
   padding-bottom: 10px;
 }
 
+#mada-chatbot .message,
+#mada-chatbot .prose {
+  font-size: 18px !important;
+  line-height: 1.55 !important;
+}
+
+#mada-message-box textarea,
+#mada-message-box input {
+  font-size: 18px !important;
+  line-height: 1.5 !important;
+}
+
 #mada-layout-shell {
   align-items: flex-start;
   gap: 20px;
@@ -31,6 +43,12 @@ body.mada-resize-dragging {
 
 #mada-center-pane {
   min-width: 0;
+}
+
+#mada-focus-mode-btn {
+  align-self: flex-end;
+  width: auto;
+  min-width: 132px;
 }
 
 #mada-session-list-panel {
