@@ -11,10 +11,10 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any, Self
 
 LOG = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class ImageAttachment:
         data: bytes,
         media_type: str,
         filename: str | None = None,
-    ) -> "ImageAttachment":
+    ) -> ImageAttachment:
         """Validate raw image data and create an attachment."""
         normalized_type = media_type.lower().split(";", 1)[0].strip()
         extension = SUPPORTED_IMAGE_MEDIA_TYPES.get(normalized_type)
@@ -103,9 +103,7 @@ class RichResponse(str):
 
     images: tuple[ImageAttachment, ...]
 
-    def __new__(
-        cls, text: str, images: Iterable[ImageAttachment] = ()
-    ) -> "RichResponse":
+    def __new__(cls, text: str, images: Iterable[ImageAttachment] = ()) -> Self:
         value = str.__new__(cls, text)
         value.images = tuple(images)
         return value
@@ -178,6 +176,51 @@ def _contains_serialized_image_payload(value: Any) -> bool:
     if isinstance(value, list):
         return any(_contains_serialized_image_payload(item) for item in value)
     return False
+
+
+def _serialized_non_image_text(value: Any) -> str:
+    """Extract sanitized user-visible text from serialized mixed content."""
+    if _is_serialized_image_payload(value):
+        return ""
+    if isinstance(value, str):
+        return strip_image_payload_text(value, strip_outer_whitespace=False)
+    if isinstance(value, list):
+        text_parts = []
+        for item in value:
+            text = _serialized_non_image_text(item)
+            if text:
+                text_parts.append(text)
+        return "".join(text_parts)
+    if not isinstance(value, dict):
+        return ""
+
+    item_type = str(value.get("type") or "").lower()
+    if item_type == "text":
+        text = value.get("text", value.get("content", ""))
+        return (
+            strip_image_payload_text(str(text), strip_outer_whitespace=False)
+            if text is not None
+            else ""
+        )
+    if isinstance(value.get("text"), str) and value["text"].strip():
+        return strip_image_payload_text(value["text"], strip_outer_whitespace=False)
+
+    for key in (
+        "content",
+        "contents",
+        "items",
+        "messages",
+        "output",
+        "outputs",
+        "result",
+        "tool_result",
+        "function_result",
+    ):
+        if key in value:
+            text = _serialized_non_image_text(value[key])
+            if text:
+                return text
+    return ""
 
 
 def extract_image_attachments(value: Any) -> list[ImageAttachment]:
@@ -319,5 +362,11 @@ def strip_image_payload_text(value: str, *, strip_outer_whitespace: bool = True)
         )
     ]
     for start, end in sorted(outermost_spans, reverse=True):
-        cleaned = cleaned[:start] + cleaned[end:]
+        replacement = ""
+        try:
+            parsed, _ = decoder.raw_decode(cleaned, start)
+            replacement = _serialized_non_image_text(parsed)
+        except json.JSONDecodeError:
+            pass
+        cleaned = cleaned[:start] + replacement + cleaned[end:]
     return cleaned.strip() if strip_outer_whitespace else cleaned

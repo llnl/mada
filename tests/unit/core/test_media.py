@@ -16,13 +16,12 @@ from mada.core.media import (
 from mada.core.orchestration.agent_as_tool_strategy import (
     AgentAsToolOrchestrationStrategy,
 )
+from mada.core.orchestration.magentic_strategy import MagenticOrchestrationStrategy
 from mada.core.orchestration.stream_events import (
     InternalImageSignal,
     InternalResponseReplacement,
 )
-from mada.core.orchestration.magentic_strategy import MagenticOrchestrationStrategy
 from mada.core.orchestrator import MADAOrchestrator
-
 
 PNG_DATA = b"\x89PNG\r\n\x1a\n" + b"test-image-data"
 
@@ -129,6 +128,96 @@ def test_extracts_and_strips_serialized_image_array():
     cleaned = strip_image_payload_text(text)
     assert cleaned == "Before  after"
     assert encoded not in cleaned
+
+
+def test_strips_only_image_from_serialized_mixed_content():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    payload = json.dumps(
+        {
+            "items": [
+                {"type": "text", "text": "The chart is attached."},
+                {"type": "image", "mimeType": "image/png", "data": encoded},
+            ]
+        }
+    )
+
+    assert strip_image_payload_text(f"Result: {payload}") == (
+        "Result: The chart is attached."
+    )
+
+
+def test_does_not_reinsert_nested_serialized_image_string():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    nested_payload = json.dumps(
+        {"type": "image", "mimeType": "image/png", "data": encoded}
+    )
+    payload = json.dumps(
+        {
+            "content": nested_payload,
+            "items": [{"type": "text", "text": "The chart is attached."}],
+        }
+    )
+
+    cleaned = strip_image_payload_text(f"Result: {payload}")
+    assert cleaned == "Result: The chart is attached."
+    assert encoded not in cleaned
+
+
+def test_preserves_text_fragment_boundaries_when_stripping_image():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    payload = json.dumps(
+        [
+            {"type": "text", "text": "foo("},
+            {"type": "image", "mimeType": "image/png", "data": encoded},
+            {"type": "text", "text": ")"},
+        ]
+    )
+
+    assert strip_image_payload_text(payload) == "foo()"
+
+
+def test_skips_empty_wrapper_text_when_preserving_mixed_content():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    payload = json.dumps(
+        {
+            "text": "",
+            "items": [
+                {"type": "text", "text": "The chart is attached."},
+                {"type": "image", "mimeType": "image/png", "data": encoded},
+            ],
+        }
+    )
+
+    assert strip_image_payload_text(payload) == "The chart is attached."
+
+
+def test_sanitizes_image_payload_nested_in_text_item():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    nested_image = json.dumps(
+        {"type": "image", "mimeType": "image/png", "data": encoded}
+    )
+    payload = json.dumps(
+        {"items": [{"type": "text", "text": f"before {nested_image} after"}]}
+    )
+
+    cleaned = strip_image_payload_text(payload)
+    assert cleaned == "before  after"
+    assert encoded not in cleaned
+
+
+def test_preserves_whitespace_in_plain_string_fragments():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    payload = json.dumps(
+        {
+            "contents": [
+                "foo ",
+                {"type": "image", "mimeType": "image/png", "data": encoded},
+                " bar",
+            ]
+        }
+    )
+
+    assert strip_image_payload_text(payload) == "foo  bar"
 
 
 def test_strips_invalid_serialized_image_payload_without_displaying_base64():
