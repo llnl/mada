@@ -236,13 +236,15 @@ def _serialized_non_image_text(value: Any) -> str:
             if text:
                 return text
 
-    cleaned = _remove_serialized_image_payloads(value)
+    cleaned = remove_serialized_image_payloads(value)
     if cleaned in (None, {}, []):
         return ""
     return json.dumps(cleaned, indent=2, default=str)
 
 
-def _remove_serialized_image_payloads(value: Any) -> Any:
+def remove_serialized_image_payloads(
+    value: Any, *, strip_outer_whitespace: bool = False
+) -> Any:
     """Remove image descriptors while preserving arbitrary JSON fields."""
     if _is_serialized_image_payload(value):
         return None
@@ -250,16 +252,28 @@ def _remove_serialized_image_payloads(value: Any) -> Any:
         return {
             key: cleaned
             for key, item in value.items()
-            if (cleaned := _remove_serialized_image_payloads(item)) is not None
+            if (
+                cleaned := remove_serialized_image_payloads(
+                    item, strip_outer_whitespace=strip_outer_whitespace
+                )
+            )
+            is not None
         }
     if isinstance(value, list):
         return [
             cleaned
             for item in value
-            if (cleaned := _remove_serialized_image_payloads(item)) is not None
+            if (
+                cleaned := remove_serialized_image_payloads(
+                    item, strip_outer_whitespace=strip_outer_whitespace
+                )
+            )
+            is not None
         ]
     if isinstance(value, str):
-        return strip_image_payload_text(value, strip_outer_whitespace=False)
+        return strip_image_payload_text(
+            value, strip_outer_whitespace=strip_outer_whitespace
+        )
     return value
 
 

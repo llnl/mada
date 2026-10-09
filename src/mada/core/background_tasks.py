@@ -15,33 +15,12 @@ from typing import Any, Awaitable, Callable, Dict, Set
 
 from mada.core.database import ChatSessionManager
 from mada.core.media import (
-    _is_serialized_image_payload,
     extract_image_attachments,
+    remove_serialized_image_payloads,
     strip_image_payload_text,
 )
 
 CollectMessageResponse = Callable[..., Awaitable[str]]
-
-
-def _remove_image_payloads(value: Any) -> Any:
-    """Remove image descriptors while preserving other structured result data."""
-    if isinstance(value, dict):
-        if _is_serialized_image_payload(value):
-            return None
-        return {
-            key: cleaned
-            for key, item in value.items()
-            if (cleaned := _remove_image_payloads(item)) is not None
-        }
-    if isinstance(value, list):
-        return [
-            cleaned
-            for item in value
-            if (cleaned := _remove_image_payloads(item)) is not None
-        ]
-    if isinstance(value, str):
-        return strip_image_payload_text(value)
-    return value
 
 
 def _parse_background_task_descriptor_payload(value: str) -> Any | None:
@@ -316,7 +295,9 @@ class BackgroundTaskManager:
             if status == "completed":
                 raw_output = result.get("result", "")
                 attachments = extract_image_attachments(raw_output)
-                output = _remove_image_payloads(raw_output)
+                output = remove_serialized_image_payloads(
+                    raw_output, strip_outer_whitespace=True
+                )
                 if attachments and output in (None, {}, []):
                     output = ""
                 if not isinstance(output, str):
