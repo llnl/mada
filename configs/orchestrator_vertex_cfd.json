@@ -47,6 +47,9 @@
     "image_files": {
       "transport": "stdio",
       "command": "mada-read-image-mcp",
+      "env": {
+        "MADA_IMAGE_ROOTS": "${MADA_IMAGE_ROOTS:-../}"
+      },
       "description": "Reads approved local image files and returns MCP ImageContent"
     }
   },
