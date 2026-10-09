@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import asyncio
+import base64
 import time
 from types import SimpleNamespace
 
@@ -741,6 +742,27 @@ def test_completed_tool_work_is_serialized_for_synthesis():
 
     assert "call-1" in work
     assert "42" in work
+
+
+def test_completed_tool_work_strips_image_data_before_synthesis():
+    encoded = base64.b64encode(b"\x89PNG\r\n\x1a\ntest-image-data").decode("ascii")
+    work = MagenticOrchestrationStrategy._completed_tool_work(
+        {
+            "type": "tool_result",
+            "executor_id": "call-image",
+            "data": {
+                "summary": "plot ready",
+                "image": {
+                    "type": "image",
+                    "mimeType": "image/png",
+                    "data": encoded,
+                },
+            },
+        }
+    )
+
+    assert "plot ready" in work
+    assert encoded not in work
 
 
 def test_executor_completion_is_not_serialized_as_tool_work():

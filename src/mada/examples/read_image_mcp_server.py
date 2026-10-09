@@ -29,8 +29,15 @@ mcp = FastMCP("local-images")
 
 def _allowed_roots() -> list[Path]:
     configured = os.environ.get("MADA_IMAGE_ROOTS", "")
+    config_dir = (
+        Path(os.environ.get("MADA_CONFIG_DIR", str(Path.cwd()))).expanduser().resolve()
+    )
     roots = [
-        Path(item).expanduser().resolve()
+        (
+            Path(item).expanduser()
+            if Path(item).expanduser().is_absolute()
+            else config_dir / Path(item).expanduser()
+        ).resolve()
         for item in configured.split(os.pathsep)
         if item
     ]

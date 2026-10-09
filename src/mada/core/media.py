@@ -110,12 +110,6 @@ class RichResponse(str):
 
 
 def _decode_image_data(data: Any, media_type: Any) -> ImageAttachment | None:
-    if not isinstance(media_type, str):
-        return None
-    media_type = media_type.lower().split(";", 1)[0].strip()
-    if not media_type.startswith("image/"):
-        return None
-
     try:
         if isinstance(data, bytes):
             decoded = data
@@ -126,10 +120,15 @@ def _decode_image_data(data: Any, media_type: Any) -> ImageAttachment | None:
                 if not separator or ";base64" not in header:
                     return None
                 uri_media_type = header[5:].split(";", 1)[0]
-                if uri_media_type:
+                if isinstance(uri_media_type, str) and uri_media_type:
                     media_type = uri_media_type
             decoded = base64.b64decode(encoded, validate=True)
         else:
+            return None
+        if not isinstance(media_type, str):
+            return None
+        media_type = media_type.lower().split(";", 1)[0].strip()
+        if not media_type.startswith("image/"):
             return None
         return ImageAttachment.from_data(decoded, media_type)
     except (binascii.Error, ValueError) as exc:
@@ -160,10 +159,18 @@ def _is_serialized_image_payload(value: Any) -> bool:
         return False
     item_type = str(value.get("type") or "").lower()
     media_type = value.get("media_type") or value.get("mimeType")
+    uri = value.get("uri") or value.get("data")
+    has_image_data_uri = (
+        isinstance(uri, str)
+        and uri.lower().startswith("data:image/")
+        and ";base64," in uri.lower()
+    )
     return item_type == "image" or (
         item_type in {"data", "uri"}
-        and isinstance(media_type, str)
-        and media_type.lower().startswith("image/")
+        and (
+            has_image_data_uri
+            or (isinstance(media_type, str) and media_type.lower().startswith("image/"))
+        )
     )
 
 
@@ -175,6 +182,14 @@ def _contains_serialized_image_payload(value: Any) -> bool:
         return any(_contains_serialized_image_payload(item) for item in value.values())
     if isinstance(value, list):
         return any(_contains_serialized_image_payload(item) for item in value)
+    if isinstance(value, str):
+        for candidate in _json_candidates(value):
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if parsed != value and _contains_serialized_image_payload(parsed):
+                return True
     return False
 
 
@@ -220,7 +235,32 @@ def _serialized_non_image_text(value: Any) -> str:
             text = _serialized_non_image_text(value[key])
             if text:
                 return text
-    return ""
+
+    cleaned = _remove_serialized_image_payloads(value)
+    if cleaned in (None, {}, []):
+        return ""
+    return json.dumps(cleaned, indent=2, default=str)
+
+
+def _remove_serialized_image_payloads(value: Any) -> Any:
+    """Remove image descriptors while preserving arbitrary JSON fields."""
+    if _is_serialized_image_payload(value):
+        return None
+    if isinstance(value, dict):
+        return {
+            key: cleaned
+            for key, item in value.items()
+            if (cleaned := _remove_serialized_image_payloads(item)) is not None
+        }
+    if isinstance(value, list):
+        return [
+            cleaned
+            for item in value
+            if (cleaned := _remove_serialized_image_payloads(item)) is not None
+        ]
+    if isinstance(value, str):
+        return strip_image_payload_text(value, strip_outer_whitespace=False)
+    return value
 
 
 def extract_image_attachments(value: Any) -> list[ImageAttachment]:
@@ -247,8 +287,9 @@ def extract_image_attachments(value: Any) -> list[ImageAttachment]:
 
         if isinstance(item, str):
             for match in _IMAGE_MARKDOWN_RE.finditer(item):
-                media_type, encoded = match.group(1).split(";", 1)
-                add(_decode_image_data(f"data:{media_type};{encoded}", media_type))
+                data_uri = match.group(1)
+                media_type = data_uri[5:].split(";", 1)[0]
+                add(_decode_image_data(data_uri, media_type))
             for match in _IMAGE_DATA_URI_RE.finditer(item):
                 add(_decode_image_data(match.group(2), match.group(1)))
             for candidate in _json_candidates(item):
@@ -296,6 +337,11 @@ def extract_image_attachments(value: Any) -> list[ImageAttachment]:
             ):
                 if key in item:
                     visit(item[key])
+            # Workflow output events contain cumulative user-visible text.
+            # Do not interpret image-looking text there as a tool attachment;
+            # the response sanitizer handles it when the text is finalized.
+            if item_type not in {"output", "output_text"} and "text" in item:
+                visit(item["text"])
             return
 
         item_type = str(getattr(item, "type", "") or "").lower()
@@ -326,6 +372,8 @@ def extract_image_attachments(value: Any) -> list[ImageAttachment]:
         ):
             if hasattr(item, attribute):
                 visit(getattr(item, attribute, None))
+        if item_type not in {"output", "output_text"} and hasattr(item, "text"):
+            visit(getattr(item, "text", None))
 
     visit(value)
     return found

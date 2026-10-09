@@ -204,7 +204,9 @@ class TestContextSessions:
             database_config=MagicMock(session_id="primary", type="sqlite")
         )
 
-        selected = manager.set_context_sessions(["context-a", "primary", "context-a", ""])
+        selected = manager.set_context_sessions(
+            ["context-a", "primary", "context-a", ""]
+        )
 
         assert selected == ["context-a"]
         assert manager.get_context_session_ids() == ["context-a"]
@@ -297,6 +299,18 @@ class TestDeleteSession:
 
         manager.chat_db.delete_session.assert_called_once_with("current")
 
+    def test_delete_session_removes_deleted_id_from_context(self, mock_factory):
+        """Deleting a session also prunes it from loaded read-only context."""
+        manager = ChatSessionManager(
+            database_config=MagicMock(session_id="current", type="sqlite")
+        )
+        manager.set_context_sessions(["keep", "to-delete"])
+
+        manager.delete_session("to-delete")
+
+        assert manager.get_context_session_ids() == ["keep"]
+        assert manager.get_loaded_session_ids() == ["keep", "current"]
+
 
 class TestDeleteAllSessions:
     """
@@ -313,3 +327,4 @@ class TestDeleteAllSessions:
 
         manager.chat_db.flush_database.assert_called_once_with(confirm=False)
         assert manager.current_session_id is None
+        assert manager.get_context_session_ids() == []

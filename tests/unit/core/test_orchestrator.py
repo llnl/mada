@@ -322,9 +322,68 @@ async def test_load_persisted_context_messages_merges_context_sessions_before_pr
     messages = await orchestrator.load_persisted_context_messages()
 
     assert messages == [
+        {
+            "role": "system",
+            "content": (
+                "The following messages are from separate chat session context-a. "
+                "Treat them as reference context, not as one continuous conversation."
+            ),
+        },
         {"role": "assistant", "content": "from context-a"},
+        {
+            "role": "system",
+            "content": "End of reference chat session context-a.",
+        },
+        {
+            "role": "system",
+            "content": (
+                "The following messages are from separate chat session context-b. "
+                "Treat them as reference context, not as one continuous conversation."
+            ),
+        },
         {"role": "assistant", "content": "from context-b"},
+        {
+            "role": "system",
+            "content": "End of reference chat session context-b.",
+        },
         {"role": "assistant", "content": "from primary"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_context_only_transcript_excludes_active_primary_session(monkeypatch):
+    monkeypatch.setattr(
+        "mada.core.coordinator.chat_client_factory.create",
+        lambda _: object(),
+    )
+
+    session_manager = SimpleNamespace(
+        current_session_id="active",
+        get_loaded_session_ids=lambda **kwargs: ["active"],
+        load_history=lambda session_id=None: [
+            {"role": "assistant", "content": f"from {session_id}"}
+        ],
+    )
+    orchestrator = MADAOrchestrator(
+        model_config=OpenAIModelConfig(
+            provider="openai",
+            model="gpt-4.1-mini",
+            api_key="sk-test",
+            base_url="https://example.invalid/v1",
+        ),
+        session_manager=session_manager,
+    )
+
+    messages = await orchestrator.build_persisted_context_transcript(
+        context_session_ids=["context-a"],
+        include_primary_session=False,
+    )
+
+    assert [message["content"] for message in messages] == [
+        "The following messages are from separate chat session context-a. "
+        "Treat them as reference context, not as one continuous conversation.",
+        "from context-a",
+        "End of reference chat session context-a.",
     ]
 
 

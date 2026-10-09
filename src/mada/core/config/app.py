@@ -15,16 +15,16 @@ import json
 import logging
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
 from pathlib import Path
+from typing import Any, Dict, List
 
-from mada.core.config.agents import AgentConfig
 from mada.core.config.a2a import (
     A2AConfig,
     RemoteA2AAgentConfig,
     load_a2a_agents_config,
     load_a2a_config,
 )
+from mada.core.config.agents import AgentConfig
 from mada.core.config.database import DatabaseConfig, load_database_config
 from mada.core.config.interface import InterfaceConfig
 from mada.core.config.mcp_servers import MCPServerConfig
@@ -141,6 +141,18 @@ class AppConfig:
         if mcp_servers_entry:
             mcp_servers_cfg = {}
             for name, server_config in mcp_servers_entry.items():
+                server_command = str(server_config.get("command") or "")
+                is_local_image_server = (
+                    Path(server_command).name == "mada-read-image-mcp"
+                )
+                if is_local_image_server and config_dir is not None:
+                    server_config = {
+                        **server_config,
+                        "env": {
+                            **server_config.get("env", {}),
+                            "MADA_CONFIG_DIR": str(Path(config_dir).resolve()),
+                        },
+                    }
                 if "python_executable" not in server_config:
                     server_config = {**server_config, "python_executable": python_exe}
                 mcp_servers_cfg[name] = MCPServerConfig(**server_config)

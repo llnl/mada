@@ -17,8 +17,8 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Sequence, Tuple
 
-from mada.core.database import BaseChatDatabase, ChatDatabaseFactory
 from mada.core.config import DatabaseConfig, SQLiteConfig
+from mada.core.database import BaseChatDatabase, ChatDatabaseFactory
 from mada.core.media import ImageAttachment
 
 
@@ -296,6 +296,12 @@ class ChatSessionManager:
         """
         return self.chat_db.list_sessions()
 
+    def session_exists(self, session_id: str | None) -> bool:
+        """Return whether a session is currently present in the database."""
+        if not session_id:
+            return False
+        return any(existing_id == session_id for existing_id, _ in self.list_sessions())
+
     def delete_session(self, session_id: str = None):
         """
         Given a session ID, delete the session from the database.
@@ -308,6 +314,11 @@ class ChatSessionManager:
         if session_id is None:
             session_id = self.current_session_id
         self.chat_db.delete_session(session_id)
+        self.context_session_ids = [
+            existing_session_id
+            for existing_session_id in self.context_session_ids
+            if existing_session_id != session_id
+        ]
 
     def delete_all_sessions(self, confirm: bool = True):
         """
@@ -322,3 +333,4 @@ class ChatSessionManager:
         """
         self.chat_db.flush_database(confirm=confirm)
         self.current_session_id = None
+        self.context_session_ids = []

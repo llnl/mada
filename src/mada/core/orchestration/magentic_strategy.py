@@ -1613,7 +1613,7 @@ Guidelines:
                 except (TypeError, ValueError):
                     text = str(candidate)
             if text.strip():
-                serialized.append(text.strip())
+                serialized.append(strip_image_payload_text(text.strip()))
 
         if not serialized:
             return ""
@@ -2059,6 +2059,10 @@ Guidelines:
                         history = await load_context(
                             primary_session_id=persistence_session_id,
                             context_session_ids=context_session_ids,
+                            include_primary_session=(
+                                not isolated_session
+                                or persistence_session_id is not None
+                            ),
                         )
                     else:
                         history = orchestrator.session_manager.load_history()
@@ -2117,7 +2121,7 @@ Guidelines:
                             descriptor,
                             persist_result=False,
                         )
-                elif persistence_session_id is not None:
+                else:
                     persisted_reply = self._reply_for_persistence(
                         aggregated_assistant_reply,
                         background_task_descriptors,
@@ -2142,6 +2146,7 @@ Guidelines:
                     history_lengths={},
                     image_attachments=image_attachments,
                     background_task_descriptors=background_task_descriptors,
+                    persistence_session_id=persistence_session_id,
                 )
 
             output = aggregated_assistant_reply or streamed_text

@@ -17,14 +17,14 @@ import logging
 import os
 import re
 import traceback
+from contextlib import AsyncExitStack
 from contextvars import ContextVar, Token
 from pathlib import Path
 from types import TracebackType
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Type
-from contextlib import AsyncExitStack
+
 import httpcore2
 import httpx2
-
 from agent_framework import (
     Agent,
     AgentSession,
@@ -35,13 +35,13 @@ from agent_framework import (
 )
 from agent_framework.exceptions import ToolException
 
-from mada.core.background_tasks import BackgroundTaskManager
 from mada.core.a2a_client import RemoteA2AClient
+from mada.core.background_tasks import BackgroundTaskManager
 from mada.core.config import (
     AgentConfig,
     DatabaseConfig,
-    ModelConfig,
     MCPServerConfig,
+    ModelConfig,
     OrchestrationConfig,
     RemoteA2AAgentConfig,
 )
@@ -53,7 +53,6 @@ from mada.core.media import (
     extract_image_attachments,
     strip_image_payload_text,
 )
-from mada.core.skills.skill_registry import SkillRegistry
 from mada.core.orchestration import (
     AgentAsToolOrchestrationStrategy,
     BaseOrchestrationStrategy,
@@ -64,6 +63,7 @@ from mada.core.orchestration.stream_events import (
     image_attachment,
     tool_call_name,
 )
+from mada.core.skills.skill_registry import SkillRegistry
 from mada.core.tls import resolve_httpx_verify_value
 
 try:
@@ -1137,6 +1137,7 @@ Guidelines:
         self,
         primary_session_id: Optional[str] = None,
         context_session_ids: Optional[List[str]] = None,
+        include_primary_session: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Load and merge persisted chat history for the selected session context.
@@ -1152,11 +1153,55 @@ Guidelines:
             messages preserved in each session's stored order.
         """
         merged_messages = []
-        for session_id in self.resolve_loaded_session_ids(
-            primary_session_id=primary_session_id,
-            context_session_ids=context_session_ids,
+        if include_primary_session:
+            loaded_session_ids = self.resolve_loaded_session_ids(
+                primary_session_id=primary_session_id,
+                context_session_ids=context_session_ids,
+            )
+        else:
+            loaded_session_ids = []
+            selected_context_session_ids = (
+                self.session_manager.get_context_session_ids()
+                if context_session_ids is None
+                else context_session_ids
+            )
+            for session_id in selected_context_session_ids:
+                if session_id and session_id not in loaded_session_ids:
+                    loaded_session_ids.append(session_id)
+        resolved_primary_session_id = (
+            None
+            if not include_primary_session
+            else primary_session_id
+            or getattr(self.session_manager, "current_session_id", None)
+        )
+        if (
+            include_primary_session
+            and resolved_primary_session_id is None
+            and loaded_session_ids
         ):
+            resolved_primary_session_id = loaded_session_ids[-1]
+        for session_id in loaded_session_ids:
+            if session_id != resolved_primary_session_id:
+                merged_messages.extend(
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                f"The following messages are from separate chat "
+                                f"session {session_id}. Treat them as reference "
+                                "context, not as one continuous conversation."
+                            ),
+                        }
+                    ]
+                )
             merged_messages.extend(self.session_manager.load_history(session_id))
+            if session_id != resolved_primary_session_id:
+                merged_messages.append(
+                    {
+                        "role": "system",
+                        "content": f"End of reference chat session {session_id}.",
+                    }
+                )
         return merged_messages
 
     async def build_persisted_context_transcript(
@@ -1164,6 +1209,7 @@ Guidelines:
         latest_user_message: Optional[str] = None,
         primary_session_id: Optional[str] = None,
         context_session_ids: Optional[List[str]] = None,
+        include_primary_session: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Build a normalized transcript from the selected persisted session context.
@@ -1183,6 +1229,7 @@ Guidelines:
         transcript_messages = await self.load_persisted_context_messages(
             primary_session_id=primary_session_id,
             context_session_ids=context_session_ids,
+            include_primary_session=include_primary_session,
         )
         if latest_user_message is not None:
             transcript_messages = [
@@ -1295,7 +1342,7 @@ Guidelines:
         isolated_session: bool,
         primary_session_id: Optional[str] = None,
         context_session_ids: Optional[List[str]] = None,
-    ) -> Tuple[Optional[int], AgentSession, Dict[str, int], bool]:
+    ) -> Tuple[Optional[int], AgentSession, Dict[str, int], bool, Tuple[str, ...]]:
         """
         Create the agent session used for one message turn.
 
@@ -1310,14 +1357,15 @@ Guidelines:
 
         Returns:
             Tuple containing the turn ID, the run session, provider message
-            history lengths captured before streaming, and whether the next
-            prompt should be rebuilt from persisted transcript history.
+            history lengths captured before streaming, whether the next prompt
+            should be rebuilt from persisted transcript history, and the
+            context signature used to create the shared run.
 
         Raises:
             RuntimeError: If the shared orchestrator session is not initialized.
         """
         if isolated_session:
-            return None, self.planning_agent.create_session(), {}, False
+            return None, self.planning_agent.create_session(), {}, False, ()
 
         async with self._session_lock:
             if self.session is None:
@@ -1348,6 +1396,7 @@ Guidelines:
             run_session,
             history_lengths,
             rebuild_from_persisted_context,
+            selected_session_signature,
         )
 
     async def _load_history_for_session(self, session_id: str) -> List[Dict]:
@@ -1409,6 +1458,12 @@ Guidelines:
             Exception: Propagates database persistence failures.
         """
         if session_id is not None:
+            session_exists = getattr(self.session_manager, "session_exists", None)
+            if callable(session_exists) and not session_exists(session_id):
+                LOG.info(
+                    "Skipping detached response for deleted session %s", session_id
+                )
+                return
             async with self._session_lock:
                 previous_session_id = self.session_manager.current_session_id
                 self.session_manager.current_session_id = session_id
@@ -1431,7 +1486,7 @@ Guidelines:
         if not already_started:
             self.session_manager.add_message("user", message)
 
-        # Skip persisting duplicate background ACKs
+            # Skip persisting duplicate background ACKs
         if assistant_reply.strip() or image_attachments:
             from mada.core.background_tasks import is_background_task_start_ack
 
@@ -1471,6 +1526,8 @@ Guidelines:
         history_lengths: Dict[str, int],
         image_attachments: Optional[List[ImageAttachment]] = None,
         background_task_descriptors: Optional[List[str]] = None,
+        session_context_signature: Optional[Tuple[str, ...]] = None,
+        persistence_session_id: Optional[str] = None,
     ) -> None:
         """
         Queue and commit a completed shared-session turn in turn order.
@@ -1508,6 +1565,8 @@ Guidelines:
                 "assistant_reply": assistant_reply,
                 "run_session": run_session,
                 "history_lengths": history_lengths,
+                "session_context_signature": session_context_signature,
+                "persistence_session_id": persistence_session_id,
                 "image_attachments": image_attachments or [],
                 "background_task_descriptors": background_task_descriptors or [],
             }
@@ -1537,7 +1596,9 @@ Guidelines:
                 continue
 
             self._merge_completed_session(
-                completed["run_session"], completed["history_lengths"]
+                completed["run_session"],
+                completed["history_lengths"],
+                completed.get("session_context_signature"),
             )
             self._persist_completed_turn(completed)
             self._next_turn_commit_id += 1
@@ -1546,6 +1607,7 @@ Guidelines:
         self,
         completed_session: Optional[AgentSession],
         history_lengths: Dict[str, int],
+        session_context_signature: Optional[Tuple[str, ...]] = None,
     ) -> None:
         """
         Merge one completed run session into the shared orchestrator session.
@@ -1562,6 +1624,12 @@ Guidelines:
         # Skip merging if orchestrator session not initialized (magentic mode)
         # or if no completed session provided
         if self.session is None or completed_session is None:
+            return
+        if (
+            session_context_signature is not None
+            and session_context_signature != self._shared_session_context_signature
+        ):
+            self._shared_session_requires_context_rebuild = True
             return
 
         for provider_name, source_state in completed_session.state.items():
@@ -1609,45 +1677,65 @@ Guidelines:
         assistant_reply = completed["assistant_reply"]
         image_attachments = completed.get("image_attachments", [])
         background_task_descriptors = completed.get("background_task_descriptors", [])
-
-        # Check if interface layer already persisted a background-start ACK
-        already_started = (
-            self.background_tasks.user_message_already_started_background_task(message)
-        )
-
-        if not already_started:
-            self.session_manager.add_message("user", message)
-
-        # Skip persisting duplicate background ACKs
-        if assistant_reply.strip() or image_attachments:
-            from mada.core.background_tasks import is_background_task_start_ack
-
-            is_bg_ack = is_background_task_start_ack(assistant_reply)
-            if already_started and is_bg_ack:
-                _, separator, answer = assistant_reply.partition("\n")
-                if separator and answer.strip():
-                    self.session_manager.add_message(
-                        "assistant",
-                        answer.strip(),
-                        attachments=image_attachments,
-                    )
-            else:
-                persisted_reply = (
-                    assistant_reply
-                    if assistant_reply.strip()
-                    else self._image_attachment_transcript(image_attachments)
-                )
-                self.session_manager.add_message(
-                    "assistant", persisted_reply, attachments=image_attachments
-                )
-
-        self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-            assistant_reply
-        )
-        for descriptor in background_task_descriptors:
-            self.background_tasks.start_background_tool_poll_from_reply_if_needed(
-                descriptor
+        persistence_session_id = completed.get("persistence_session_id")
+        session_exists = getattr(self.session_manager, "session_exists", None)
+        if (
+            persistence_session_id is not None
+            and callable(session_exists)
+            and not session_exists(persistence_session_id)
+        ):
+            LOG.info(
+                "Skipping detached turn commit for deleted session %s",
+                persistence_session_id,
             )
+            return
+        previous_session_id = None
+        if persistence_session_id is not None:
+            previous_session_id = self.session_manager.current_session_id
+            self.session_manager.current_session_id = persistence_session_id
+
+        try:
+            # Check if interface layer already persisted a background-start ACK
+            already_started = (
+                self.background_tasks.user_message_already_started_background_task(
+                    message
+                )
+            )
+
+            if not already_started:
+                self.session_manager.add_message("user", message)
+
+            # Skip persisting duplicate background ACKs
+            if assistant_reply.strip() or image_attachments:
+                from mada.core.background_tasks import is_background_task_start_ack
+
+                is_bg_ack = is_background_task_start_ack(assistant_reply)
+                if already_started and is_bg_ack:
+                    _, separator, answer = assistant_reply.partition("\n")
+                    if separator and answer.strip():
+                        self.session_manager.add_message(
+                            "assistant", answer.strip(), attachments=image_attachments
+                        )
+                else:
+                    persisted_reply = (
+                        assistant_reply
+                        if assistant_reply.strip()
+                        else self._image_attachment_transcript(image_attachments)
+                    )
+                    self.session_manager.add_message(
+                        "assistant", persisted_reply, attachments=image_attachments
+                    )
+
+            self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                assistant_reply
+            )
+            for descriptor in background_task_descriptors:
+                self.background_tasks.start_background_tool_poll_from_reply_if_needed(
+                    descriptor
+                )
+        finally:
+            if previous_session_id is not None:
+                self.session_manager.current_session_id = previous_session_id
 
     async def collect_message_response(
         self,

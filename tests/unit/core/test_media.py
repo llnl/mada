@@ -1,5 +1,6 @@
 import base64
 import json
+from contextvars import ContextVar
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -107,7 +108,18 @@ def test_extracts_and_strips_markdown_data_uri():
     attachments = extract_image_attachments(text)
 
     assert len(attachments) == 1
+    assert attachments[0].data == PNG_DATA
     assert strip_image_payload_text(text) == "Here is the plot."
+
+
+def test_extracts_structured_data_uri_without_mime_type():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    payload = {"type": "uri", "uri": f"data:image/png;base64,{encoded}"}
+
+    attachments = extract_image_attachments(payload)
+
+    assert len(attachments) == 1
+    assert attachments[0].data == PNG_DATA
 
 
 def test_extracts_and_strips_serialized_image_array():
@@ -202,6 +214,42 @@ def test_sanitizes_image_payload_nested_in_text_item():
 
     cleaned = strip_image_payload_text(payload)
     assert cleaned == "before  after"
+    assert encoded not in cleaned
+
+
+def test_extracts_and_strips_image_nested_in_serialized_text_item():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    nested_image = json.dumps(
+        {"type": "image", "mimeType": "image/png", "data": encoded}
+    )
+    text = json.dumps(
+        {"items": [{"type": "text", "text": f"before {nested_image} after"}]}
+    )
+
+    attachments = extract_image_attachments(text)
+
+    assert len(attachments) == 1
+    assert strip_image_payload_text(text) == "before  after"
+
+
+def test_preserves_arbitrary_fields_when_stripping_mixed_image_json():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    payload = json.dumps(
+        {
+            "summary": "done",
+            "score": 0.95,
+            "plot": {
+                "type": "image",
+                "mimeType": "image/png",
+                "data": encoded,
+            },
+        }
+    )
+
+    cleaned = strip_image_payload_text(payload)
+
+    assert "done" in cleaned
+    assert "0.95" in cleaned
     assert encoded not in cleaned
 
 
@@ -302,6 +350,43 @@ async def test_agent_as_tool_streams_plain_text_incrementally():
     ]
 
     assert output == ["first", " second"]
+
+
+@pytest.mark.asyncio
+async def test_agent_as_tool_openai_stream_forwards_captured_image():
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png")
+    strategy = AgentAsToolOrchestrationStrategy()
+    image_capture = ContextVar("test_openai_image_capture", default=None)
+
+    def begin_image_capture():
+        captured = []
+        return image_capture.set(captured), captured
+
+    def end_image_capture(token):
+        image_capture.reset(token)
+
+    def capture_image_attachments(_value):
+        image_capture.get().append(attachment)
+
+    async def stream_response(*args, **kwargs):
+        capture_image_attachments(attachment)
+        yield InternalImageSignal(attachment)
+        yield "answer"
+
+    strategy._stream_response = stream_response
+    orchestrator = SimpleNamespace(
+        planning_agent=SimpleNamespace(create_session=lambda: object()),
+        _normalize_transcript_messages=lambda messages: messages,
+        build_prompt_from_transcript=lambda messages: "prompt",
+        _begin_image_capture=begin_image_capture,
+        _end_image_capture=end_image_capture,
+        _capture_image_attachments=capture_image_attachments,
+    )
+
+    output = [item async for item in strategy.process_openai_messages(orchestrator, [])]
+
+    assert sum(isinstance(item, InternalImageSignal) for item in output) == 1
+    assert "answer" in output
 
 
 @pytest.mark.asyncio

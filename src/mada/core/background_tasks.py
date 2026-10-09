@@ -14,9 +14,34 @@ import json
 from typing import Any, Awaitable, Callable, Dict, Set
 
 from mada.core.database import ChatSessionManager
-
+from mada.core.media import (
+    _is_serialized_image_payload,
+    extract_image_attachments,
+    strip_image_payload_text,
+)
 
 CollectMessageResponse = Callable[..., Awaitable[str]]
+
+
+def _remove_image_payloads(value: Any) -> Any:
+    """Remove image descriptors while preserving other structured result data."""
+    if isinstance(value, dict):
+        if _is_serialized_image_payload(value):
+            return None
+        return {
+            key: cleaned
+            for key, item in value.items()
+            if (cleaned := _remove_image_payloads(item)) is not None
+        }
+    if isinstance(value, list):
+        return [
+            cleaned
+            for item in value
+            if (cleaned := _remove_image_payloads(item)) is not None
+        ]
+    if isinstance(value, str):
+        return strip_image_payload_text(value)
+    return value
 
 
 def _parse_background_task_descriptor_payload(value: str) -> Any | None:
@@ -114,6 +139,11 @@ class BackgroundTaskManager:
         self._hidden_task_ids: Set[str] = set()
         self._background_tool_poll_tasks: Dict[str, asyncio.Task[None]] = {}
         self._active_agent_queries = 0
+
+    def _session_still_exists(self, session_id: str | None) -> bool:
+        """Check session presence while remaining compatible with older managers."""
+        checker = getattr(self.session_manager, "session_exists", None)
+        return True if not callable(checker) else checker(session_id)
 
     def start_background_tool_poll_from_reply_if_needed(
         self,
@@ -284,9 +314,15 @@ class BackgroundTaskManager:
                 continue
 
             if status == "completed":
-                output = result.get("result", "")
+                raw_output = result.get("result", "")
+                attachments = extract_image_attachments(raw_output)
+                output = _remove_image_payloads(raw_output)
+                if attachments and output in (None, {}, []):
+                    output = ""
                 if not isinstance(output, str):
                     output = json.dumps(output, indent=2, default=str)
+                else:
+                    output = strip_image_payload_text(output)
                 message = (
                     f"[{task_id}] Background tool `{tool_name}` completed:\n{output}"
                 )
@@ -301,9 +337,26 @@ class BackgroundTaskManager:
                 )
 
             if session_id is not None:
-                self.session_manager.chat_db.add_message(
-                    session_id, "assistant", message
-                )
+                # A detached task must not resurrect a chat deleted while it
+                # was running; both database backends create missing sessions
+                # when inserting a message.
+                if not self._session_still_exists(session_id):
+                    async with self._task_lock:
+                        self._pending_tasks.pop(task_id, None)
+                        self._task_results.pop(task_id, None)
+                        self._background_tool_poll_tasks.pop(task_id, None)
+                    return
+                if status == "completed" and attachments:
+                    self.session_manager.chat_db.add_message(
+                        session_id,
+                        "assistant",
+                        message,
+                        attachments=attachments,
+                    )
+                else:
+                    self.session_manager.chat_db.add_message(
+                        session_id, "assistant", message
+                    )
             async with self._task_lock:
                 self._pending_tasks.pop(task_id, None)
             return
@@ -342,6 +395,10 @@ class BackgroundTaskManager:
         # can start after the interface has switched to another chat session.
         originating_session_id = self.session_manager.current_session_id
         originating_context_session_ids = self.session_manager.get_context_session_ids()
+        if originating_session_id and not self._session_still_exists(
+            originating_session_id
+        ):
+            self.session_manager.create_new_session(originating_session_id)
 
         async with self._task_lock:
             use_isolated_session = self._active_agent_queries > 0 or any(
@@ -358,12 +415,10 @@ class BackgroundTaskManager:
             self.collect_message_response(
                 user_input,
                 isolated_session=use_isolated_session,
-                persistence_session_id=(
-                    originating_session_id if use_isolated_session else None
-                ),
-                context_session_ids=(
-                    originating_context_session_ids if use_isolated_session else None
-                ),
+                # Bind every detached query to the chat/context selected when
+                # it was submitted, including the first shared-session query.
+                persistence_session_id=originating_session_id,
+                context_session_ids=originating_context_session_ids,
                 first_tool_call=first_tool_call,
                 first_tool_state=first_tool_state,
             )

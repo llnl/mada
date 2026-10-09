@@ -9,6 +9,7 @@ for the Gradio interface, adapted to work with MADA's architecture.
 """
 
 import logging
+import os
 import tempfile
 import traceback
 from collections.abc import AsyncGenerator
@@ -91,15 +92,26 @@ class MCPGradioClientSession:
         )
         self._formatted_history_source: list[dict[str, Any]] | None = None
         self._formatted_history_cache: list[dict[str, Any]] | None = None
+        self._attachment_file_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     def _attachment_file_message(self, attachment: ImageAttachment) -> dict[str, Any]:
         """Save an attachment in Gradio's cache and return chat file content."""
+        cache = getattr(self, "_attachment_file_cache", None)
+        if cache is None:
+            cache = self._attachment_file_cache = {}
+        cache_key = (attachment.digest, attachment.filename, attachment.media_type)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            cached_path = cached.get("file", {}).get("path")
+            if cached_path is not None and os.path.isfile(cached_path):
+                return cached
+
         path = processing_utils.save_bytes_to_cache(
             attachment.data,
             attachment.filename,
             self._attachment_cache.name,
         )
-        return {
+        message = {
             "type": "file",
             "alt_text": attachment.filename,
             "file": {
@@ -108,6 +120,8 @@ class MCPGradioClientSession:
                 "mime_type": attachment.media_type,
             },
         }
+        cache[cache_key] = message
+        return message
 
     @staticmethod
     def _coerce_attachment(value: Any) -> ImageAttachment:
@@ -682,7 +696,7 @@ class MCPGradioClientSession:
         history: list[Any],
         session_label: str | None,
         awaiting_response: bool = False,
-    ) -> tuple[Any, str, gr.update]:
+    ) -> tuple[Any, str, gr.update, gr.update, gr.update]:
         """
         Refresh chat history and background task status for the Gradio UI.
 
@@ -694,23 +708,36 @@ class MCPGradioClientSession:
 
         Returns:
             Tuple containing the refreshed chat history or `gr.skip()`, the task
-            status markdown, and a session-list update.
+            status markdown, session-list update, context choices update, and
+            context status update.
 
         Raises:
             Exception: Propagates unexpected chat-history load failures.
         """
         task_status = await self.get_task_status_markdown()
         session_list_update = gr.skip()
+        context_choices_update = gr.skip()
+        context_status_update = gr.skip()
         current_session_label = self._current_session_label()
         if current_session_label != session_label:
             session_list_update = self.update_session_choices()
+            context_choices_update = self.update_context_session_choices(
+                current_session_label
+            )
+            context_status_update = self.get_context_status_markdown()
 
         if (
             awaiting_response
             or not self.orchestrator
             or await self.orchestrator.background_tasks.count_pending_tasks() > 0
         ):
-            return gr.skip(), task_status, session_list_update
+            return (
+                gr.skip(),
+                task_status,
+                session_list_update,
+                context_choices_update,
+                context_status_update,
+            )
 
         raw_history = self.session_manager.load_history()
         if raw_history == self._formatted_history_source:
@@ -720,9 +747,21 @@ class MCPGradioClientSession:
             self._formatted_history_source = raw_history
             self._formatted_history_cache = persisted_history
         if persisted_history == list(history):
-            return gr.skip(), task_status, session_list_update
+            return (
+                gr.skip(),
+                task_status,
+                session_list_update,
+                context_choices_update,
+                context_status_update,
+            )
 
-        return persisted_history, task_status, session_list_update
+        return (
+            persisted_history,
+            task_status,
+            session_list_update,
+            context_choices_update,
+            context_status_update,
+        )
 
     async def cleanup(self) -> None:
         """

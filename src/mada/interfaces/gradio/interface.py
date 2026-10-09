@@ -168,17 +168,27 @@ class MADAMultiAgentGradioInterface:
             yield history, False
             return
 
-        self.client.ensure_active_session_visible()
+        # Do not materialize a new primary session for requests that will be
+        # rejected because the client is not connected or initialized.
+        if self.client.initialized and self.client.orchestrator:
+            self.client.ensure_active_session_visible()
 
         updated_history = list(history or [])
-        async for response in self.client.process_message(
-            message, updated_history, *additional_inputs
-        ):
-            updated_history[-1] = {
-                "role": "assistant",
-                "content": response,
-            }
+        try:
+            async for response in self.client.process_message(
+                message, updated_history, *additional_inputs
+            ):
+                updated_history[-1] = {
+                    "role": "assistant",
+                    "content": response,
+                }
+                yield updated_history, True
+        except Exception:
+            # Ensure the timer can resume refreshing if processing fails before
+            # the stream reaches its normal end.
             yield updated_history, False
+            raise
+        yield updated_history, False
 
     @staticmethod
     def _toggle_focus_mode(is_focused: bool):
@@ -219,9 +229,7 @@ class MADAMultiAgentGradioInterface:
                     a2a_agents=getattr(self.client, "a2a_agents", {}),
                 )
 
-                connect_button = gr.Button(
-                    "Connect to MCP Servers", variant="primary"
-                )
+                connect_button = gr.Button("Connect to MCP Servers", variant="primary")
 
                 connect_button.click(
                     fn=self.client.connect_servers,
@@ -232,9 +240,7 @@ class MADAMultiAgentGradioInterface:
 
             if self.in_situ_viz_config is not None:
                 sim_server = self.in_situ_viz_config["sim_server"]
-                update_time = self.in_situ_viz_config[
-                    "update_time"
-                ]  # in seconds
+                update_time = self.in_situ_viz_config["update_time"]  # in seconds
 
                 gr.Markdown(
                     f"### Simulation Visualization: Updates every {update_time} seconds."
@@ -326,7 +332,9 @@ class MADAMultiAgentGradioInterface:
                             elem_id="mada-context-status",
                         )
 
-                    with gr.Accordion("Task Status", open=False, elem_id="mada-task-status-accordion"):
+                    with gr.Accordion(
+                        "Task Status", open=False, elem_id="mada-task-status-accordion"
+                    ):
                         task_status = gr.Markdown(
                             "### Task Status\nNo background tasks yet.",
                             elem_id="mada-task-status",
@@ -349,7 +357,13 @@ class MADAMultiAgentGradioInterface:
             task_refresh.tick(
                 fn=self.client.refresh_chat_and_task_status,
                 inputs=[chatbot, session_list, self.awaiting_response],
-                outputs=[chatbot, task_status, session_list],
+                outputs=[
+                    chatbot,
+                    task_status,
+                    session_list,
+                    context_sessions,
+                    context_status,
+                ],
                 show_progress="hidden",
                 concurrency_limit=1,
             )

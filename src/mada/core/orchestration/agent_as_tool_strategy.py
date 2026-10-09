@@ -5,6 +5,7 @@
 Agent-as-tool orchestration strategy implementation.
 """
 
+import inspect
 import json
 import logging
 import re
@@ -21,6 +22,7 @@ from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
 from mada.core.orchestration.stream_events import (
     InternalImageSignal,
     InternalResponseReplacement,
+    image_attachment,
 )
 
 if TYPE_CHECKING:
@@ -317,20 +319,43 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         transcript_messages = orchestrator._normalize_transcript_messages(messages)
         prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
         request_session = orchestrator.planning_agent.create_session()
+        capture_token = None
+        captured_images = []
+        captured_image_index = 0
+        emitted_image_digests: set[str] = set()
 
         try:
+            if hasattr(orchestrator, "_begin_image_capture"):
+                capture_token, captured_images = orchestrator._begin_image_capture()
             async for chunk in self._stream_response(
                 orchestrator,
                 prompt,
                 session=request_session,
                 include_tool_notices=True,
             ):
+                streamed_attachment = image_attachment(chunk)
+                if streamed_attachment is not None:
+                    emitted_image_digests.add(streamed_attachment.digest)
+                for attachment in captured_images[captured_image_index:]:
+                    if attachment.digest not in emitted_image_digests:
+                        emitted_image_digests.add(attachment.digest)
+                        yield InternalImageSignal(attachment)
+                captured_image_index = len(captured_images)
                 yield chunk
+            for attachment in captured_images[captured_image_index:]:
+                if attachment.digest not in emitted_image_digests:
+                    emitted_image_digests.add(attachment.digest)
+                    yield InternalImageSignal(attachment)
         except Exception as e:
             error_msg = f"Error processing message: {e}"
             LOG.error(error_msg)
             traceback.print_exc()
             yield error_msg
+        finally:
+            if capture_token is not None and hasattr(
+                orchestrator, "_end_image_capture"
+            ):
+                orchestrator._end_image_capture(capture_token)
 
     async def process_message(
         self,
@@ -366,31 +391,65 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         response_started = False
 
         try:
-            (
-                turn_id,
-                run_session,
-                history_lengths,
-                rebuild_from_persisted_context,
-            ) = await orchestrator._create_run_session(
+            run_session_result = await orchestrator._create_run_session(
                 isolated_session,
                 primary_session_id=persistence_session_id,
                 context_session_ids=context_session_ids,
             )
+            # Keep compatibility with strategy doubles and older orchestrator
+            # implementations that return the original four-value tuple.
+            if len(run_session_result) == 4:
+                (
+                    turn_id,
+                    run_session,
+                    history_lengths,
+                    rebuild_from_persisted_context,
+                ) = run_session_result
+                session_context_signature = None
+            else:
+                (
+                    turn_id,
+                    run_session,
+                    history_lengths,
+                    rebuild_from_persisted_context,
+                    session_context_signature,
+                ) = run_session_result
 
             prompt = message
             should_rebuild_prompt_from_persisted_context = (
                 isolated_session
-                and persistence_session_id is not None
-                and not stateless_session
+                and (
+                    persistence_session_id is not None
+                    or context_session_ids is not None
+                )
             ) or rebuild_from_persisted_context
             if should_rebuild_prompt_from_persisted_context:
-                transcript_messages = (
-                    await orchestrator.build_persisted_context_transcript(
-                        latest_user_message=message,
-                        primary_session_id=persistence_session_id,
-                        context_session_ids=context_session_ids,
+                transcript_builder = orchestrator.build_persisted_context_transcript
+                transcript_kwargs = {
+                    "latest_user_message": message,
+                    "primary_session_id": persistence_session_id,
+                    "context_session_ids": context_session_ids,
+                }
+                try:
+                    transcript_signature = inspect.signature(transcript_builder)
+                    transcript_parameters = transcript_signature.parameters
+                    supports_primary_toggle = (
+                        "include_primary_session" in transcript_parameters
+                        or any(
+                            parameter.kind is inspect.Parameter.VAR_KEYWORD
+                            for parameter in transcript_parameters.values()
+                        )
                     )
-                )
+                except (TypeError, ValueError):
+                    supports_primary_toggle = False
+                if supports_primary_toggle:
+                    # Shared-session rebuilds must retain the active chat;
+                    # context-only transcripts are only appropriate for an
+                    # isolated turn with no primary persistence target.
+                    transcript_kwargs["include_primary_session"] = (
+                        not isolated_session or persistence_session_id is not None
+                    )
+                transcript_messages = await transcript_builder(**transcript_kwargs)
                 prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
 
             if hasattr(orchestrator, "_begin_image_capture"):
@@ -495,6 +554,8 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 history_lengths,
                 image_attachments=image_attachments,
                 background_task_descriptors=background_task_descriptors,
+                session_context_signature=session_context_signature,
+                persistence_session_id=persistence_session_id,
             )
         except Exception as e:
             yield orchestrator._process_message_error(e)
