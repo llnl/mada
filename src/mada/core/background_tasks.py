@@ -14,6 +14,11 @@ import json
 from typing import Any, Awaitable, Callable, Dict, Set
 
 from mada.core.database import ChatSessionManager
+from mada.core.media import (
+    ImageAttachment,
+    extract_image_attachments,
+    strip_image_payload_text,
+)
 
 
 CollectMessageResponse = Callable[..., Awaitable[str]]
@@ -48,15 +53,138 @@ def _parse_background_task_descriptor_payload(value: str) -> Any | None:
     return None
 
 
+def _background_task_result_from_payload(
+    value: Any, task_id: str
+) -> Dict[str, Any] | None:
+    """Find a task-result descriptor inside common MCP response containers."""
+    candidates: list[Dict[str, Any]] = []
+    visited: set[int] = set()
+
+    def visit(item: Any) -> None:
+        if item is None or isinstance(item, (int, float, bool)):
+            return
+        if isinstance(item, bytes):
+            visit(item.decode("utf-8", errors="replace"))
+            return
+        if isinstance(item, str):
+            parsed = _parse_background_task_descriptor_payload(item)
+            if parsed is not None and parsed != item:
+                visit(parsed)
+            return
+
+        item_id = id(item)
+        if item_id in visited:
+            return
+        visited.add(item_id)
+
+        if isinstance(item, (list, tuple, set)):
+            for child in item:
+                visit(child)
+            return
+        if isinstance(item, dict):
+            if "status" in item and (
+                not item.get("task_id") or str(item.get("task_id")) == str(task_id)
+            ):
+                candidates.append(item)
+            for key in (
+                "content",
+                "contents",
+                "data",
+                "items",
+                "output",
+                "outputs",
+                "result",
+                "tool_result",
+                "function_result",
+            ):
+                if key in item:
+                    visit(item[key])
+            return
+
+        text = getattr(item, "text", None)
+        if text is not None:
+            visit(text)
+        for attribute in ("content", "contents", "data", "items", "result"):
+            if hasattr(item, attribute):
+                visit(getattr(item, attribute, None))
+
+    visit(value)
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if str(candidate.get("status")).lower() != "not_found"
+        ),
+        candidates[0] if candidates else None,
+    )
+
+
+def _attachment_digests(attachments: Any) -> set[str]:
+    """Return stable identities for persisted image attachments."""
+    return {
+        digest
+        for attachment in attachments or []
+        if isinstance((digest := getattr(attachment, "digest", None)), str)
+    }
+
+
+def _format_background_task_message(value: Any) -> str:
+    """Render structured tool output as concise assistant-facing Markdown."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value.strip())
+        except (TypeError, json.JSONDecodeError):
+            return strip_image_payload_text(value)
+        return _format_background_task_message(parsed)
+    if isinstance(value, (list, tuple, set)):
+        messages = [
+            formatted
+            for item in value
+            if (formatted := _format_background_task_message(item))
+        ]
+        return "\n\n".join(dict.fromkeys(messages))
+    if not isinstance(value, dict):
+        return str(value)
+
+    item_type = str(value.get("type") or "").lower()
+    if item_type in {"image", "data", "uri"} and extract_image_attachments(value):
+        return ""
+
+    # Prefer prose supplied by the tool over rendering its transport envelope.
+    for key in ("message", "summary", "text", "result", "output", "error"):
+        if key in value:
+            formatted = _format_background_task_message(value[key])
+            if formatted:
+                return formatted
+
+    metadata_keys = {"task_id", "status", "tool_name", "type"}
+    details = []
+    for key, item in value.items():
+        if key in metadata_keys:
+            continue
+        formatted = _format_background_task_message(item)
+        if formatted:
+            label = str(key).replace("_", " ").strip().capitalize()
+            details.append(f"- **{label}:** {formatted}")
+    return "\n".join(details)
+
+
 def is_background_task_start_ack(content: str) -> bool:
     """
     Return whether text is a background-task start acknowledgement.
 
     Recognizes formats:
+    - "Started in background."
     - "[task-123] Started in background."
     - "[uuid-or-any-id] Started in background."
     - "[task-123] Started background tool `tool_name`"
     """
+    if content.strip() == "Started in background.":
+        return True
     if not content.startswith("["):
         return False
 
@@ -211,8 +339,10 @@ class BackgroundTaskManager:
         """
         Poll a server-side MCP background tool until it finishes.
 
-        The final result is written to the original chat session as an assistant
-        message, and the task is removed from the pending-task registry.
+        The final result and any image attachments are written to the original
+        chat session as an assistant message unless that result is already the
+        latest assistant turn. The task is then removed from the pending-task
+        registry.
 
         Args:
             task_id: Server-side MCP background task identifier.
@@ -228,6 +358,7 @@ class BackgroundTaskManager:
                 failures.
         """
         while True:
+            attachments: list[ImageAttachment] = []
             result = {
                 "task_id": task_id,
                 "status": "not_found",
@@ -243,34 +374,24 @@ class BackgroundTaskManager:
                     except TypeError:
                         payload = await fn.invoke({"task_id": task_id})
 
-                    if isinstance(payload, list) and payload:
-                        payload = payload[0]
-                    if hasattr(payload, "text"):
-                        payload = payload.text
-                    if isinstance(payload, bytes):
-                        payload = payload.decode("utf-8", errors="replace")
-
-                    try:
-                        payload = (
-                            json.loads(payload) if isinstance(payload, str) else payload
-                        )
-                    except (TypeError, json.JSONDecodeError):
-                        payload = {
+                    parsed_result = _background_task_result_from_payload(
+                        payload, task_id
+                    )
+                    if parsed_result is None:
+                        parsed_result = {
                             "task_id": task_id,
                             "status": "failed",
                             "error": str(payload),
                         }
 
-                    if (
-                        isinstance(payload, dict)
-                        and payload.get("status") != "not_found"
-                    ):
-                        result = payload
+                    if str(parsed_result.get("status")).lower() != "not_found":
+                        result = parsed_result
+                        attachments = extract_image_attachments(payload)
                         break
-                if result.get("status") != "not_found":
+                if str(result.get("status")).lower() != "not_found":
                     break
 
-            status = result.get("status", "unknown")
+            status = str(result.get("status", "unknown")).lower()
 
             async with self._task_lock:
                 self._task_results[task_id] = {
@@ -283,30 +404,83 @@ class BackgroundTaskManager:
                 await asyncio.sleep(5)
                 continue
 
-            if status == "completed":
-                output = result.get("result", "")
-                if not isinstance(output, str):
-                    output = json.dumps(output, indent=2, default=str)
-                message = (
-                    f"[{task_id}] Background tool `{tool_name}` completed:\n{output}"
-                )
+            tool_message = _format_background_task_message(result.get("message"))
+            if tool_message:
+                message = tool_message
+            elif status == "completed":
+                message = _format_background_task_message(result.get("result"))
+                if not message and attachments:
+                    message = "\n".join(
+                        f"[Image attachment: {attachment.filename}]"
+                        for attachment in attachments
+                    )
+                if not message:
+                    message = "Background job completed."
             else:
-                output = (
+                message = _format_background_task_message(
                     result.get("error")
                     or result.get("message")
-                    or json.dumps(result, indent=2, default=str)
+                    or result
                 )
-                message = (
-                    f"[{task_id}] Background tool `{tool_name}` {status}:\n{output}"
-                )
+                if not message:
+                    message = "Background job failed."
 
-            if session_id is not None:
-                self.session_manager.chat_db.add_message(
-                    session_id, "assistant", message
-                )
+            if session_id is not None and not self._assistant_result_already_persisted(
+                session_id, message, attachments
+            ):
+                if attachments:
+                    self.session_manager.chat_db.add_message(
+                        session_id,
+                        "assistant",
+                        message,
+                        attachments=attachments,
+                    )
+                else:
+                    self.session_manager.chat_db.add_message(
+                        session_id, "assistant", message
+                    )
             async with self._task_lock:
                 self._pending_tasks.pop(task_id, None)
+                self._background_tool_poll_tasks.pop(task_id, None)
             return
+
+    def _assistant_result_already_persisted(
+        self,
+        session_id: str,
+        message: str,
+        attachments: list[ImageAttachment],
+    ) -> bool:
+        """Check the latest assistant turn before persisting a polled result."""
+        try:
+            history = self.session_manager.load_history(session_id)
+        except Exception:
+            return False
+
+        latest_assistant = next(
+            (
+                entry
+                for entry in reversed(history or [])
+                if isinstance(entry, dict) and entry.get("role") == "assistant"
+            ),
+            None,
+        )
+        if not latest_assistant:
+            return False
+
+        latest_content = latest_assistant.get("content", "")
+        same_message = latest_content == message or (
+            isinstance(latest_content, str)
+            and _format_background_task_message(latest_content) == message
+        )
+        if not attachments:
+            return same_message
+
+        current_digests = {attachment.digest for attachment in attachments}
+        latest_digests = _attachment_digests(latest_assistant.get("attachments"))
+        # The same image can arrive through the normal assistant turn and the
+        # background poller with slightly different text. Treat the attachment
+        # as the stable identity so the rich result is persisted only once.
+        return bool(current_digests) and current_digests.issubset(latest_digests)
 
     async def run_query(self, user_input: str, blocking: bool = True) -> str:
         """
@@ -414,22 +588,22 @@ class BackgroundTaskManager:
                     try:
                         result = done_task.result()
                         task_state["status"] = "completed"
-                        print(f"\n[{task_id}] Completed:")
+                        print("\nBackground job completed:")
                         print(result)
                         print("")
                     except asyncio.CancelledError:
                         task_state["status"] = "cancelled"
-                        print(f"\n[{task_id}] Cancelled.\n")
+                        print("\nBackground job cancelled.\n")
                     except Exception as e:
                         task_state["status"] = "failed"
-                        print(f"\n[{task_id}] Failed: {e}\n")
+                        print(f"\nBackground job failed: {e}\n")
                     finally:
                         self._pending_tasks.pop(task_id, None)
 
             asyncio.create_task(_finalize())
 
         task.add_done_callback(_done_callback)
-        message = f"[{task_id}] Started in background."
+        message = "Started in background."
         print(f"{message}\n")
         return message
 

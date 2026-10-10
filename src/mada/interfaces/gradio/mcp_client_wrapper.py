@@ -8,7 +8,9 @@ Provides a client session that connects to MCP servers and processes messages
 for the Gradio interface, adapted to work with MADA's architecture.
 """
 
+import hashlib
 import logging
+import re
 import tempfile
 import traceback
 from typing import Any, AsyncGenerator, Dict, List, Tuple
@@ -32,6 +34,24 @@ from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
 from mada.core.skills.skill_registry import SkillRegistry
 
 LOG = logging.getLogger("mada-gradio")
+
+# Internal value consumed by ``MADAMultiAgentGradioInterface``. It deliberately
+# never crosses into persisted history or visible Chatbot content.
+SUPPRESS_ASSISTANT_MESSAGE = object()
+
+
+def _is_hidden_background_ack(value: Any) -> bool:
+    """Recognize persisted background acknowledgements that should not render."""
+    if not isinstance(value, str):
+        return False
+    if is_background_task_start_ack(value):
+        return True
+    normalized = " ".join(value.lower().split())
+    return (
+        "background" in normalized
+        and ("running" in normalized or "started" in normalized)
+        and re.search(r"\btask[ _-]*id\s*:", normalized) is not None
+    )
 
 
 class MCPGradioClientSession:
@@ -88,14 +108,23 @@ class MCPGradioClientSession:
         self._attachment_cache = tempfile.TemporaryDirectory(
             prefix="mada-gradio-images-"
         )
+        self._attachment_paths_by_digest: Dict[str, str] = {}
 
     def _attachment_file_message(self, attachment: ImageAttachment) -> Dict[str, Any]:
         """Save an attachment in Gradio's cache and return chat file content."""
-        path = processing_utils.save_bytes_to_cache(
-            attachment.data,
-            attachment.filename,
-            self._attachment_cache.name,
-        )
+        paths_by_digest = getattr(self, "_attachment_paths_by_digest", None)
+        if paths_by_digest is None:
+            paths_by_digest = {}
+            self._attachment_paths_by_digest = paths_by_digest
+
+        path = paths_by_digest.get(attachment.digest)
+        if not path:
+            path = processing_utils.save_bytes_to_cache(
+                attachment.data,
+                attachment.filename,
+                self._attachment_cache.name,
+            )
+            paths_by_digest[attachment.digest] = path
         return {
             "type": "file",
             "alt_text": attachment.filename,
@@ -148,9 +177,14 @@ class MCPGradioClientSession:
         """Convert persisted image bytes into Gradio chat file messages."""
         formatted = []
         for message in history:
+            content = str(message.get("content") or "")
+            if (
+                str(message.get("role") or "assistant") == "assistant"
+                and _is_hidden_background_ack(content)
+            ):
+                continue
             attachments = list(message.get("attachments") or [])
             if not attachments:
-                content = str(message.get("content") or "")
                 if content.strip():
                     formatted.append(
                         {
@@ -159,7 +193,7 @@ class MCPGradioClientSession:
                         }
                     )
                 continue
-            text = str(message.get("content", ""))
+            text = content
             if self._is_image_attachment_placeholder(text):
                 text = ""
             formatted.append(
@@ -169,6 +203,79 @@ class MCPGradioClientSession:
                 }
             )
         return formatted
+
+    @classmethod
+    def _history_value_signature(cls, value: Any) -> Any:
+        """Return a stable, hashable representation of Gradio history values."""
+        if isinstance(value, ImageAttachment):
+            return ("image", value.digest, value.media_type)
+        if isinstance(value, bytes):
+            return ("bytes", hashlib.sha256(value).hexdigest())
+        if isinstance(value, (list, tuple)):
+            return tuple(cls._history_value_signature(item) for item in value)
+        if isinstance(value, dict):
+            if value.get("type") == "file" or "file" in value:
+                file_value = value.get("file") or value
+                if hasattr(file_value, "model_dump"):
+                    file_value = file_value.model_dump()
+                if not isinstance(file_value, dict):
+                    file_value = {
+                        "path": getattr(file_value, "path", None),
+                        "orig_name": getattr(file_value, "orig_name", None),
+                        "mime_type": getattr(file_value, "mime_type", None),
+                    }
+                return (
+                    "file",
+                    cls._history_value_signature(file_value.get("path")),
+                    cls._history_value_signature(file_value.get("orig_name")),
+                    cls._history_value_signature(file_value.get("mime_type")),
+                )
+            if "path" in value and (
+                "orig_name" in value or "mime_type" in value
+            ):
+                return (
+                    "file",
+                    cls._history_value_signature(value.get("path")),
+                    cls._history_value_signature(value.get("orig_name")),
+                    cls._history_value_signature(value.get("mime_type")),
+                )
+            if value.get("type") == "text" and "text" in value:
+                return cls._history_value_signature(value["text"])
+            return tuple(
+                (str(key), cls._history_value_signature(item))
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+                if key not in {"url", "size", "meta"}
+            )
+        if hasattr(value, "model_dump"):
+            try:
+                return cls._history_value_signature(value.model_dump())
+            except (TypeError, ValueError):
+                pass
+        if hasattr(value, "role") and hasattr(value, "content"):
+            return (
+                "message",
+                str(value.role),
+                cls._history_value_signature(value.content),
+            )
+        if isinstance(value, (str, int, float, bool, type(None))):
+            return value
+        return str(value)
+
+    @classmethod
+    def _history_signature(cls, history: List[Any] | None) -> Any:
+        """Return a stable signature for semantic chat-history comparisons."""
+        signature = []
+        for message in history or []:
+            if isinstance(message, dict):
+                role = message.get("role")
+                content = message.get("content")
+            else:
+                role = getattr(message, "role", None)
+                content = getattr(message, "content", None)
+            signature.append(
+                (str(role or "assistant"), cls._history_value_signature(content))
+            )
+        return tuple(signature)
 
     async def connect_servers(
         self, agent_table: gr.Dataframe, request: gr.Request
@@ -314,6 +421,10 @@ class MCPGradioClientSession:
             }
             for message in history or []
             if str(message.get("content") or "").strip()
+            and not (
+                str(message.get("role") or "assistant") == "assistant"
+                and _is_hidden_background_ack(str(message.get("content") or ""))
+            )
         ]
 
     def get_session_choices(self) -> List[str]:
@@ -585,7 +696,7 @@ class MCPGradioClientSession:
         message: str,
         history: List,
         agent_table: gr.Dataframe,
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[Any, None]:
         """
         Process a user message through the orchestrator's background task manager.
 
@@ -612,9 +723,14 @@ class MCPGradioClientSession:
             response = await self.orchestrator.background_tasks.run_query(
                 message, blocking=self.blocking
             )
-            if is_background_task_start_ack(response):
+            if response is SUPPRESS_ASSISTANT_MESSAGE:
+                yield SUPPRESS_ASSISTANT_MESSAGE
+                return
+            if _is_hidden_background_ack(response):
                 self.session_manager.add_message("user", message)
                 self.session_manager.add_message("assistant", response)
+                yield SUPPRESS_ASSISTANT_MESSAGE
+                return
             if isinstance(response, RichResponse) and response.images:
                 text = str(response)
                 if self._is_image_attachment_placeholder(text):
@@ -644,13 +760,13 @@ class MCPGradioClientSession:
             return "### Task Status\nNo background tasks yet."
 
         lines = ["### Task Status"]
-        for task_id, task_state in reversed(list(task_snapshot.items())):
+        for task_state in reversed(list(task_snapshot.values())):
             status = task_state.get("status", "unknown")
             tool_name = task_state.get("tool_name")
             if tool_name:
-                lines.append(f"- `{task_id}` [{status}] {tool_name}")
+                lines.append(f"- [{status}] {tool_name}")
             else:
-                lines.append(f"- `{task_id}` [{status}]")
+                lines.append(f"- [{status}]")
 
         return "\n".join(lines)
 
@@ -678,6 +794,9 @@ class MCPGradioClientSession:
         """
         task_status = await self.get_task_status_markdown()
         session_list_update = gr.skip()
+        current_session_label = self._current_session_label()
+        if current_session_label != session_label:
+            session_list_update = self.update_session_choices()
         if (
             awaiting_response
             or not self.orchestrator
@@ -688,10 +807,9 @@ class MCPGradioClientSession:
         persisted_history = self._format_history_for_gradio(
             self.session_manager.load_history()
         )
-        current_session_label = self._current_session_label()
-        if current_session_label != session_label:
-            session_list_update = self.update_session_choices()
-        if persisted_history == list(history):
+        if self._history_signature(persisted_history) == self._history_signature(
+            history
+        ):
             return gr.skip(), task_status, session_list_update
 
         return persisted_history, task_status, session_list_update
@@ -713,4 +831,5 @@ class MCPGradioClientSession:
             except Exception as e:
                 LOG.error(f"Error during cleanup: {e}")
         self._attachment_cache.cleanup()
+        getattr(self, "_attachment_paths_by_digest", {}).clear()
         self.initialized = False

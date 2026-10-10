@@ -9,6 +9,7 @@ with MCP servers, adapted to work with MADA's configuration system.
 """
 
 import base64
+import inspect
 import json
 import logging
 from typing import Any, List
@@ -16,10 +17,27 @@ from typing import Any, List
 import gradio as gr
 
 from mada.core.config import AgentConfig, InterfaceConfig
-from mada.interfaces.gradio.mcp_client_wrapper import MCPGradioClientSession
+from mada.interfaces.gradio.mcp_client_wrapper import (
+    MCPGradioClientSession,
+    SUPPRESS_ASSISTANT_MESSAGE,
+)
 from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
 
 LOG = logging.getLogger("mada-gradio")
+
+
+def _supported_kwargs(callable_value: Any, **kwargs: Any) -> dict[str, Any]:
+    """Filter component arguments against the installed Gradio signature."""
+    try:
+        parameters = inspect.signature(callable_value).parameters
+    except (TypeError, ValueError):
+        return {}
+    if any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key in parameters}
 
 
 class MADAMultiAgentGradioInterface:
@@ -110,9 +128,14 @@ class MADAMultiAgentGradioInterface:
             placeholder = self.interface_config.chat_placeholder
 
         chatbot = gr.Chatbot(
-            label="Chat",
-            height=480,
-            elem_id="mada-chatbot",
+            **_supported_kwargs(
+                gr.Chatbot,
+                label="Chat",
+                height=480,
+                elem_id="mada-chatbot",
+                type="messages",
+                autoscroll=False,
+            )
         )
 
         message_box = gr.Textbox(
@@ -174,6 +197,16 @@ class MADAMultiAgentGradioInterface:
         async for response in self.client.process_message(
             message, updated_history, *additional_inputs
         ):
+            if response is SUPPRESS_ASSISTANT_MESSAGE:
+                if (
+                    updated_history
+                    and isinstance(updated_history[-1], dict)
+                    and updated_history[-1].get("role") == "assistant"
+                    and updated_history[-1].get("content") == "…"
+                ):
+                    updated_history.pop()
+                yield updated_history, False
+                continue
             updated_history[-1] = {
                 "role": "assistant",
                 "content": response,
@@ -499,7 +532,7 @@ class MADAMultiAgentGradioInterface:
                 if result_tool is None:
                     return (
                         gr.skip(),
-                        f"{self.in_situ_viz_task_id}: Waiting for render result.",
+                        "Waiting for visualization render result.",
                     )
 
                 try:
@@ -529,13 +562,13 @@ class MADAMultiAgentGradioInterface:
                         task_id = message.split(marker, 1)[1].split('"', 1)[0]
                     if task_id:
                         self.in_situ_viz_task_id = task_id
-                        return gr.skip(), f"{task_id}: Visualization render is running."
+                        return gr.skip(), "Visualization render is running."
                     raise
 
             if result.get("status") == "running" and result.get("task_id"):
                 self.in_situ_viz_task_id = result["task_id"]
                 message = result.get("message", "Visualization render is running.")
-                return gr.skip(), f"{self.in_situ_viz_task_id}: {message}"
+                return gr.skip(), message
 
             self.in_situ_viz_task_id = None
 

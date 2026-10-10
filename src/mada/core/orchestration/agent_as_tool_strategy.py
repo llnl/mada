@@ -189,6 +189,67 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
 
         return notices
 
+    @classmethod
+    def _background_task_descriptors_from_value(cls, value: Any) -> List[str]:
+        """Extract server-side background-job descriptors from a tool result."""
+        if value is None:
+            return []
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="replace")
+        if isinstance(value, str):
+            value = value.strip()
+            candidates = [value]
+            start, end = value.find("{"), value.rfind("}")
+            if start != -1 and end > start:
+                candidates.append(value[start : end + 1])
+            for candidate in candidates:
+                try:
+                    parsed = json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+                return cls._background_task_descriptors_from_value(parsed)
+            return []
+        if isinstance(value, (list, tuple)):
+            descriptors = []
+            for item in value:
+                descriptors.extend(cls._background_task_descriptors_from_value(item))
+            return descriptors
+        if isinstance(value, dict):
+            task_id = value.get("task_id")
+            status = str(value.get("status") or "running").lower()
+            if task_id and status == "running":
+                return [
+                    json.dumps(
+                        {
+                            "task_id": task_id,
+                            "status": status,
+                            "tool_name": value.get("tool_name", "background_tool"),
+                        },
+                        default=str,
+                    )
+                ]
+            descriptors = []
+            for item in value.values():
+                descriptors.extend(cls._background_task_descriptors_from_value(item))
+            return descriptors
+        if hasattr(value, "to_dict"):
+            try:
+                return cls._background_task_descriptors_from_value(value.to_dict())
+            except (TypeError, ValueError):
+                return []
+        return []
+
+    @classmethod
+    def _background_task_descriptors_from_chunk(cls, chunk: Any) -> List[str]:
+        """Extract unique background-job descriptors from a streamed chunk."""
+        values = [chunk]
+        if hasattr(chunk, "contents"):
+            values.append(chunk.contents)
+        descriptors = []
+        for value in values:
+            descriptors.extend(cls._background_task_descriptors_from_value(value))
+        return list(dict.fromkeys(descriptors))
+
     async def _stream_response(
         self,
         orchestrator: "MADAOrchestrator",
@@ -363,6 +424,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         pending_text = ""
         emitted_text = ""
         capture_token = None
+        background_capture_token = None
         response_started = False
 
         try:
@@ -394,11 +456,20 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 capture_token, captured_images = orchestrator._begin_image_capture()
             else:
                 captured_images = []
+            if hasattr(orchestrator, "_begin_background_task_capture"):
+                (
+                    background_capture_token,
+                    background_task_descriptors,
+                ) = orchestrator._begin_background_task_capture()
             captured_image_index = 0
             stream = orchestrator.planning_agent.run(
                 prompt, session=run_session, stream=True
             )
             async for chunk in stream:
+                for descriptor in self._background_task_descriptors_from_chunk(chunk):
+                    if descriptor not in background_task_descriptors:
+                        background_task_descriptors.append(descriptor)
+
                 available_images = [
                     *captured_images[captured_image_index:],
                     *extract_image_attachments(chunk),
@@ -500,3 +571,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 orchestrator, "_end_image_capture"
             ):
                 orchestrator._end_image_capture(capture_token)
+            if background_capture_token is not None and hasattr(
+                orchestrator, "_end_background_task_capture"
+            ):
+                orchestrator._end_background_task_capture(background_capture_token)

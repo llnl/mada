@@ -146,6 +146,9 @@ class MADAOrchestrator(MCPAgentManager):
         self._image_capture: ContextVar[List[ImageAttachment] | None] = ContextVar(
             "mada_image_capture", default=None
         )
+        self._background_task_capture: ContextVar[List[str] | None] = ContextVar(
+            "mada_background_task_capture", default=None
+        )
         self.orchestration = orchestration_config or OrchestrationConfig()
         self.orchestration_strategy = self._build_orchestration_strategy(
             self.orchestration.mode
@@ -438,7 +441,12 @@ class MADAOrchestrator(MCPAgentManager):
                 # MCPStreamableHTTPTool requires an http_client with custom headers, not a headers parameter
                 http_client = httpx2.AsyncClient(
                     headers=headers,
-                    timeout=180.0,
+                    # Streamable HTTP can keep its SSE response open for the
+                    # connection lifetime while connect/write operations stay
+                    # bounded.
+                    timeout=httpx2.Timeout(
+                        connect=10, read=None, write=10, pool=10
+                    ),
                     verify=resolve_httpx_verify_value(verify=server_config.verify),
                 )
                 http_client_to_cleanup = (
@@ -603,6 +611,7 @@ class MADAOrchestrator(MCPAgentManager):
 
             async def capture_specialist_update(update: Any) -> None:
                 self._capture_image_attachments(update)
+                self._capture_background_task_descriptors(update)
 
             agent_tool = agent.as_tool(
                 name=agent.name,
@@ -703,6 +712,28 @@ Guidelines:
             if attachment.digest not in existing:
                 existing.add(attachment.digest)
                 attachments.append(attachment)
+
+    def _begin_background_task_capture(self) -> Tuple[Token, List[str]]:
+        """Start task-local collection of nested MCP background jobs."""
+        descriptors: List[str] = []
+        return self._background_task_capture.set(descriptors), descriptors
+
+    def _end_background_task_capture(self, token: Token) -> None:
+        """Restore the previous nested background-job collection."""
+        self._background_task_capture.reset(token)
+
+    def _capture_background_task_descriptors(self, value: Any) -> None:
+        """Capture background jobs emitted inside a specialist-agent tool."""
+        descriptors = self._background_task_capture.get()
+        if descriptors is None or not isinstance(
+            self.orchestration_strategy, AgentAsToolOrchestrationStrategy
+        ):
+            return
+        for descriptor in self.orchestration_strategy._background_task_descriptors_from_value(
+            value
+        ):
+            if descriptor not in descriptors:
+                descriptors.append(descriptor)
 
     def _create_remote_a2a_agent_tools(self) -> List[Any]:
         """
