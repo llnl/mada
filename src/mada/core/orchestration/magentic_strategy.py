@@ -903,6 +903,19 @@ Guidelines:
         value: Any, *, finalize_response: bool = True
     ) -> None:
         """Stop an async stream and its underlying iterator when supported."""
+        # An unopened Agent Framework ResponseStream can expose ``aclose``
+        # without having initialized its private iterator. Close the source
+        # explicitly so that aborting before the first read still releases it.
+        iterator = getattr(value, "_iterator", None)
+        source = getattr(value, "_stream_source", None)
+        if iterator is None and source is not None and source is not value:
+            if asyncio.isfuture(source):
+                source.cancel()
+            else:
+                await MagenticOrchestrationStrategy._close_async_iterator(
+                    source, finalize_response=False
+                )
+
         close = getattr(value, "aclose", None)
         if callable(close):
             result = close()
@@ -921,17 +934,6 @@ Guidelines:
         # a private iterator but does not itself expose aclose(). Close that
         # generator, then use the stream's finalization path so cleanup hooks
         # still run for an aborted workflow.
-        iterator = getattr(value, "_iterator", None)
-        if iterator is None:
-            source = getattr(value, "_stream_source", None)
-            if source is not None and source is not value:
-                if asyncio.isfuture(source):
-                    source.cancel()
-                else:
-                    await MagenticOrchestrationStrategy._close_async_iterator(
-                        source, finalize_response=False
-                    )
-
         close = getattr(iterator, "aclose", None)
         if callable(close):
             result = close()
