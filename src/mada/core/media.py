@@ -201,10 +201,28 @@ def _serialized_non_image_text(value: Any) -> str:
         return strip_image_payload_text(value, strip_outer_whitespace=False)
     if isinstance(value, list):
         text_parts = []
+        image_between_text = False
         for item in value:
             text = _serialized_non_image_text(item)
             if text:
+                if text_parts:
+                    previous = text_parts[-1]
+                    # Image entries are removed from the list. Keep a word
+                    # boundary when their surrounding text would otherwise
+                    # be joined into a different visible word, while leaving
+                    # punctuation and caller-provided whitespace untouched.
+                    if (
+                        image_between_text
+                        and previous[-1].isalnum()
+                        and text[0].isalnum()
+                        and not previous[-1].isspace()
+                        and not text[0].isspace()
+                    ):
+                        text_parts.append(" ")
                 text_parts.append(text)
+                image_between_text = False
+            elif _contains_serialized_image_payload(item):
+                image_between_text = True
         return "".join(text_parts)
     if not isinstance(value, dict):
         return ""
@@ -395,8 +413,26 @@ def extract_image_attachments(value: Any) -> list[ImageAttachment]:
 
 def strip_image_payload_text(value: str, *, strip_outer_whitespace: bool = True) -> str:
     """Remove serialized image payloads from assistant-visible text."""
-    cleaned = _IMAGE_MARKDOWN_RE.sub("", value)
-    cleaned = _IMAGE_DATA_URI_RE.sub("", cleaned)
+
+    def remove_valid_markdown(match: re.Match[str]) -> str:
+        data_uri = match.group(1)
+        media_type = data_uri[5:].split(";", 1)[0]
+        return "" if _decode_image_data(data_uri, media_type) else match.group(0)
+
+    def remove_valid_data_uri(match: re.Match[str]) -> str:
+        encoded = match.group(2)
+        trimmed_encoded = encoded
+        while trimmed_encoded and trimmed_encoded[-1] in ".,;:!?\"']>}]":
+            trimmed_encoded = trimmed_encoded[:-1]
+        trailing = encoded[len(trimmed_encoded) :]
+        if _decode_image_data(trimmed_encoded, match.group(1)):
+            return trailing
+        return match.group(0)
+
+    # Validate URI data before removing it. This preserves documentation,
+    # logs, and truncated examples that merely resemble image attachments.
+    cleaned = _IMAGE_MARKDOWN_RE.sub(remove_valid_markdown, value)
+    cleaned = _IMAGE_DATA_URI_RE.sub(remove_valid_data_uri, cleaned)
     cleaned = re.sub(r"!\[[^\]]*\]\(\s*\)", "", cleaned)
 
     decoder = json.JSONDecoder()

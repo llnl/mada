@@ -112,6 +112,20 @@ def test_extracts_and_strips_markdown_data_uri():
     assert strip_image_payload_text(text) == "Here is the plot."
 
 
+def test_preserves_invalid_data_uri_text():
+    text = "Use data:image/png;base64, in the HTML example."
+
+    assert strip_image_payload_text(text) == text
+
+
+@pytest.mark.parametrize("delimiter", [",", '"', "'", "]", ">"])
+def test_strips_valid_raw_data_uri_before_trailing_delimiters(delimiter):
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    text = f"Rendered data:image/png;base64,{encoded}{delimiter}"
+
+    assert strip_image_payload_text(text) == f"Rendered {delimiter}"
+
+
 def test_extracts_structured_data_uri_without_mime_type():
     encoded = base64.b64encode(PNG_DATA).decode("ascii")
     payload = {"type": "uri", "uri": f"data:image/png;base64,{encoded}"}
@@ -186,6 +200,19 @@ def test_preserves_text_fragment_boundaries_when_stripping_image():
     )
 
     assert strip_image_payload_text(payload) == "foo()"
+
+
+def test_preserves_word_boundary_when_image_separates_text():
+    encoded = base64.b64encode(PNG_DATA).decode("ascii")
+    payload = json.dumps(
+        [
+            {"type": "text", "text": "foo"},
+            {"type": "image", "mimeType": "image/png", "data": encoded},
+            {"type": "text", "text": "bar"},
+        ]
+    )
+
+    assert strip_image_payload_text(payload) == "foo bar"
 
 
 def test_skips_empty_wrapper_text_when_preserving_mixed_content():

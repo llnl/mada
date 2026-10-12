@@ -460,8 +460,15 @@ class MCPGradioClientSession:
         Returns:
             Refreshed status markdown for the current context-session selection.
         """
+        primary_session_id = (
+            self._extract_id_from_label(primary_session_label)
+            if primary_session_label
+            else self.session_manager.current_session_id
+        )
         session_ids = [
-            self._extract_id_from_label(label) for label in session_labels or []
+            self._extract_id_from_label(label)
+            for label in session_labels or []
+            if self._extract_id_from_label(label) != primary_session_id
         ]
         self.session_manager.set_context_sessions(session_ids)
         return self.get_context_status_markdown()

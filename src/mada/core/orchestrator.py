@@ -434,7 +434,10 @@ class MADAOrchestrator(MCPAgentManager):
 
                 # Add bearer token if provided
                 if self.bearer_token:
-                    headers["X-Token"] = self.bearer_token
+                    # A server-specific credential is more specific than the
+                    # interface-wide bearer token and must not be overwritten.
+                    if not any(key.lower() == "x-token" for key in headers):
+                        headers["X-Token"] = self.bearer_token
 
                 # MCPStreamableHTTPTool requires an http_client with custom headers, not a headers parameter
                 http_client = httpx2.AsyncClient(

@@ -72,3 +72,23 @@ async def test_image_only_background_completion_persists_empty_text():
     assert call.args[2] != "null"
     assert len(call.kwargs["attachments"]) == 1
     assert call.kwargs["attachments"][0].data == PNG_DATA
+
+
+@pytest.mark.asyncio
+async def test_blocking_query_snapshots_session_and_context():
+    session_manager = SimpleNamespace(
+        current_session_id="primary",
+        get_context_session_ids=lambda: ["reference"],
+        session_exists=lambda session_id: True,
+    )
+    collect_message_response = AsyncMock(return_value="Done")
+    manager = BackgroundTaskManager(session_manager, {}, collect_message_response)
+
+    response = await manager.run_query("Hello", blocking=True)
+
+    assert response == "Done"
+    collect_message_response.assert_awaited_once_with(
+        "Hello",
+        persistence_session_id="primary",
+        context_session_ids=["reference"],
+    )

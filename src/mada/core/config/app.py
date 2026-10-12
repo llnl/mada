@@ -142,9 +142,10 @@ class AppConfig:
             mcp_servers_cfg = {}
             for name, server_config in mcp_servers_entry.items():
                 server_command = str(server_config.get("command") or "")
-                is_local_image_server = (
-                    Path(server_command).name == "mada-read-image-mcp"
-                )
+                is_local_image_server = Path(server_command).name in {
+                    "mada-read-image-mcp",
+                    "read_image_mcp_server.py",
+                }
                 if is_local_image_server and config_dir is not None:
                     server_config = {
                         **server_config,

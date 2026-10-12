@@ -133,6 +133,7 @@ async def test_connect_agent_passes_verify_to_httpx2(monkeypatch):
 
     class DummyAsyncClient:
         def __init__(self, *, headers, timeout, verify):
+            captured["async_client_headers"] = headers
             captured["async_client_verify"] = verify
 
         async def aclose(self):
@@ -187,6 +188,7 @@ async def test_connect_agent_passes_verify_to_httpx2(monkeypatch):
         ),
         session_manager=object(),
     )
+    orchestrator.bearer_token = "interface-token"
     orchestrator.exit_stack = DummyExitStack()
     monkeypatch.setattr(orchestrator, "create_chat_agent", fake_create_chat_agent)
 
@@ -202,12 +204,14 @@ async def test_connect_agent_passes_verify_to_httpx2(monkeypatch):
                 transport="streamable-http",
                 url="https://mcp.example.invalid/mcp",
                 verify=False,
+                headers={"x-token": "server-token"},
             )
         },
     )
 
     assert captured["resolve_verify_arg"] is False
     assert captured["async_client_verify"] is False
+    assert captured["async_client_headers"]["x-token"] == "server-token"
 
 
 @pytest.mark.asyncio

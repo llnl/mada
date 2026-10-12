@@ -366,20 +366,25 @@ class BackgroundTaskManager:
             Exception: Propagates failures from the response collection callable
                 before the query is detached.
         """
-        if blocking:
-            response = await self.collect_message_response(user_input)
-            print(response)
-            print("")
-            return response
-
-        # Capture the chat before scheduling the task. An isolated follow-up
-        # can start after the interface has switched to another chat session.
+        # Capture the chat before running or scheduling the task. A request
+        # must stay bound to the chat/context selected when it was submitted,
+        # even if the interface switches chats while it is running.
         originating_session_id = self.session_manager.current_session_id
         originating_context_session_ids = self.session_manager.get_context_session_ids()
         if originating_session_id and not self._session_still_exists(
             originating_session_id
         ):
             self.session_manager.create_new_session(originating_session_id)
+
+        if blocking:
+            response = await self.collect_message_response(
+                user_input,
+                persistence_session_id=originating_session_id,
+                context_session_ids=originating_context_session_ids,
+            )
+            print(response)
+            print("")
+            return response
 
         async with self._task_lock:
             use_isolated_session = self._active_agent_queries > 0 or any(

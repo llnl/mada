@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from mada.core.config import MCPServerConfig, OpenAIModelConfig, OrchestrationConfig, SQLiteConfig
+from mada.core.config import (
+    MCPServerConfig,
+    OpenAIModelConfig,
+    OrchestrationConfig,
+    SQLiteConfig,
+)
 from mada.interfaces.gradio.mcp_client_wrapper import MCPGradioClientSession
 
 
@@ -54,6 +59,20 @@ class TestMCPGradioClientSession:
 
         assert session_update["value"] is not None
         assert session_update["value"] in session_update["choices"]
+
+    def test_select_context_sessions_excludes_selected_primary_session(
+        self, tmp_path: Path
+    ):
+        client = _create_client(tmp_path)
+        client.create_new_session()
+        first_label = client._current_session_label()
+        client.create_new_session()
+        second_label = client._current_session_label()
+
+        client.select_context_sessions([first_label], primary_session_label=first_label)
+
+        assert client.session_manager.get_context_session_ids() == []
+        assert second_label != first_label
 
     def test_ensure_active_session_visible_creates_missing_primary_session(
         self, tmp_path: Path

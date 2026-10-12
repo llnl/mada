@@ -45,11 +45,26 @@ def _allowed_roots() -> list[Path]:
 
 
 def _load_image(path: str) -> tuple[bytes, str, str]:
-    image_path = Path(path).expanduser().resolve()
-    if not any(
-        root == image_path or root in image_path.parents for root in _allowed_roots()
-    ):
+    requested_path = Path(path).expanduser()
+    roots = _allowed_roots()
+    if requested_path.is_absolute():
+        candidates = [requested_path.resolve()]
+    else:
+        # Relative artifact paths are relative to an approved root, rather
+        # than to the MCP server's process CWD.
+        candidates = [(root / requested_path).resolve() for root in roots]
+
+    allowed_candidates = [
+        candidate
+        for candidate in candidates
+        if any(root == candidate or root in candidate.parents for root in roots)
+    ]
+    if not allowed_candidates:
         raise ValueError("Image path is outside the configured MADA_IMAGE_ROOTS")
+    image_path = next(
+        (candidate for candidate in allowed_candidates if candidate.is_file()),
+        allowed_candidates[0],
+    )
     if not image_path.is_file():
         raise FileNotFoundError(image_path)
     if image_path.stat().st_size > MAX_IMAGE_BYTES:

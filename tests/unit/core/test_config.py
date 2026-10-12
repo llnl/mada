@@ -140,6 +140,37 @@ class TestOrchestrationConfig:
 
 @pytest.mark.unit
 class TestAppConfig:
+    def test_source_image_server_gets_config_directory_environment(self, tmp_path):
+        config = AppConfig.from_dict(
+            {
+                "model": {
+                    "provider": "openai",
+                    "model": "gpt-test",
+                    "api_key": "test-key",
+                    "base_url": "https://llm.example/v1",
+                },
+                "agents": [
+                    {
+                        "agent_name": "WorkerAgent",
+                        "description": "Does work",
+                        "mcp_servers": ["images"],
+                        "instructions": "Help with tests.",
+                    }
+                ],
+                "mcp_servers": {
+                    "images": {
+                        "transport": "stdio",
+                        "command": str(tmp_path / "read_image_mcp_server.py"),
+                    }
+                },
+            },
+            config_dir=tmp_path,
+        )
+
+        assert config.mcp_servers["images"].env["MADA_CONFIG_DIR"] == str(
+            tmp_path.resolve()
+        )
+
     def test_app_config_loads_verify_settings(self, tmp_path, monkeypatch):
         monkeypatch.setenv("MADA_CA_BUNDLE", "/tmp/mada-ca.pem")
 

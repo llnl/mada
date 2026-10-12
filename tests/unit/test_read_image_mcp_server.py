@@ -19,6 +19,20 @@ def test_read_image_returns_mcp_image_content(tmp_path, monkeypatch):
     assert content.data
 
 
+def test_read_image_resolves_relative_paths_against_allowed_roots(
+    tmp_path, monkeypatch
+):
+    image_path = tmp_path / "plots" / "frame.png"
+    image_path.parent.mkdir()
+    image_path.write_bytes(PNG_DATA)
+    monkeypatch.setenv("MADA_IMAGE_ROOTS", str(tmp_path))
+    monkeypatch.chdir(tmp_path.parent)
+
+    content = image_server.read_image("plots/frame.png")
+
+    assert content.type == "image"
+
+
 def test_read_image_rejects_paths_outside_allowed_roots(tmp_path, monkeypatch):
     image_path = tmp_path / "plot.png"
     image_path.write_bytes(PNG_DATA)
