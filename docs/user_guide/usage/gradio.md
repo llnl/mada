@@ -86,6 +86,11 @@ module are included in the installed `image-tools` workflow.
 
 If your configuration uses `magentic` orchestration, the Gradio interface still shows the active specialist agents in the table. The hidden Magentic manager is not displayed as a participant, and the final assistant response and any returned images are displayed in the chat UI.
 
+Magentic also streams public specialist summaries, function starts and
+completions, superstep status and periodic elapsed-time updates. These activity
+messages remain visible when the final answer replaces a draft. Private model
+reasoning is not displayed.
+
 ### Background Task Running
 
 When you enter prompts, the agent(s) will run them as background processes so that you can have them do multiple tasks at once. The agent(s) will display a message showing that the process is running in the background so that you're aware it's being ran:

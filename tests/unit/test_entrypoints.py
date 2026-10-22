@@ -9,7 +9,6 @@ Tests for the following entry point modules:
 - mada/interface/gradio/main.py -> The `mada-gradio` command.
 """
 
-import asyncio
 import json
 import tomllib
 from contextlib import nullcontext
@@ -32,8 +31,10 @@ from mada.core.config import (
     SQLiteConfig,
     TelemetryConfig,
 )
+from mada.core.media import ImageAttachment
 from mada.core.orchestration.stream_events import (
     InternalError,
+    InternalImageSignal,
     InternalResponseReplacement,
 )
 from mada.interfaces.a2a.main import (
@@ -774,28 +775,31 @@ class TestMADAOpenAIApiCmd:
             assert response == "authoritative final"
 
         @pytest.mark.asyncio
-        async def test_stream_response_emits_content_incrementally(
+        async def test_stream_response_buffers_content_until_completion(
             self, create_dummy_config: Callable
         ):
             service = MADAOpenAIAPIService(config=create_dummy_config())
-            never_finish = asyncio.Event()
 
             async def process_openai_messages(messages):
                 assert messages == [{"role": "user", "content": "hello"}]
                 yield "first chunk"
-                await never_finish.wait()
+                yield " second chunk"
 
             service.orchestrator = SimpleNamespace(
                 process_openai_messages=process_openai_messages
             )
 
-            stream = service.stream_response([{"role": "user", "content": "hello"}])
-            await anext(stream)
-            content_event = await asyncio.wait_for(anext(stream), timeout=1)
-            await stream.aclose()
+            events = [
+                event
+                async for event in service.stream_response(
+                    [{"role": "user", "content": "hello"}]
+                )
+            ]
 
-            payload = json.loads(content_event.removeprefix("data: "))
-            assert payload["choices"][0]["delta"]["content"] == "first chunk"
+            payload = json.loads(events[1].removeprefix("data: "))
+            assert payload["choices"][0]["delta"]["content"] == (
+                "first chunk second chunk"
+            )
 
         @pytest.mark.asyncio
         async def test_stream_response_emits_replacement_before_content(
@@ -1022,8 +1026,9 @@ class TestMADAOpenAIApiCmd:
                 and payload["choices"][0]["delta"].get("content")
             ]
 
-            # agent-as-tool streams immediately - each chunk arrives separately
-            assert content_chunks == ["chunk1", "chunk2", "chunk3"]
+            # Agent-as-tool is buffered because image sanitization can emit a
+            # replacement after provisional text.
+            assert content_chunks == ["chunk1chunk2chunk3"]
             assert events[-1] == "data: [DONE]\n\n"
 
         @pytest.mark.asyncio
@@ -1381,6 +1386,100 @@ class TestMADAA2ACmd:
 
     class TestA2AService:
         @pytest.mark.asyncio
+        @pytest.mark.parametrize("mode", ["agent-as-tool", "magentic"])
+        async def test_stream_response_hides_image_control_chunks(
+            self, create_dummy_config: Callable, mode: str
+        ):
+            config = create_dummy_config()
+            config.orchestration = SimpleNamespace(mode=mode)
+            service = MADAA2AService(
+                config=config,
+                public_url="https://mada.example/a2a",
+            )
+            attachment = ImageAttachment.from_data(
+                b"\x89PNG\r\n\x1a\n", "image/png", filename="plot.png"
+            )
+
+            async def process_message(*args, **kwargs):
+                yield "answer"
+                yield InternalImageSignal(attachment)
+
+            service.orchestrator = SimpleNamespace(process_message=process_message)
+
+            chunks = [chunk async for chunk in service.stream_response("hello")]
+
+            assert chunks == ["answer"]
+
+        @pytest.mark.asyncio
+        async def test_stream_response_preserves_whitespace_between_chunks(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAA2AService(
+                config=create_dummy_config(),
+                public_url="https://mada.example/a2a",
+            )
+
+            async def process_message(*args, **kwargs):
+                yield "hello"
+                yield " "
+                yield "world"
+
+            service.orchestrator = SimpleNamespace(process_message=process_message)
+
+            chunks = [chunk async for chunk in service.stream_response("hello")]
+
+            assert chunks == ["hello world"]
+
+        @pytest.mark.asyncio
+        async def test_stream_response_keeps_image_only_fallback(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAA2AService(
+                config=create_dummy_config(),
+                public_url="https://mada.example/a2a",
+            )
+            attachment = ImageAttachment.from_data(
+                b"\x89PNG\r\n\x1a\n", "image/png", filename="plot.png"
+            )
+
+            async def process_message(*args, **kwargs):
+                yield InternalImageSignal(attachment)
+
+            service.orchestrator = SimpleNamespace(process_message=process_message)
+
+            chunks = [chunk async for chunk in service.stream_response("hello")]
+
+            assert chunks == ["[Image attachment: plot.png]"]
+
+        @pytest.mark.asyncio
+        async def test_stream_response_keeps_all_image_only_fallbacks(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAA2AService(
+                config=create_dummy_config(),
+                public_url="https://mada.example/a2a",
+            )
+            first = ImageAttachment.from_data(
+                b"\x89PNG\r\n\x1a\n", "image/png", filename="first.png"
+            )
+            second = ImageAttachment.from_data(
+                b"\x89PNG\r\n\x1a\n", "image/png", filename="second.png"
+            )
+
+            async def process_message(*args, **kwargs):
+                yield InternalImageSignal(first)
+                yield InternalImageSignal(second)
+
+            service.orchestrator = SimpleNamespace(process_message=process_message)
+
+            chunks = [chunk async for chunk in service.stream_response("hello")]
+
+            assert chunks == [
+                "[Image attachment: first.png]",
+                "[Image attachment: second.png]",
+            ]
+
+        @pytest.mark.asyncio
         async def test_collect_response_uses_isolated_session(
             self, create_dummy_config: Callable
         ):
@@ -1477,7 +1576,7 @@ class TestMADAA2ACmd:
             assert chunks == ["Error processing message: boom"]
 
         @pytest.mark.asyncio
-        async def test_stream_response_streams_incrementally_in_agent_as_tool_mode(
+        async def test_stream_response_buffers_agent_as_tool_mode(
             self, create_dummy_config: Callable
         ):
             service = MADAA2AService(
@@ -1504,7 +1603,26 @@ class TestMADAA2ACmd:
 
             chunks = [chunk async for chunk in service.stream_response("hello")]
 
-            assert chunks == ["first", " second"]
+            assert chunks == ["first second"]
+
+        @pytest.mark.asyncio
+        async def test_stream_response_honors_agent_as_tool_replacement(
+            self, create_dummy_config: Callable
+        ):
+            service = MADAA2AService(
+                config=create_dummy_config(),
+                public_url="https://mada.example/a2a",
+            )
+
+            async def process_message(*args, **kwargs):
+                yield "provisional"
+                yield InternalResponseReplacement("authoritative")
+
+            service.orchestrator = SimpleNamespace(process_message=process_message)
+
+            chunks = [chunk async for chunk in service.stream_response("hello")]
+
+            assert chunks == ["authoritative"]
 
     @pytest.mark.skipif(
         not hasattr(httpx2, "ASGITransport"),
@@ -1749,6 +1867,21 @@ class TestMADACLICmd:
                 assert "unsupported orchestration mode: magentic" in printed
 
     class TestMADACLIInterface:
+        def test_new_session_clears_previous_context_sessions(
+            self, create_dummy_config: Callable
+        ):
+            cli = MADACLIInterface(create_dummy_config())
+            cli.session_manager = MagicMock()
+            cli.session_manager.list_sessions.return_value = []
+            cli.create_new_session = MagicMock()
+            cli.configure_context_sessions = MagicMock()
+
+            with patch("builtins.input", return_value="n"):
+                assert cli.startup_session_menu()
+
+            cli.session_manager.set_context_sessions.assert_called_once_with([])
+            cli.configure_context_sessions.assert_called_once_with()
+
         def test_configure_context_sessions_keeps_current_selection_on_empty_input(
             self, create_dummy_config: Callable
         ):

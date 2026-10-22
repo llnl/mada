@@ -271,6 +271,16 @@ When a Magentic workflow reaches one of these limits, MADA asks the hidden
 manager to synthesize the best answer from the work completed so far. These
 limits apply only to `magentic` mode; `agent-as-tool` is unchanged.
 
+For a constrained simulation campaign, the optional `simulation_budget` object
+adds a per-request submission guard. It requires `limit`, `submission_tool` and
+an explicit `allowed_tools` list; `initial_limit` can reserve room for a follow-up.
+`batch_argument` selects a dotted argument path when automatic detection of an
+explicit `jobs`, `runs`, `parameter_runs` or `job_specs` list is insufficient.
+Reservations happen before submission and are not refunded on uncertain failures.
+This counts submitted run entries, so each entry must execute one simulation.
+See [the Vertex-CFD demo guide](../magentic_presentation.md) for the complete
+configuration, preflight and server contract.
+
 ## (Optional) Telemetry Configuration
 
 MADA can emit OpenTelemetry data for agent runs. Telemetry is opt-in — add

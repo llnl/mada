@@ -140,7 +140,17 @@ class TestOrchestrationConfig:
 
 @pytest.mark.unit
 class TestAppConfig:
-    def test_source_image_server_gets_config_directory_environment(self, tmp_path):
+    @pytest.mark.parametrize(
+        "launcher_name",
+        [
+            "read_image_mcp_server.py",
+            "mada-read-image-mcp.exe",
+            "mada-read-image-mcp.cmd",
+        ],
+    )
+    def test_source_image_server_gets_config_directory_environment(
+        self, tmp_path, launcher_name
+    ):
         config = AppConfig.from_dict(
             {
                 "model": {
@@ -157,10 +167,14 @@ class TestAppConfig:
                         "instructions": "Help with tests.",
                     }
                 ],
+                "database": {
+                    "type": "sqlite",
+                    "path": str(tmp_path / "chat_history.db"),
+                },
                 "mcp_servers": {
                     "images": {
                         "transport": "stdio",
-                        "command": str(tmp_path / "read_image_mcp_server.py"),
+                        "command": str(tmp_path / launcher_name),
                     }
                 },
             },

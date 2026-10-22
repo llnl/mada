@@ -1,9 +1,9 @@
 {
   "model": {
-    "provider": "openai",
+    "provider": "livai",
     "model": "gpt-5",
-    "api_key": "${API_KEY}",
-    "base_url": "${API_BASE_URL:-https://api.openai.com/v1/responses}"
+    "api_key": "${LIVAI_API_KEY}",
+    "base_url": "https://livai-api.llnl.gov/v1"
   },
   "agents": [
     {
@@ -27,24 +27,19 @@
       "url": "http://localhost:8001/mcp",
       "description": "Flux workload manager for job execution"
     },
-    "slurm": {
-      "transport": "streamable-http",
-      "url": "http://localhost:8002/mcp",
-      "description": "SLURM scheduler for job execution"
-    },
     "professor": {
       "transport": "streamable-http",
        "url": "http://localhost:8005/mcp",
        "description": "Professor surrogate modeling",
-       "headers": {
-        "X-Token": "${TOKEN}"
-       },
        "verify": true
     }
   },
   "orchestration": {
-    "mode": "agent-as-tool",
-    "participants": ["JobManagementAgent", "InverseDesignAgent"]
+    "mode": "magentic",
+    "participants": ["JobManagementAgent", "InverseDesignAgent"],
+    "max_rounds": 4,
+    "timeout_seconds": 120,
+    "max_stalls": 1
   },
   "interface": {
     "title": "MADA Multi-Agent Orchestrator",

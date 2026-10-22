@@ -29,6 +29,13 @@ from mada.core.config import (
 )
 from mada.core.database import ChatSessionManager
 from mada.core.media import ImageAttachment, RichResponse
+from mada.core.orchestration.stream_events import (
+    apply_text_control,
+    error_message,
+    image_attachment,
+    is_activity,
+    response_replacement,
+)
 from mada.core.orchestrator import MADAOrchestrator
 from mada.core.skills.skill_registry import SkillRegistry
 from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
@@ -653,19 +660,73 @@ class MCPGradioClientSession:
             return
 
         try:
-            response = await self.orchestrator.background_tasks.run_query(
-                message, blocking=self.blocking
-            )
-            if is_background_task_start_ack(response):
-                self.session_manager.add_message("user", message)
-                self.session_manager.add_message("assistant", response)
-            if isinstance(response, RichResponse) and response.images:
-                text = str(response)
-                if self._is_image_attachment_placeholder(text):
-                    text = ""
-                yield self._format_message_content(text, list(response.images))
-            else:
-                yield response
+            if not self.blocking:
+                response = await self.orchestrator.background_tasks.run_query(
+                    message, blocking=False
+                )
+                if is_background_task_start_ack(response):
+                    self.session_manager.add_message("user", message)
+                    self.session_manager.add_message("assistant", response)
+                if isinstance(response, RichResponse) and response.images:
+                    text = str(response)
+                    if self._is_image_attachment_placeholder(text):
+                        text = ""
+                    yield self._format_message_content(text, list(response.images))
+                else:
+                    yield response
+                return
+
+            # Stream the orchestrator directly so Magentic progress notices and
+            # response deltas reach Gradio while the workflow is running. The
+            # orchestrator owns persistence and image attachment handling.
+            response_chunks: list[str] = []
+            activity_chunks: list[str] = []
+            attachments: list[ImageAttachment] = []
+            attachment_digests: set[str] = set()
+            if getattr(self.orchestration_config, "mode", "") == "magentic":
+                activity_chunks.append("\n**Magentic workflow started.**\n")
+                yield self._format_message_content(
+                    "".join(activity_chunks), attachments
+                )
+            async for response_chunk in self.orchestrator.process_message(message):
+                if is_activity(response_chunk):
+                    activity_chunks.append(str(response_chunk))
+                    yield self._format_message_content(
+                        "".join(activity_chunks + response_chunks), attachments
+                    )
+                    continue
+                attachment = image_attachment(response_chunk)
+                if attachment is not None:
+                    if attachment.digest not in attachment_digests:
+                        attachment_digests.add(attachment.digest)
+                        attachments.append(attachment)
+                    text = "".join(activity_chunks + response_chunks)
+                    yield self._format_message_content(text, attachments)
+                    continue
+
+                replacement = response_replacement(response_chunk)
+                if replacement is not None:
+                    response_chunks[:] = [replacement]
+                else:
+                    handled, terminal = apply_text_control(
+                        response_chunks, response_chunk
+                    )
+                    if handled:
+                        if terminal:
+                            yield self._format_message_content(
+                                "".join(activity_chunks + response_chunks), attachments
+                            )
+                            break
+                    elif str(response_chunk):
+                        response_chunks.append(str(response_chunk))
+
+                error = error_message(response_chunk)
+                if error is not None:
+                    response_chunks[:] = [error]
+
+                yield self._format_message_content(
+                    "".join(activity_chunks + response_chunks), attachments
+                )
 
         except Exception as e:  # noqa: BLE001 - preserve streamed error handling
             error_msg = f"Error processing message: {e}"

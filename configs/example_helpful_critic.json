@@ -2,8 +2,8 @@
   "model": {
     "provider": "livai",
     "model": "gpt-5.4",
-    "api_key": "${API_KEY}",
-    "base_url": "${API_BASE_URL:-https://livai-api.llnl.gov/v1}"
+    "api_key": "${LIVAI_API_KEY}",
+    "base_url": "https://livai-api.llnl.gov/v1"
   },
   "agents": [
       {

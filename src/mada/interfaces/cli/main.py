@@ -128,6 +128,7 @@ class MADACLIInterface:
             if choice == "n":
                 self.create_new_session()
                 print("Created and selected a new session.")
+                self.session_manager.set_context_sessions([])
                 self.configure_context_sessions()
                 return True
 
@@ -264,7 +265,9 @@ class MADACLIInterface:
         Returns:
             Normalized session labels that remain attached as read-only context.
         """
-        session_ids = [self._extract_id_from_label(label) for label in session_labels or []]
+        session_ids = [
+            self._extract_id_from_label(label) for label in session_labels or []
+        ]
         selected_session_ids = self.session_manager.set_context_sessions(session_ids)
         session_labels_by_id = {
             self._extract_id_from_label(label): label for label in self.list_sessions()
@@ -314,11 +317,17 @@ class MADACLIInterface:
 
         current_context_ids = set(self.session_manager.get_context_session_ids())
         print("\nAdditional context sessions (read-only)")
-        print("Enter comma-separated numbers to load those sessions into model context.")
+        print(
+            "Enter comma-separated numbers to load those sessions into model context."
+        )
         print("Press Enter without a value to keep the current selection.")
         print("Enter 'none' to clear additional context.")
         for idx, label in enumerate(candidate_labels, start=1):
-            marker = "*" if self._extract_id_from_label(label) in current_context_ids else " "
+            marker = (
+                "*"
+                if self._extract_id_from_label(label) in current_context_ids
+                else " "
+            )
             print(f"  {idx}. [{marker}] {label}")
 
         raw_selection = input("Select context sessions: ").strip()
@@ -416,7 +425,9 @@ class MADACLIInterface:
                     return
 
                 print("\nChat with the agents (type 'quit' to exit)")
-                print("Type 'context' to choose additional sessions to load into model context.")
+                print(
+                    "Type 'context' to choose additional sessions to load into model context."
+                )
                 print("-" * 50)
 
                 prompt_session = PromptSession()

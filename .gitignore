@@ -10,3 +10,4 @@ livai_models.py
 **/.claude
 **/.codex
 .venv/
+.mada-demo/

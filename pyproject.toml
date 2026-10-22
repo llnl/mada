@@ -51,6 +51,11 @@ image-tools = [
     "fastmcp>=4.0.0",
 ]
 
+# Read measured velocity from classic NetCDF Exodus campaign artifacts.
+vertex-tools = [
+    "scipy>=1.10",
+]
+
 # Testing requirements
 tests = [
     "pytest",
@@ -110,3 +115,14 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 mada = ["interfaces/gradio/assets/*.css", "interfaces/gradio/assets/*.js"]
+
+[tool.ruff.lint]
+# Keep repository-wide checks focused on syntax, undefined names, and basic
+# correctness. Explicit selection avoids version-dependent defaults enabling
+# broad style, import-order, and typing rewrites across existing code.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Optional-dependency checks intentionally precede these imports.
+"src/mada/interfaces/openai_api/main.py" = ["E402"]
+"tests/unit/test_vertex_campaign_artifacts.py" = ["E402"]

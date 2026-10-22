@@ -23,6 +23,7 @@ from mada.core.orchestration.stream_events import (
     InternalImageSignal,
     InternalResponseReplacement,
     image_attachment,
+    response_replacement,
 )
 
 if TYPE_CHECKING:
@@ -42,6 +43,12 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
     """
 
     mode = "agent-as-tool"
+
+    @staticmethod
+    def _is_tool_call_notice(chunk: Any) -> bool:
+        """Return whether a streamed chunk is a display-only tool notice."""
+        text = str(chunk)
+        return text.startswith("\n[Calling: ") and text.endswith("]\n")
 
     _IMAGE_STREAM_START_RE = re.compile(
         r"!\[[^\]]*\]\(\s*data:image/(?:gif|jpeg|png|webp);base64,|"
@@ -323,6 +330,8 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         captured_images = []
         captured_image_index = 0
         emitted_image_digests: set[str] = set()
+        image_fallbacks: list[str] = []
+        has_text = False
 
         try:
             if hasattr(orchestrator, "_begin_image_capture"):
@@ -336,16 +345,37 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 streamed_attachment = image_attachment(chunk)
                 if streamed_attachment is not None:
                     emitted_image_digests.add(streamed_attachment.digest)
+                    image_fallbacks.append(str(chunk))
                 for attachment in captured_images[captured_image_index:]:
                     if attachment.digest not in emitted_image_digests:
                         emitted_image_digests.add(attachment.digest)
-                        yield InternalImageSignal(attachment)
+                        if not has_text:
+                            image_fallbacks.append(str(InternalImageSignal(attachment)))
+                if streamed_attachment is not None:
+                    # OpenAI-compatible responses are text-only. Image
+                    # attachments are surfaced by the Gradio process path. Keep
+                    # the fallback for image-only responses.
+                    continue
                 captured_image_index = len(captured_images)
+                replacement = response_replacement(chunk)
+                if replacement is not None:
+                    if replacement.strip():
+                        has_text = True
+                        image_fallbacks.clear()
+                    yield chunk
+                    continue
+                if str(chunk).strip() and not self._is_tool_call_notice(chunk):
+                    has_text = True
+                    image_fallbacks.clear()
                 yield chunk
             for attachment in captured_images[captured_image_index:]:
                 if attachment.digest not in emitted_image_digests:
                     emitted_image_digests.add(attachment.digest)
-                    yield InternalImageSignal(attachment)
+                    if not has_text:
+                        image_fallbacks.append(str(InternalImageSignal(attachment)))
+            if not has_text:
+                for image_fallback in image_fallbacks:
+                    yield image_fallback
         except Exception as e:
             error_msg = f"Error processing message: {e}"
             LOG.error(error_msg)
@@ -389,6 +419,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         emitted_text = ""
         capture_token = None
         response_started = False
+        rebuild_from_persisted_context = False
 
         try:
             run_session_result = await orchestrator._create_run_session(
@@ -558,6 +589,11 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 persistence_session_id=persistence_session_id,
             )
         except Exception as e:
+            if not isolated_session and rebuild_from_persisted_context:
+                # _create_run_session consumes this one-shot flag before the
+                # run starts. If the run fails, the next turn must retry the
+                # persisted-context rebuild instead of using the empty session.
+                orchestrator._shared_session_requires_context_rebuild = True
             yield orchestrator._process_message_error(e)
         finally:
             if capture_token is not None and hasattr(

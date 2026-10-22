@@ -380,7 +380,7 @@ async def test_agent_as_tool_streams_plain_text_incrementally():
 
 
 @pytest.mark.asyncio
-async def test_agent_as_tool_openai_stream_forwards_captured_image():
+async def test_agent_as_tool_openai_stream_omits_captured_image():
     attachment = ImageAttachment.from_data(PNG_DATA, "image/png")
     strategy = AgentAsToolOrchestrationStrategy()
     image_capture = ContextVar("test_openai_image_capture", default=None)
@@ -412,12 +412,33 @@ async def test_agent_as_tool_openai_stream_forwards_captured_image():
 
     output = [item async for item in strategy.process_openai_messages(orchestrator, [])]
 
-    assert sum(isinstance(item, InternalImageSignal) for item in output) == 1
-    assert "answer" in output
+    assert not any(isinstance(item, InternalImageSignal) for item in output)
+    assert output == ["answer"]
 
 
 @pytest.mark.asyncio
-async def test_magentic_openai_stream_forwards_image_signal(monkeypatch):
+async def test_agent_as_tool_openai_stream_keeps_image_fallback_after_tool_notice():
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+    strategy = AgentAsToolOrchestrationStrategy()
+
+    async def stream_response(*args, **kwargs):
+        yield "\n[Calling: image_tool]\n"
+        yield InternalImageSignal(attachment)
+
+    strategy._stream_response = stream_response
+    orchestrator = SimpleNamespace(
+        planning_agent=SimpleNamespace(create_session=lambda: object()),
+        _normalize_transcript_messages=lambda messages: messages,
+        build_prompt_from_transcript=lambda messages: "prompt",
+    )
+
+    output = [item async for item in strategy.process_openai_messages(orchestrator, [])]
+
+    assert output == ["\n[Calling: image_tool]\n", "[Image attachment: plot.png]"]
+
+
+@pytest.mark.asyncio
+async def test_magentic_openai_stream_omits_image_signal(monkeypatch):
     attachment = ImageAttachment.from_data(PNG_DATA, "image/png")
     strategy = MagenticOrchestrationStrategy()
 
@@ -433,8 +454,7 @@ async def test_magentic_openai_stream_forwards_image_signal(monkeypatch):
 
     output = [item async for item in strategy.process_openai_messages(orchestrator, [])]
 
-    assert len(output) == 1
-    assert str(output[0]).startswith("[Image attachment: ")
+    assert not any(isinstance(item, InternalImageSignal) for item in output)
 
 
 def test_oversized_images_are_ignored(monkeypatch):

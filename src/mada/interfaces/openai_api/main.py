@@ -285,13 +285,10 @@ class MADAOpenAIAPIService:
         """
         Yield OpenAI-compatible SSE events for a streaming response.
 
-        Magentic orchestration can emit provisional text followed by authoritative
-        replacements, but OpenAI SSE protocol is append-only (cannot retract content).
-        To preserve correct output in Magentic mode while maintaining incremental
-        streaming for other modes, this method:
-        - Buffers content in Magentic mode (sacrifices incremental streaming for
-          correctness when replacements occur)
-        - Streams immediately in agent-as-tool mode (preserves incremental streaming)
+        Both orchestration modes can emit provisional text followed by
+        authoritative replacements, but OpenAI SSE protocol is append-only
+        (cannot retract content). This method buffers the response in either
+        mode and emits only the authoritative content.
 
         Args:
             messages: OpenAI-style chat messages from the HTTP request body.
@@ -332,12 +329,10 @@ class MADAOpenAIAPIService:
             }
             return f"data: {json.dumps(payload)}\n\n"
 
-        # Check if we're in Magentic mode (which can produce replacements)
-        orchestration_config = _get_orchestration_config(self.config)
-        is_magentic = orchestration_config.mode == "magentic"
-
-        # In Magentic mode, buffer to handle replacements correctly.
-        # In other modes, stream immediately for incremental delivery.
+        # Both orchestration modes can emit replacement controls after
+        # provisional text (for example while sanitizing image payloads).
+        # OpenAI SSE is append-only, so buffer every mode until the
+        # authoritative response is known.
         buffered_text = ""
 
         async for chunk in self.orchestrator.process_openai_messages(messages):
@@ -372,14 +367,9 @@ class MADAOpenAIAPIService:
             if not content:
                 continue
 
-            if is_magentic:
-                # Buffer content in Magentic mode
-                buffered_text += content
-            else:
-                # Stream immediately in non-Magentic modes
-                yield emit_content(content)
+            buffered_text += content
 
-        # Stream any remaining buffered content (Magentic mode final output)
+        # Stream the authoritative final output.
         if buffered_text:
             yield emit_content(buffered_text)
 

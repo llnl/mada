@@ -23,7 +23,15 @@ from mada.core.media import (
     strip_image_payload_text,
 )
 from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
+from mada.core.orchestration.campaign_state import execution_requested
+from mada.core.orchestration.magentic_runtime import (
+    CURRENT_ACTIVITY,
+    RuntimeActivity,
+    ToolActivityMiddleware,
+    activity_text,
+)
 from mada.core.orchestration.stream_events import (
+    InternalActivitySignal,
     InternalError,
     InternalImageSignal,
     InternalResponseReplacement,
@@ -56,7 +64,7 @@ class MagenticOrchestrationStrategy(BaseOrchestrationStrategy):
     mode = "magentic"
     _MAX_SYNTHESIS_TOOL_WORK_CHARS = 32_000
     _MAX_SYNTHESIS_TOOL_RESULT_CHARS = 8_000
-    _MAX_SYNTHESIS_TIMEOUT_SECONDS = 5.0
+    _MAX_SYNTHESIS_TIMEOUT_SECONDS = 20.0
     _SYNTHESIS_TIMEOUT_FRACTION = 0.2
     _MIN_SYNTHESIS_TIMEOUT_SECONDS = 0.1
 
@@ -94,11 +102,17 @@ Specialist participants:
 Guidelines:
 - Coordinate the specialists as a peer conversation
 - Select only the specialists needed for the current request
+- Route capability questions to the specialist that owns the relevant tools; one specialist lacking a tool does not establish a team-wide blocker
 - Re-plan at most once when the current approach stalls or conflicts
 - Do not repeat a completed tool call or ask a specialist for the same result
 - Stop deliberating as soon as the request is answerable
 - Keep internal planning and progress chatter out of the final user-facing answer
 - Produce the final synthesized assistant response for the user
+- Honor explicit requests for both specialists to critique results; preserve their evidence and tradeoff in the final answer
+- Give concise public explanations of actions and findings, without private reasoning
+- If a specialist needs external input that no available tool can obtain, stop and report that input; do not repeatedly ask it to resolve the same blocker
+- Attribute critiques or agreement only to specialists who actually provided them; a specialist that did not speak has no recorded position
+- Failed parameter-generation tasks are not submitted simulations or Flux job IDs; only simulation submission attempts consume the simulation budget
 """
 
         agent_kwargs = {}
@@ -254,10 +268,50 @@ Guidelines:
                 "Magentic orchestration requires agent_framework MagenticBuilder support"
             )
 
+        participants = [
+            self._runtime_agent(agent) for agent in orchestrator.specialist_agents
+        ]
+        activity = CURRENT_ACTIVITY.get()
+        if activity is not None:
+            for participant in participants:
+                if not isinstance(participant, Agent):
+                    if activity.budget:
+                        raise TypeError(
+                            "Budgeted campaigns require Agent participants with function middleware"
+                        )
+                    continue
+                top_level_tools = getattr(participant, "tools", None)
+                tools = list(
+                    top_level_tools
+                    if top_level_tools is not None
+                    else participant.default_options.get("tools", []) or []
+                )
+                seen_tool_ids = {id(tool) for tool in tools}
+                for tool in getattr(participant, "mcp_tools", []) or []:
+                    if id(tool) not in seen_tool_ids:
+                        tools.append(tool)
+                        seen_tool_ids.add(id(tool))
+                if activity.ledger:
+                    tools.append(
+                        activity.critique_tool(participant.name or participant.id)
+                    )
+                    # Framework versions store callable tools in either place.
+                    # Update the active layout on this clone, including an
+                    # explicitly empty top-level list.
+                    if top_level_tools is not None:
+                        participant.tools = tools
+                    else:
+                        participant.default_options["tools"] = tools
+                # Modify only runtime clones. Middleware state and reservations
+                # must never be shared by overlapping requests.
+                participant.middleware = [
+                    *(getattr(participant, "middleware", None) or []),
+                    ToolActivityMiddleware(
+                        activity, participant.name or participant.id, tools
+                    ),
+                ]
         builder_kwargs = {
-            "participants": [
-                self._runtime_agent(agent) for agent in orchestrator.specialist_agents
-            ],
+            "participants": participants,
             "manager_agent": self._runtime_agent(orchestrator.manager_agent),
         }
 
@@ -277,6 +331,29 @@ Guidelines:
         )
         if "max_stall_count" in builder_parameters or accepts_kwargs:
             builder_kwargs["max_stall_count"] = max(max_rounds, max_stalls) + 1
+        if "intermediate_output_from" in builder_parameters:
+            builder_kwargs["intermediate_output_from"] = "all_other"
+        if activity is not None and activity.budget:
+            concise_prompts = {
+                "task_ledger_facts_prompt": (
+                    "For this engineering request, state only the provided facts and "
+                    "the essential unknowns to obtain from tools, in at most 120 words. "
+                    "Do not speculate about physics or QoI. Request: {task}"
+                ),
+                "task_ledger_plan_prompt": (
+                    "Make a short execution plan for this team: {team}. Use two "
+                    "initial simulations, both specialists' critiques of the first "
+                    "results, and at most one justified follow-up. Plan only the "
+                    "work needed for the requested six deliverables."
+                ),
+            }
+            builder_kwargs.update(
+                {
+                    key: value
+                    for key, value in concise_prompts.items()
+                    if key in builder_parameters
+                }
+            )
 
         return MagenticBuilder(**builder_kwargs)
 
@@ -385,6 +462,8 @@ Guidelines:
             )
 
         event_type = self._event_type(payload)
+        if event_type in {"text_reasoning", "reasoning", "reasoning_summary"}:
+            return ""
         if self._is_image_payload(payload, event_type):
             # Image bytes/base64 are attachments, not assistant-visible text.
             return ""
@@ -429,6 +508,35 @@ Guidelines:
         return str(
             getattr(payload, "type", "") or getattr(payload, "event", "")
         ).lower()
+
+    @classmethod
+    def _public_delta(cls, payload: Any) -> str:
+        """Extract public text deltas, preserving spaces and excluding reasoning."""
+        if isinstance(payload, str):
+            return strip_image_payload_text(payload, strip_outer_whitespace=False)
+        if isinstance(payload, (list, tuple)):
+            return "".join(cls._public_delta(item) for item in payload)
+        kind = cls._event_type(payload)
+        if kind in {
+            "text_reasoning",
+            "reasoning",
+            "reasoning_summary",
+            "function_call",
+            "function_result",
+            "tool_call",
+            "tool_result",
+            "image",
+            "data",
+            "uri",
+        }:
+            return ""
+        # Read contents before .text (which can concatenate multiple content
+        # types on response objects, including private reasoning).
+        for key in ("contents", "content", "data", "text"):
+            value = cls._payload_value(payload, key)
+            if value is not None:
+                return cls._public_delta(value)
+        return ""
 
     @classmethod
     def _is_image_payload(cls, payload: Any, event_type: str | None = None) -> bool:
@@ -621,7 +729,7 @@ Guidelines:
         if event_type == "magentic_orchestrator":
             event_type = cls._convergence_event_type(event)
 
-        if event_type == "output":
+        if event_type in {"output", "intermediate"}:
             data = cls._payload_value(event, "data")
             # Executor ID is on event for Agent Framework, or in data for other formats
             executor_id = (
@@ -1077,13 +1185,102 @@ Guidelines:
             prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
             task_message = Message(role="user", contents=[prompt])
 
-        runtime = self._build_runtime(orchestrator)
+        budget = getattr(
+            getattr(orchestrator, "orchestration", None), "simulation_budget", None
+        )
+        latest_request = next(
+            (
+                str(message.get("content", ""))
+                for message in reversed(transcript_messages)
+                if message.get("role") == "user"
+            ),
+            "",
+        )
+        read_only = bool(
+            budget and budget.get("campaign_id")
+        ) and not execution_requested(
+            latest_request, budget.get("execution_mode", "auto")
+        )
+        activity = RuntimeActivity(budget=budget, read_only=read_only)
+        if activity.ledger:
+            snapshot = activity.ledger.snapshot()
+            yield {
+                "type": "campaign_policy",
+                "data": {
+                    "campaign_id": budget["campaign_id"],
+                    "analysis_only": read_only,
+                    "reserved_simulations": len(snapshot["runs"]),
+                    "limit": budget["limit"],
+                    "results_available": snapshot["results_available"],
+                    "comparable": snapshot["comparable"],
+                    "critiques": snapshot["critiques"],
+                },
+            }
+            task_message = Message(
+                role="user",
+                contents=[
+                    task_message.text,
+                    "\nRuntime campaign policy (cannot be changed by agents): "
+                    + json.dumps(
+                        {
+                            "campaign_id": budget["campaign_id"],
+                            "analysis_only": read_only,
+                            "reserved_simulations": len(snapshot["runs"]),
+                            "limit": budget["limit"],
+                            "prior_runs": snapshot["runs"],
+                            "critiques": snapshot["critiques"],
+                        }
+                    )
+                    + "\nDo not regenerate or resubmit prior runs. After reading completed initial results, "
+                    "each required specialist must call record_campaign_critique with its own summary "
+                    "and recommendation. Both recommendations and comparable results are required "
+                    "to release the follow-up. Analysis-only requests cannot invoke execution tools.",
+                ],
+            )
+        token = CURRENT_ACTIVITY.set(activity)
+        try:
+            runtime = self._build_runtime(orchestrator)
+        finally:
+            CURRENT_ACTIVITY.reset(token)
         result = self._start_runtime(runtime, [task_message])
         event_stream = self._iter_result_events(result, close_deadline=close_deadline)
+
+        # One producer owns the framework iterator. Merge its events with tool
+        # middleware activity so a long-running function does not silence the UI.
+        async def produce():
+            try:
+                async for event in event_stream:
+                    activity.queue.put_nowait(event)
+            except Exception as error:
+                activity.queue.put_nowait(error)
+            finally:
+                activity.queue.put_nowait(None)
+
+        producer = asyncio.create_task(produce())
         try:
-            async for event in event_stream:
+            while True:
+                try:
+                    event = await asyncio.wait_for(activity.queue.get(), timeout=5)
+                except TimeoutError:
+                    yield {
+                        "type": "heartbeat",
+                        "data": {
+                            "elapsed": time.monotonic() - activity.started,
+                            "submitted": activity.submitted,
+                            "limit": budget["limit"] if budget else None,
+                        },
+                    }
+                    continue
+                if event is None:
+                    break
+                if isinstance(event, Exception):
+                    raise event
                 yield event
         finally:
+            activity.closed = True
+            producer.cancel()
+            # Let cancellation reach the producer before closing its iterator.
+            await asyncio.gather(producer, return_exceptions=True)
             if close_deadline is None:
                 await self._close_async_iterator(event_stream)
             else:
@@ -1494,6 +1691,49 @@ Guidelines:
         return rounds, stalls, last_signature, reason
 
     @classmethod
+    def _compact_tool_evidence(cls, value: Any) -> Any:
+        """Keep campaign facts ahead of verbose logs in bounded final synthesis."""
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except (ValueError, TypeError):
+                return value
+            if isinstance(decoded, (dict, list)):
+                return cls._compact_tool_evidence(decoded)
+            return value
+        if isinstance(value, list):
+            return [cls._compact_tool_evidence(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if "manifest_runs" in value and "runs" in value:
+            return {
+                "output_dir": value.get("output_dir"),
+                "comparison": value.get("comparison"),
+                "runs": [
+                    {
+                        key: cls._compact_tool_evidence(item[key])
+                        for key in (
+                            "id",
+                            "parameters",
+                            "velocity_probe",
+                            "metric_error",
+                            "artifact_error",
+                            "time_integration_complete_in_log",
+                            "artifact_directory",
+                            "manifest_run_location",
+                            "images",
+                        )
+                        if key in item
+                    }
+                    for item in value["runs"]
+                    if isinstance(item, dict)
+                ],
+                "images": value.get("images", []),
+                "omitted": "Verbose log tails and executable manifest fields omitted; full artifacts remain available.",
+            }
+        return {key: cls._compact_tool_evidence(item) for key, item in value.items()}
+
+    @classmethod
     def _completed_tool_work(cls, event: Any) -> str:
         """Serialize completed tool output for bounded-run synthesis."""
         event_type = cls._convergence_event_type(event)
@@ -1600,6 +1840,7 @@ Guidelines:
 
         serialized = []
         for candidate in candidates or [event]:
+            candidate = cls._compact_tool_evidence(candidate)
             if isinstance(candidate, bytes):
                 text = candidate.decode("utf-8", errors="replace")
             elif isinstance(candidate, str):
@@ -1652,9 +1893,14 @@ Guidelines:
             "Work completed so far:\n"
             f"{candidate_text or '(No user-facing text was produced.)'}\n\n"
             "Provide the best useful final answer now. Do not continue planning, "
-            "repeat tool calls, mention this safety limit, or describe internal "
-            "agent coordination. If the work is incomplete, clearly state what is "
-            "known and the next concrete step."
+            "or repeat tool calls. Preserve the specialists' critiques, disagreements, "
+            "and evidence. Distinguish submitted, running, completed, and failed jobs. "
+            "Parameter-generation failures do not consume simulation slots and their "
+            "task IDs are not Flux job IDs. Do not invent agreement or critiques "
+            "from a specialist that did not speak. "
+            "If work is incomplete, state that clearly. Never infer QoI or feasibility "
+            "without results. Cover every requested deliverable, including artifacts "
+            "and the recommended next experiment."
         )
 
         manager = self._runtime_agent(orchestrator.manager_agent)
@@ -1723,9 +1969,18 @@ Guidelines:
         final_text = ""
         background_task_descriptors = []
         completed_tool_work = []
+        specialist_text: dict[str, str] = {}
+        specialist_records: list[str] = []
+        responding_specialists: set[str] = set()
+        tool_result_count = 0
+        last_specialist_turn = None
+        idle_specialist_turns = 0
+        active_speaker = None
+        resolved_tasks: set[str] = set()
         seen_executor_ids = set()
         seen_image_digests: set[str] = set()
         convergence_round_ids = set()
+        emitted_statuses: set[str] = set()
         configured = getattr(orchestrator, "orchestration", None)
         max_rounds = max(1, int(getattr(configured, "max_rounds", 4)))
         max_stalls = max(1, int(getattr(configured, "max_stalls", 1)))
@@ -1770,6 +2025,93 @@ Guidelines:
                         seen_image_digests.add(attachment.digest)
                         yield "image", attachment
 
+                    event_type = self._convergence_event_type(event)
+                    executor = self._payload_value(event, "executor_id") or "Specialist"
+                    data = self._payload_value(event, "data") or {}
+                    if event_type in {"tool_result", "function_result"}:
+                        tool_result_count += 1
+                    if event_type != "intermediate":
+                        active_speaker = None
+                    if event_type == "campaign_policy":
+                        completed_tool_work.append(
+                            "Runtime campaign policy: " + json.dumps(data)
+                        )
+                        if include_tool_notices:
+                            mode = (
+                                "analysis only"
+                                if data["analysis_only"]
+                                else "execution enabled"
+                            )
+                            yield (
+                                "notice",
+                                (
+                                    f"\n_Campaign {data['campaign_id']}: {mode}; "
+                                    f"{data['reserved_simulations']}/{data['limit']} simulations already reserved._\n"
+                                ),
+                            )
+                        continue
+                    if event_type == "task_resolved":
+                        resolved_tasks.add(str(data["task_id"]))
+                        continue
+                    if event_type == "submission_reserved":
+                        evidence = json.dumps(data["result"], default=str)
+                        completed_tool_work.append(
+                            f"{executor}: {evidence}"[
+                                : self._MAX_SYNTHESIS_TOOL_RESULT_CHARS
+                            ]
+                        )
+                        if include_tool_notices:
+                            yield (
+                                "notice",
+                                f"\n{executor}: simulation slots reserved {data['result']['reserved_simulations']}/{data['result']['limit']}; awaiting submission outcome.\n",
+                            )
+                        continue
+                    if event_type == "activity":
+                        if include_tool_notices:
+                            yield "notice", activity_text(event)
+                            if data.get("status") == "started":
+                                yield "notice", InternalToolCallSignal(data["name"])
+                        continue
+                    if event_type == "heartbeat":
+                        if include_tool_notices:
+                            budget_status = (
+                                f"; simulations reserved {data['submitted']}/{data['limit']}"
+                                if data.get("limit")
+                                else ""
+                            )
+                            yield (
+                                "notice",
+                                f"\n_Workflow active: {data['elapsed']:.0f}s elapsed{budget_status}._\n",
+                            )
+                        continue
+                    if event_type in {"superstep_started", "superstep_completed"}:
+                        if include_tool_notices:
+                            iteration = self._payload_value(event, "iteration")
+                            yield (
+                                "notice",
+                                f"\n_Superstep {iteration}: {event_type.removeprefix('superstep_')}._\n",
+                            )
+                        continue
+                    if event_type == "intermediate":
+                        text = self._public_delta(event)
+                        if text:
+                            responding_specialists.add(executor)
+                            previous = specialist_text.get(executor, "")
+                            specialist_text[executor] = (previous + text)[
+                                -self._MAX_SYNTHESIS_TOOL_RESULT_CHARS :
+                            ]
+                            if include_tool_notices:
+                                prefix = (
+                                    f"\n\n{executor}: "
+                                    if active_speaker != executor
+                                    else ""
+                                )
+                                yield "notice", prefix + text
+                                active_speaker = executor
+                        # Intermediate output is activity, never the final answer.
+                        continue
+
+                    previous_rounds = rounds
                     (
                         rounds,
                         stalls,
@@ -1784,14 +2126,38 @@ Guidelines:
                         last_signature=last_signature,
                         seen_round_ids=convergence_round_ids,
                     )
+                    convergence_event_type = self._convergence_event_type(event)
+
+                    # Expose safe, high-level progress to interactive clients.
+                    # The manager's private reasoning remains hidden, while
+                    # users can see that Magentic has advanced to a new round.
+                    if (
+                        include_tool_notices
+                        and rounds > previous_rounds
+                        and rounds <= max_rounds
+                    ):
+                        yield (
+                            "notice",
+                            (f"\n**Magentic round {rounds}/{max_rounds}**\n"),
+                        )
+
+                    if include_tool_notices:
+                        status_by_event = {
+                            "plan": "manager created a plan",
+                            "replan": "manager is revising the plan",
+                            "progress": "manager is checking progress",
+                        }
+                        status = status_by_event.get(convergence_event_type)
+                        status_key = f"{convergence_event_type}:{rounds}"
+                        if status and status_key not in emitted_statuses:
+                            emitted_statuses.add(status_key)
+                            yield "notice", f"\n_{status}._\n"
 
                     if include_tool_notices:
                         for notice in self._call_notices_from_event(
                             event, seen_executor_ids
                         ):
                             yield "notice", notice
-
-                    convergence_event_type = self._convergence_event_type(event)
 
                     if convergence_event_type in (
                         "tool_result",
@@ -1807,11 +2173,53 @@ Guidelines:
                                 > self._MAX_SYNTHESIS_TOOL_WORK_CHARS
                             ):
                                 completed_tool_work.pop(0)
+                        # Executor completions include the full response even on
+                        # framework versions without intermediate output support.
+                        if convergence_event_type == "executor_completed":
+                            for item in data if isinstance(data, list) else [data]:
+                                reply = self._payload_value(
+                                    item, "agent_response"
+                                ) or self._payload_value(item, "message")
+                                if reply is not None and (
+                                    text := self._extract_text(reply)
+                                ):
+                                    responding_specialists.add(executor)
+                                    specialist_text[executor] = text[
+                                        -self._MAX_SYNTHESIS_TOOL_RESULT_CHARS :
+                                    ]
+                                    record = f"{executor}: {specialist_text[executor]}"
+                                    if record not in specialist_records:
+                                        specialist_records.append(record)
+                                        while (
+                                            sum(map(len, specialist_records))
+                                            > self._MAX_SYNTHESIS_TOOL_WORK_CHARS
+                                        ):
+                                            specialist_records.pop(0)
+                            # A manager can label repeated requests as progress
+                            # even when the same specialist has no new tools or
+                            # collaborators to help. Bound that loop independently
+                            # of the manager's self-reported progress ledger.
+                            if (
+                                getattr(configured, "simulation_budget", None)
+                                and executor in responding_specialists
+                            ):
+                                turn = (executor, tool_result_count)
+                                idle_specialist_turns = (
+                                    idle_specialist_turns + 1
+                                    if turn == last_specialist_turn
+                                    else 0
+                                )
+                                last_specialist_turn = turn
+                                if idle_specialist_turns >= max_stalls:
+                                    convergence_reason = (
+                                        f"no new tool results or collaborator input for "
+                                        f"{max_stalls} consecutive turns of {executor}"
+                                    )
+                            responding_specialists.discard(executor)
                         for descriptor in self._background_task_descriptors_from_event(
                             event
                         ):
                             background_task_descriptors.append(descriptor)
-                            yield "background_task", descriptor
                         if convergence_reason:
                             stop_reason = convergence_reason
                             break
@@ -1842,6 +2250,11 @@ Guidelines:
             stop_reason = (
                 None if final_text else f"wall-clock limit ({timeout_seconds:g}s)"
             )
+        except Exception as error:
+            if not getattr(configured, "simulation_budget", None):
+                raise
+            LOG.exception("Constrained campaign interrupted")
+            stop_reason = f"workflow error: {error}"
         finally:
             # Teardown must not consume the time reserved for synthesis.
             closed = await self._close_async_iterator_until(
@@ -1853,6 +2266,19 @@ Guidelines:
                 stop_reason = f"wall-clock limit ({timeout_seconds:g}s)"
 
         synthesized = ""
+        completed_tool_work.extend(specialist_records)
+        completed_tool_work.extend(
+            f"{agent}: {text}"
+            for agent, text in specialist_text.items()
+            if text and f"{agent}: {text}" not in specialist_records
+        )
+        background_task_descriptors = [
+            descriptor
+            for descriptor in dict.fromkeys(background_task_descriptors)
+            if str(json.loads(descriptor).get("task_id")) not in resolved_tasks
+        ]
+        for descriptor in background_task_descriptors:
+            yield "background_task", descriptor
         if stop_reason and not final_text:
             LOG.warning("Magentic workflow stopped at %s", stop_reason)
             synthesis_timeout = min(
@@ -1873,6 +2299,25 @@ Guidelines:
                     LOG.warning("Magentic synthesis exceeded the request deadline")
             if synthesized:
                 final_text = synthesized
+
+            if not final_text:
+                evidence = "\n\n".join(completed_tool_work)[
+                    -self._MAX_SYNTHESIS_TOOL_WORK_CHARS :
+                ]
+                pending = self._background_task_ack(background_task_descriptors)
+                if getattr(configured, "simulation_budget", None):
+                    final_text = (
+                        f"Campaign incomplete: {stop_reason}. Previously submitted or in-flight jobs may still run; reconcile their status before starting another campaign.\n\n"
+                        "1. Best parameter set: not determined from a completed campaign; see captured evidence below.\n"
+                        "2. QoI and feasibility: use only the measured values in the evidence; unreported values remain unknown.\n"
+                        "3. Executed jobs and outcomes: captured tool results below distinguish submissions from completion. Any unresolved jobs may still be running.\n"
+                        "4. Agents’ tradeoff: see captured specialist critiques below; no additional disagreement is inferred.\n"
+                        "5. Recommended next experiment: reconcile outstanding jobs and analyze their results before authorizing any new simulation.\n"
+                        "6. Plots/images: any returned images are attached; no unreturned plot is assumed to exist.\n\n"
+                        f"Captured evidence:\n{evidence or 'No completed results were captured.'}\n{pending}"
+                    )
+                elif not streamed_text:
+                    final_text = f"Workflow incomplete: {stop_reason}.\n\n{evidence or pending or 'No completed results were captured.'}"
 
         bg_ack = self._background_task_ack(background_task_descriptors)
         main_output = final_text or streamed_text or bg_ack
@@ -1982,6 +2427,7 @@ Guidelines:
         try:
             streamed_text = ""
             final_text = ""
+            image_fallbacks: list[str] = []
             async for kind, value in self._stream_workflow_response(
                 orchestrator,
                 transcript_messages,
@@ -1997,8 +2443,11 @@ Guidelines:
                 elif kind == "final":
                     final_text = value
                 elif kind == "image":
-                    # Text-only OpenAI consumers still need the safe fallback.
-                    yield InternalImageSignal(value)
+                    # OpenAI-compatible responses are text-only. The Gradio
+                    # process path carries image attachments separately. Keep
+                    # the fallback for image-only responses.
+                    image_fallbacks.append(str(InternalImageSignal(value)))
+                    continue
                 elif kind == "background_task":
                     continue
 
@@ -2008,15 +2457,20 @@ Guidelines:
                 if final_replacement is not None
                 else (final_text or streamed_text)
             )
-            if final_output and final_output != streamed_text:
+            if final_output.strip() and final_output != streamed_text:
                 if final_output.startswith(streamed_text):
                     delta = final_output[len(streamed_text) :]
                     if delta:
                         yield delta
                 else:
                     yield InternalResponseReplacement(final_output)
-            elif not final_output:
-                LOG.warning("No final assistant text received from Magentic workflow")
+            elif not final_output.strip():
+                for image_fallback in image_fallbacks:
+                    yield image_fallback
+                if not image_fallbacks:
+                    LOG.warning(
+                        "No final assistant text received from Magentic workflow"
+                    )
         except Exception as e:
             error_msg = f"Error processing message: {e}"
             LOG.error(error_msg)
@@ -2089,13 +2543,20 @@ Guidelines:
             )
 
             aggregated_assistant_reply = ""
+            public_activity = ""
             async for kind, value in self._stream_workflow_response(
                 orchestrator,
                 transcript_messages,
                 include_tool_notices=True,
             ):
                 if kind == "notice":
-                    yield value
+                    if not isinstance(value, InternalToolCallSignal):
+                        public_activity = (public_activity + str(value))[-16_000:]
+                    yield (
+                        value
+                        if isinstance(value, InternalToolCallSignal)
+                        else InternalActivitySignal(value)
+                    )
                 elif kind == "chunk":
                     replacement_text = response_replacement(value)
                     if replacement_text is not None:
@@ -2125,7 +2586,9 @@ Guidelines:
                         )
                 else:
                     persisted_reply = self._reply_for_persistence(
-                        aggregated_assistant_reply,
+                        public_activity
+                        + ("\n\n" if public_activity else "")
+                        + aggregated_assistant_reply,
                         background_task_descriptors,
                     )
                     await orchestrator._persist_isolated_response(
@@ -2137,7 +2600,9 @@ Guidelines:
                     )
             else:
                 persisted_reply = self._reply_for_persistence(
-                    aggregated_assistant_reply,
+                    public_activity
+                    + ("\n\n" if public_activity else "")
+                    + aggregated_assistant_reply,
                     background_task_descriptors,
                 )
                 await orchestrator._commit_completed_turn(
