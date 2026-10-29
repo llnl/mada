@@ -27,19 +27,20 @@
       "url": "http://localhost:8001/mcp",
       "description": "Flux workload manager for job execution"
     },
+    "slurm": {
+      "transport": "streamable-http",
+      "url": "http://localhost:8002/mcp",
+      "description": "SLURM scheduler for job execution"
+    },
     "professor": {
       "transport": "streamable-http",
-       "url": "http://localhost:8005/mcp",
-       "description": "Professor surrogate modeling",
-       "verify": true
+      "url": "http://localhost:8005/mcp",
+      "description": "Professor surrogate modeling"
     }
   },
   "orchestration": {
-    "mode": "magentic",
-    "participants": ["JobManagementAgent", "InverseDesignAgent"],
-    "max_rounds": 4,
-    "timeout_seconds": 120,
-    "max_stalls": 1
+    "mode": "agent-as-tool",
+    "participants": ["JobManagementAgent", "InverseDesignAgent"]
   },
   "interface": {
     "title": "MADA Multi-Agent Orchestrator",
