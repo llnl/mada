@@ -5,12 +5,26 @@
 Agent-as-tool orchestration strategy implementation.
 """
 
+import inspect
+import json
 import logging
+import re
 import traceback
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Tuple
 
 from mada.core.config import AgentConfig, MCPServerConfig, RemoteA2AAgentConfig
+from mada.core.media import (
+    ImageAttachment,
+    extract_image_attachments,
+    strip_image_payload_text,
+)
 from mada.core.orchestration.base_strategy import BaseOrchestrationStrategy
+from mada.core.orchestration.stream_events import (
+    InternalImageSignal,
+    InternalResponseReplacement,
+    image_attachment,
+    response_replacement,
+)
 
 if TYPE_CHECKING:
     from mada.core.orchestrator import MADAOrchestrator
@@ -30,6 +44,92 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
 
     mode = "agent-as-tool"
 
+    @staticmethod
+    def _is_tool_call_notice(chunk: Any) -> bool:
+        """Return whether a streamed chunk is a display-only tool notice."""
+        text = str(chunk)
+        return text.startswith("\n[Calling: ") and text.endswith("]\n")
+
+    _IMAGE_STREAM_START_RE = re.compile(
+        r"!\[[^\]]*\]\(\s*data:image/(?:gif|jpeg|png|webp);base64,|"
+        r"data:image/(?:gif|jpeg|png|webp);base64,|"
+        r"(?:\[\s*)?\{\s*[\"'](?:type|mimeType|media_type)[\"']\s*:\s*[\"']"
+        r"(?:image|data|uri)|"
+        r"(?:\[\s*)?\{(?=[^{}]*[\"'](?:type|mimeType|media_type)[\"']\s*:\s*"
+        r"[\"'](?:image|data|uri))",
+        re.IGNORECASE,
+    )
+    _IMAGE_STREAM_PREFIXES = (
+        "data:image/",
+        '{"type":"image',
+        '{"mimeType":"image/',
+        '{"media_type":"image/',
+        '[{"type":"image',
+        '[{"mimeType":"image/',
+        '[{"media_type":"image/',
+    )
+
+    @classmethod
+    def _serialized_image_start(cls, text: str) -> int | None:
+        """Return the start of a possibly split serialized image payload."""
+        matches = [match.start() for match in cls._IMAGE_STREAM_START_RE.finditer(text)]
+        for prefix in cls._IMAGE_STREAM_PREFIXES:
+            minimum_length = 5 if prefix == "data:image/" else 4
+            for length in range(minimum_length, min(len(prefix), len(text)) + 1):
+                start = len(text) - length
+                if text.endswith(prefix[:length]) and not (
+                    prefix == "data:image/" and start > 0 and text[start - 1].isalnum()
+                ):
+                    matches.append(start)
+
+        if not matches:
+            return None
+
+        start = min(matches)
+        data_start = text.find("data:image/", start)
+        if data_start >= 0:
+            markdown_start = text.rfind("![", start, data_start + 1)
+            if markdown_start >= 0:
+                markdown_prefix = text[markdown_start:data_start]
+                if re.fullmatch(r"!\[[^\]]*\]\(\s*", markdown_prefix):
+                    start = markdown_start
+        return start
+
+    @classmethod
+    def _safe_text_chunk(cls, pending_text: str, chunk_text: str) -> tuple[str, str]:
+        """Return safe text to emit and a possibly incomplete image suffix."""
+        combined = pending_text + chunk_text
+        start = cls._serialized_image_start(combined)
+        if start is None:
+            return combined, ""
+
+        payload = combined[start:]
+        attachments = extract_image_attachments(payload)
+        if not attachments and not cls._serialized_image_is_complete(payload):
+            return combined[:start], payload
+
+        return strip_image_payload_text(combined, strip_outer_whitespace=False), ""
+
+    @staticmethod
+    def _serialized_image_is_complete(payload: str) -> bool:
+        """Return whether a possible serialized image has a closing boundary."""
+        stripped = payload.lstrip()
+        if stripped.startswith("!["):
+            return ")" in stripped
+        if stripped.startswith(("{", "[")):
+            try:
+                json.JSONDecoder().raw_decode(stripped)
+            except json.JSONDecodeError:
+                return False
+            return True
+        return bool(
+            re.search(
+                r"data:image/(?:gif|jpeg|png|webp);base64,[^\s)]+",
+                stripped,
+                re.IGNORECASE,
+            )
+        )
+
     def _initialize_planning_agent(
         self,
         orchestrator: "MADAOrchestrator",
@@ -44,6 +144,8 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
             participant_configs=active_participant_configs,
         )
         orchestrator.session = orchestrator.planning_agent.create_session()
+        orchestrator._shared_session_context_signature = None
+        orchestrator._shared_session_requires_context_rebuild = True
         orchestrator.manager_agent = None
 
     def _remote_a2a_tool_labels(self, orchestrator: "MADAOrchestrator") -> List[str]:
@@ -109,11 +211,32 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         """
         response_started = False
         tool_calls = []
+        text_chunks = []
+        pending_text = ""
+        emitted_text = ""
+        image_digests: set[str] = set()
         stream = orchestrator.planning_agent.run(prompt, session=session, stream=True)
         async for chunk in stream:
+            for attachment in extract_image_attachments(chunk):
+                if attachment.digest in image_digests:
+                    continue
+                image_digests.add(attachment.digest)
+                yield InternalImageSignal(attachment)
+
             if chunk.text:
-                response_started = True
-                yield chunk.text
+                text_chunks.append(chunk.text)
+                for attachment in extract_image_attachments(pending_text + chunk.text):
+                    if attachment.digest in image_digests:
+                        continue
+                    image_digests.add(attachment.digest)
+                    yield InternalImageSignal(attachment)
+                safe_text, pending_text = self._safe_text_chunk(
+                    pending_text, chunk.text
+                )
+                if safe_text:
+                    response_started = True
+                    emitted_text += safe_text
+                    yield safe_text
                 continue
 
             if not include_tool_notices:
@@ -121,6 +244,27 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
 
             for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
                 yield notice
+
+        assembled_text = "".join(text_chunks)
+        for attachment in extract_image_attachments(assembled_text):
+            if attachment.digest in image_digests:
+                continue
+            image_digests.add(attachment.digest)
+            yield InternalImageSignal(attachment)
+
+        text = strip_image_payload_text(assembled_text)
+        if text.strip() != emitted_text.strip():
+            if text.startswith(emitted_text):
+                remainder = text[len(emitted_text) :]
+                if remainder:
+                    response_started = True
+                    emitted_text += remainder
+                    yield remainder
+            elif text:
+                response_started = True
+                yield InternalResponseReplacement(text)
+        if text and not response_started:
+            response_started = True
 
         if not response_started:
             LOG.warning("No text chunks received from planning agent")
@@ -182,20 +326,66 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         transcript_messages = orchestrator._normalize_transcript_messages(messages)
         prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
         request_session = orchestrator.planning_agent.create_session()
+        capture_token = None
+        captured_images = []
+        captured_image_index = 0
+        emitted_image_digests: set[str] = set()
+        image_fallbacks: list[str] = []
+        has_text = False
 
         try:
+            if hasattr(orchestrator, "_begin_image_capture"):
+                capture_token, captured_images = orchestrator._begin_image_capture()
             async for chunk in self._stream_response(
                 orchestrator,
                 prompt,
                 session=request_session,
                 include_tool_notices=True,
             ):
+                streamed_attachment = image_attachment(chunk)
+                if streamed_attachment is not None:
+                    emitted_image_digests.add(streamed_attachment.digest)
+                    image_fallbacks.append(str(chunk))
+                for attachment in captured_images[captured_image_index:]:
+                    if attachment.digest not in emitted_image_digests:
+                        emitted_image_digests.add(attachment.digest)
+                        if not has_text:
+                            image_fallbacks.append(str(InternalImageSignal(attachment)))
+                if streamed_attachment is not None:
+                    # OpenAI-compatible responses are text-only. Image
+                    # attachments are surfaced by the Gradio process path. Keep
+                    # the fallback for image-only responses.
+                    continue
+                captured_image_index = len(captured_images)
+                replacement = response_replacement(chunk)
+                if replacement is not None:
+                    if replacement.strip():
+                        has_text = True
+                        image_fallbacks.clear()
+                    yield chunk
+                    continue
+                if str(chunk).strip() and not self._is_tool_call_notice(chunk):
+                    has_text = True
+                    image_fallbacks.clear()
                 yield chunk
+            for attachment in captured_images[captured_image_index:]:
+                if attachment.digest not in emitted_image_digests:
+                    emitted_image_digests.add(attachment.digest)
+                    if not has_text:
+                        image_fallbacks.append(str(InternalImageSignal(attachment)))
+            if not has_text:
+                for image_fallback in image_fallbacks:
+                    yield image_fallback
         except Exception as e:
             error_msg = f"Error processing message: {e}"
             LOG.error(error_msg)
             traceback.print_exc()
             yield error_msg
+        finally:
+            if capture_token is not None and hasattr(
+                orchestrator, "_end_image_capture"
+            ):
+                orchestrator._end_image_capture(capture_token)
 
     async def process_message(
         self,
@@ -204,9 +394,16 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         isolated_session: bool = False,
         persistence_session_id: str | None = None,
         stateless_session: bool = False,
+        context_session_ids: List[str] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message through the planning agent.
+
+        When persisted session context is selected, isolated turns rebuild the
+        prompt from that merged transcript immediately. Shared interactive turns
+        also rebuild on the next message after the loaded session set changes so
+        the planning agent's in-memory session stays aligned with persisted
+        context selection.
         """
         if not orchestrator.planning_agent:
             yield "Error: Orchestrator not initialized. Call initialize_orchestrator() first."
@@ -215,41 +412,146 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
         aggregated_assistant_reply = ""
         tool_calls = []
         background_task_descriptors = []
+        image_attachments: list[ImageAttachment] = []
+        image_digests: set[str] = set()
+        text_chunks: list[str] = []
+        pending_text = ""
+        emitted_text = ""
+        capture_token = None
         response_started = False
+        rebuild_from_persisted_context = False
 
         try:
-            (
-                turn_id,
-                run_session,
-                history_lengths,
-            ) = await orchestrator._create_run_session(isolated_session)
+            run_session_result = await orchestrator._create_run_session(
+                isolated_session,
+                primary_session_id=persistence_session_id,
+                context_session_ids=context_session_ids,
+            )
+            # Keep compatibility with strategy doubles and older orchestrator
+            # implementations that return the original four-value tuple.
+            if len(run_session_result) == 4:
+                (
+                    turn_id,
+                    run_session,
+                    history_lengths,
+                    rebuild_from_persisted_context,
+                ) = run_session_result
+                session_context_signature = None
+            else:
+                (
+                    turn_id,
+                    run_session,
+                    history_lengths,
+                    rebuild_from_persisted_context,
+                    session_context_signature,
+                ) = run_session_result
 
             prompt = message
-            if (
+            should_rebuild_prompt_from_persisted_context = (
                 isolated_session
-                and persistence_session_id is not None
-                and not stateless_session
-            ):
-                history = await orchestrator._load_history_for_session(
-                    persistence_session_id
+                and (
+                    persistence_session_id is not None
+                    or context_session_ids is not None
                 )
-                transcript_messages = orchestrator._normalize_transcript_messages(
-                    [*history, {"role": "user", "content": message}]
-                )
+            ) or rebuild_from_persisted_context
+            if should_rebuild_prompt_from_persisted_context:
+                transcript_builder = orchestrator.build_persisted_context_transcript
+                transcript_kwargs = {
+                    "latest_user_message": message,
+                    "primary_session_id": persistence_session_id,
+                    "context_session_ids": context_session_ids,
+                }
+                try:
+                    transcript_signature = inspect.signature(transcript_builder)
+                    transcript_parameters = transcript_signature.parameters
+                    supports_primary_toggle = (
+                        "include_primary_session" in transcript_parameters
+                        or any(
+                            parameter.kind is inspect.Parameter.VAR_KEYWORD
+                            for parameter in transcript_parameters.values()
+                        )
+                    )
+                except (TypeError, ValueError):
+                    supports_primary_toggle = False
+                if supports_primary_toggle:
+                    # Shared-session rebuilds must retain the active chat;
+                    # context-only transcripts are only appropriate for an
+                    # isolated turn with no primary persistence target.
+                    transcript_kwargs["include_primary_session"] = (
+                        not isolated_session or persistence_session_id is not None
+                    )
+                transcript_messages = await transcript_builder(**transcript_kwargs)
                 prompt = orchestrator.build_prompt_from_transcript(transcript_messages)
 
+            if hasattr(orchestrator, "_begin_image_capture"):
+                capture_token, captured_images = orchestrator._begin_image_capture()
+            else:
+                captured_images = []
+            captured_image_index = 0
             stream = orchestrator.planning_agent.run(
                 prompt, session=run_session, stream=True
             )
             async for chunk in stream:
+                available_images = [
+                    *captured_images[captured_image_index:],
+                    *extract_image_attachments(chunk),
+                ]
+                captured_image_index = len(captured_images)
+                for attachment in available_images:
+                    if attachment.digest in image_digests:
+                        continue
+                    image_digests.add(attachment.digest)
+                    image_attachments.append(attachment)
+                    yield InternalImageSignal(attachment)
+
                 if chunk.text:
-                    response_started = True
-                    aggregated_assistant_reply += chunk.text
-                    yield chunk.text
+                    text_chunks.append(chunk.text)
+                    for attachment in extract_image_attachments(
+                        pending_text + chunk.text
+                    ):
+                        if attachment.digest in image_digests:
+                            continue
+                        image_digests.add(attachment.digest)
+                        image_attachments.append(attachment)
+                        yield InternalImageSignal(attachment)
+                    safe_text, pending_text = self._safe_text_chunk(
+                        pending_text, chunk.text
+                    )
+                    if safe_text:
+                        response_started = True
+                        emitted_text += safe_text
+                        yield safe_text
                     continue
 
                 for notice in self._tool_call_notices_from_chunk(chunk, tool_calls):
                     yield notice
+
+            for attachment in captured_images[captured_image_index:]:
+                if attachment.digest in image_digests:
+                    continue
+                image_digests.add(attachment.digest)
+                image_attachments.append(attachment)
+                yield InternalImageSignal(attachment)
+
+            assembled_text = "".join(text_chunks)
+            for attachment in extract_image_attachments(assembled_text):
+                if attachment.digest in image_digests:
+                    continue
+                image_digests.add(attachment.digest)
+                image_attachments.append(attachment)
+                yield InternalImageSignal(attachment)
+
+            aggregated_assistant_reply = strip_image_payload_text(assembled_text)
+            if aggregated_assistant_reply.strip() != emitted_text.strip():
+                if aggregated_assistant_reply.startswith(emitted_text):
+                    remainder = aggregated_assistant_reply[len(emitted_text) :]
+                    if remainder:
+                        response_started = True
+                        emitted_text += remainder
+                        yield remainder
+                elif aggregated_assistant_reply:
+                    response_started = True
+                    yield InternalResponseReplacement(aggregated_assistant_reply)
 
             if not response_started:
                 LOG.warning("No text chunks received from planning agent")
@@ -269,6 +571,7 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 await orchestrator._persist_isolated_response(
                     message,
                     aggregated_assistant_reply,
+                    image_attachments=image_attachments,
                     background_task_descriptors=background_task_descriptors,
                     session_id=persistence_session_id,
                 )
@@ -280,7 +583,20 @@ class AgentAsToolOrchestrationStrategy(BaseOrchestrationStrategy):
                 aggregated_assistant_reply,
                 run_session,
                 history_lengths,
+                image_attachments=image_attachments,
                 background_task_descriptors=background_task_descriptors,
+                session_context_signature=session_context_signature,
+                persistence_session_id=persistence_session_id,
             )
         except Exception as e:
+            if not isolated_session and rebuild_from_persisted_context:
+                # _create_run_session consumes this one-shot flag before the
+                # run starts. If the run fails, the next turn must retry the
+                # persisted-context rebuild instead of using the empty session.
+                orchestrator._shared_session_requires_context_rebuild = True
             yield orchestrator._process_message_error(e)
+        finally:
+            if capture_token is not None and hasattr(
+                orchestrator, "_end_image_capture"
+            ):
+                orchestrator._end_image_capture(capture_token)

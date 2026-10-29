@@ -48,7 +48,7 @@ from starlette.routing import Route
 
 from mada.core import load_config_from_json
 from mada.core.config import A2AConfig, AppConfig, OrchestrationConfig
-from mada.core.orchestration.stream_events import apply_text_control
+from mada.core.orchestration.stream_events import apply_text_control, image_attachment
 from mada.interfaces.startup_errors import format_startup_error_message
 from mada.core.telemetry import setup_telemetry
 
@@ -295,10 +295,10 @@ class MADAA2AService:
         """
         Yield the authoritative orchestrator response for a single A2A message.
 
-        Magentic can emit replacement/error control chunks after provisional
-        text. A2A string streams have no retract operation, so Magentic output
-        is buffered and yielded only after its authoritative content is known.
-        Other orchestration modes stream chunks immediately.
+        Either orchestration mode can emit replacement/error control chunks
+        after provisional text. A2A string streams have no retract operation,
+        so output is buffered and yielded only after its authoritative content
+        is known.
 
         Uses isolated sessions to avoid interference with the main orchestrator
         session, but does not persist conversation history across A2A requests
@@ -307,20 +307,20 @@ class MADAA2AService:
         if self.orchestrator is None:
             raise RuntimeError("Orchestrator not initialized")
 
-        orchestration_config = (
-            getattr(self.config, "orchestration", None) or OrchestrationConfig()
-        )
-        is_magentic = orchestration_config.mode == "magentic"
         chunks: list[str] = []
+        image_fallbacks: list[str] = []
+        has_text = False
         async for chunk in self.orchestrator.process_message(
             message,
             isolated_session=True,
             stateless_session=True,
         ):
-            if not is_magentic:
-                content = str(chunk)
-                if content:
-                    yield content
+            # Image signals are internal controls.  They carry a readable
+            # fallback string for text-oriented callers, but A2A's response
+            # stream is text-only and must not expose that implementation
+            # marker to remote clients.
+            if image_attachment(chunk) is not None:
+                image_fallbacks.append(str(chunk))
                 continue
 
             handled, terminal = apply_text_control(chunks, chunk)
@@ -330,12 +330,19 @@ class MADAA2AService:
                 continue
 
             content = str(chunk)
-            if content:
-                chunks.append(content)
+            if content.strip():
+                has_text = True
+            # Preserve every ordinary text chunk, including whitespace-only
+            # chunks. A streamed space can be the separator between two
+            # substantive chunks (for example, "hello", " ", "world").
+            chunks.append(content)
 
         content = "".join(chunks)
-        if content:
+        if content.strip() or has_text:
             yield content
+        else:
+            for image_fallback in image_fallbacks:
+                yield image_fallback
 
 
 def _extract_message_text(value: Any) -> str:

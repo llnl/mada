@@ -94,12 +94,43 @@ class TestOrchestrationConfig:
 
         assert config.mode == DEFAULT_ORCHESTRATION_MODE
         assert config.participants is None
+        assert config.max_rounds == 4
+        assert config.timeout_seconds == 120
+        assert config.max_stalls == 1
 
     def test_load_orchestration_config_defaults_for_empty_object(self):
         config = load_orchestration_config({})
 
         assert config.mode == DEFAULT_ORCHESTRATION_MODE
         assert config.participants is None
+
+    def test_load_orchestration_config_expands_env_backed_limits(self, monkeypatch):
+        monkeypatch.setenv("MADA_MAX_ROUNDS", "7")
+
+        config = load_orchestration_config(
+            {
+                "max_rounds": "${MADA_MAX_ROUNDS}",
+                "timeout_seconds": "${MADA_TIMEOUT_SECONDS:-30}",
+                "max_stalls": "${MADA_MAX_STALLS:-2}",
+            }
+        )
+
+        assert config.max_rounds == 7
+        assert config.timeout_seconds == 30
+        assert config.max_stalls == 2
+
+    @pytest.mark.parametrize(
+        "field_name", ["max_rounds", "timeout_seconds", "max_stalls"]
+    )
+    @pytest.mark.parametrize("invalid_value", [0, -1, False, "4"])
+    def test_load_orchestration_config_rejects_invalid_convergence_limits(
+        self, field_name, invalid_value
+    ):
+        with pytest.raises(
+            ValueError,
+            match=rf"'orchestration\.{field_name}' must be a positive integer",
+        ):
+            load_orchestration_config({field_name: invalid_value})
 
     @pytest.mark.parametrize("invalid_value", [False, []])
     def test_load_orchestration_config_rejects_non_object_blocks(self, invalid_value):
@@ -109,6 +140,51 @@ class TestOrchestrationConfig:
 
 @pytest.mark.unit
 class TestAppConfig:
+    @pytest.mark.parametrize(
+        "launcher_name",
+        [
+            "read_image_mcp_server.py",
+            "mada-read-image-mcp.exe",
+            "mada-read-image-mcp.cmd",
+        ],
+    )
+    def test_source_image_server_gets_config_directory_environment(
+        self, tmp_path, launcher_name
+    ):
+        config = AppConfig.from_dict(
+            {
+                "model": {
+                    "provider": "openai",
+                    "model": "gpt-test",
+                    "api_key": "test-key",
+                    "base_url": "https://llm.example/v1",
+                },
+                "agents": [
+                    {
+                        "agent_name": "WorkerAgent",
+                        "description": "Does work",
+                        "mcp_servers": ["images"],
+                        "instructions": "Help with tests.",
+                    }
+                ],
+                "database": {
+                    "type": "sqlite",
+                    "path": str(tmp_path / "chat_history.db"),
+                },
+                "mcp_servers": {
+                    "images": {
+                        "transport": "stdio",
+                        "command": str(tmp_path / launcher_name),
+                    }
+                },
+            },
+            config_dir=tmp_path,
+        )
+
+        assert config.mcp_servers["images"].env["MADA_CONFIG_DIR"] == str(
+            tmp_path.resolve()
+        )
+
     def test_app_config_loads_verify_settings(self, tmp_path, monkeypatch):
         monkeypatch.setenv("MADA_CA_BUNDLE", "/tmp/mada-ca.pem")
 

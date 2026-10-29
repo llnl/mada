@@ -120,45 +120,88 @@ class MADAMultiAgentGradioInterface:
             placeholder=placeholder,
             elem_id="mada-message-box",
         )
+        pending_message = gr.State("")
+        self.awaiting_response = gr.State(False)
         message_box.submit(
-            fn=self._send_message,
+            fn=self._stage_user_message,
             inputs=[
                 message_box,
                 chatbot,
+            ],
+            outputs=[message_box, chatbot, pending_message, self.awaiting_response],
+            show_progress="hidden",
+            queue=False,
+        ).then(
+            fn=self._stream_response,
+            inputs=[
+                pending_message,
+                chatbot,
                 *self.get_additional_chat_inputs(agent_table),
             ],
-            outputs=[message_box, chatbot],
+            outputs=[chatbot, self.awaiting_response],
             show_progress="hidden",
         )
 
         return chatbot
 
-    async def _send_message(
+    @staticmethod
+    def _stage_user_message(message: str, history: List[Any]):
+        """Render a submitted user message before starting response work."""
+        if not message or not message.strip():
+            return gr.skip(), history, "", False
+
+        updated_history = list(history or [])
+        updated_history.append({"role": "user", "content": message})
+        updated_history.append({"role": "assistant", "content": "…"})
+        return "", updated_history, message, True
+
+    async def _stream_response(
         self,
         message: str,
         history: List[Any],
         *additional_inputs: Any,
     ):
         """
-        Add the user message and stream the assistant response.
+        Stream the assistant response after the user message has rendered.
         """
         if not message or not message.strip():
-            yield gr.skip(), history
+            yield history, False
             return
 
-        updated_history = list(history or [])
-        updated_history.append({"role": "user", "content": message})
-        yield "", updated_history
+        # Do not materialize a new primary session for requests that will be
+        # rejected because the client is not connected or initialized.
+        if self.client.initialized and self.client.orchestrator:
+            self.client.ensure_active_session_visible()
 
-        updated_history.append({"role": "assistant", "content": ""})
-        async for response in self.client.process_message(
-            message, updated_history, *additional_inputs
-        ):
-            updated_history[-1] = {
-                "role": "assistant",
-                "content": response,
-            }
-            yield gr.skip(), updated_history
+        updated_history = list(history or [])
+        try:
+            async for response in self.client.process_message(
+                message, updated_history, *additional_inputs
+            ):
+                updated_history[-1] = {
+                    "role": "assistant",
+                    "content": response,
+                }
+                yield updated_history, True
+        except Exception:
+            # Ensure the timer can resume refreshing if processing fails before
+            # the stream reaches its normal end.
+            yield updated_history, False
+            raise
+        yield updated_history, False
+
+    @staticmethod
+    def _toggle_focus_mode(is_focused: bool):
+        """Toggle the session sidebars and update the focus-mode control."""
+        next_is_focused = not bool(is_focused)
+        sidebars_visible = not next_is_focused
+        button_label = "↔ Show sidebars" if next_is_focused else "⛶ Focus chat"
+        return (
+            gr.update(visible=sidebars_visible),
+            gr.update(visible=sidebars_visible),
+            gr.update(value=button_label),
+            next_is_focused,
+        )
 
     def create_interface(self) -> gr.Blocks:
         """
@@ -179,17 +222,66 @@ class MADAMultiAgentGradioInterface:
             gr.Markdown(f"# {title}")
             gr.Markdown(description)
 
-            with gr.Row():
+            # MCP Server connection section
+            with self.create_accordion():
+                agent_table = create_agent_table(
+                    self.agents,
+                    a2a_agents=getattr(self.client, "a2a_agents", {}),
+                )
+
+                connect_button = gr.Button("Connect to MCP Servers", variant="primary")
+
+                connect_button.click(
+                    fn=self.client.connect_servers,
+                    inputs=[agent_table],
+                    outputs=[connect_button, agent_table],
+                    show_progress="full",
+                )
+
+            if self.in_situ_viz_config is not None:
+                sim_server = self.in_situ_viz_config["sim_server"]
+                update_time = self.in_situ_viz_config["update_time"]  # in seconds
+
+                gr.Markdown(
+                    f"### Simulation Visualization: Updates every {update_time} seconds."
+                )
+
+                self.sim_status = gr.Markdown(
+                    value=f"Using {sim_server} for in-situ visualization..."
+                )
+
+                self.sim_image = gr.HTML(label="Latest Simulation Frame")
+
+                self.refresh_timer = gr.Timer(value=update_time)
+
+                self.refresh_timer.tick(
+                    fn=self.in_situ_viz,
+                    inputs=[],
+                    outputs=[self.sim_image, self.sim_status],
+                    show_progress="hidden",
+                    concurrency_limit=1,
+                )
+
+            # Custom components (subclasses can add their own)
+            self.create_custom_components(demo)
+
+            focus_mode = gr.State(False)
+
+            with gr.Row(equal_height=False, elem_id="mada-layout-shell"):
                 # Left sidebar for sessions
-                with gr.Column(scale=1, min_width=220):
+                with gr.Column(
+                    scale=2, min_width=240, elem_id="mada-left-sidebar"
+                ) as left_sidebar:
                     gr.Markdown("### Chats")
 
                     new_chat_btn = gr.Button("➕ New chat", variant="secondary")
-                    session_list = gr.Radio(
-                        choices=self.client.get_session_choices(),
-                        label="Sessions",
-                        interactive=True,
-                    )
+                    with gr.Group(elem_id="mada-session-list-panel"):
+                        session_list = gr.Radio(
+                            choices=self.client.get_session_choices(),
+                            label="Primary Chat",
+                            interactive=True,
+                            elem_id="mada-session-list",
+                        )
                     delete_chat_btn = gr.Button(
                         "🗑️ Delete selected chat", variant="stop"
                     )
@@ -209,67 +301,69 @@ class MADAMultiAgentGradioInterface:
                                 "Cancel", variant="secondary", size="sm"
                             )
 
-                # Right main column for tools + chat
-                with gr.Column(scale=4):
-                    # MCP Server connection section
-                    with self.create_accordion():
-                        agent_table = create_agent_table(
-                            self.agents,
-                            a2a_agents=getattr(self.client, "a2a_agents", {}),
-                        )
-
-                        connect_button = gr.Button(
-                            "Connect to MCP Servers", variant="primary"
-                        )
-
-                        connect_button.click(
-                            fn=self.client.connect_servers,
-                            inputs=[agent_table],
-                            outputs=[connect_button, agent_table],
-                            show_progress="full",
-                        )
-
-                    if self.in_situ_viz_config is not None:
-                        sim_server = self.in_situ_viz_config["sim_server"]
-                        update_time = self.in_situ_viz_config[
-                            "update_time"
-                        ]  # in seconds
-
-                        gr.Markdown(
-                            f"### Simulation Visualization: Updates every {update_time} seconds."
-                        )
-
-                        self.sim_status = gr.Markdown(
-                            value=f"Using {sim_server} for in-situ visualization..."
-                        )
-
-                        self.sim_image = gr.HTML(label="Latest Simulation Frame")
-
-                        self.refresh_timer = gr.Timer(value=update_time)
-
-                        self.refresh_timer.tick(
-                            fn=self.in_situ_viz,
-                            inputs=[],
-                            outputs=[self.sim_image, self.sim_status],
-                            show_progress="hidden",
-                            concurrency_limit=1,
-                        )
-
-                    # Custom components (subclasses can add their own)
-                    self.create_custom_components(demo)
-
-                    task_status = gr.Markdown(
-                        "### Task Status\nNo background tasks yet."
+                # Center chat column
+                with gr.Column(scale=6, min_width=420, elem_id="mada-center-pane"):
+                    focus_mode_btn = gr.Button(
+                        "⛶ Focus chat",
+                        variant="secondary",
+                        size="sm",
+                        elem_id="mada-focus-mode-btn",
                     )
-                    task_refresh = gr.Timer(value=0.5)
-
-                    # Chat interface
                     chatbot = self.create_chat_interface(agent_table)
+
+                # Right sidebar for context and runtime state
+                with gr.Column(
+                    scale=3, min_width=280, elem_id="mada-right-sidebar"
+                ) as right_sidebar:
+                    with gr.Group(elem_id="mada-context-panel"):
+                        gr.Markdown("### Context Sessions")
+                        gr.Markdown(
+                            "Attach read-only chat histories to model context. New messages are saved only to the selected primary chat."
+                        )
+                        context_sessions = gr.Dropdown(
+                            choices=self.client.get_context_session_choices(),
+                            label="Load Into Context",
+                            multiselect=True,
+                            interactive=True,
+                            elem_id="mada-context-sessions",
+                        )
+                        context_status = gr.Markdown(
+                            self.client.get_context_status_markdown(),
+                            elem_id="mada-context-status",
+                        )
+
+                    with gr.Accordion(
+                        "Task Status", open=False, elem_id="mada-task-status-accordion"
+                    ):
+                        task_status = gr.Markdown(
+                            "### Task Status\nNo background tasks yet.",
+                            elem_id="mada-task-status",
+                        )
+
+            focus_mode_btn.click(
+                fn=self._toggle_focus_mode,
+                inputs=[focus_mode],
+                outputs=[
+                    left_sidebar,
+                    right_sidebar,
+                    focus_mode_btn,
+                    focus_mode,
+                ],
+                show_progress="hidden",
+            )
+
+            task_refresh = gr.Timer(value=0.5)
 
             task_refresh.tick(
                 fn=self.client.refresh_chat_and_task_status,
-                inputs=[chatbot],
-                outputs=[chatbot, task_status],
+                inputs=[chatbot, session_list, self.awaiting_response],
+                outputs=[
+                    chatbot,
+                    task_status,
+                    session_list,
+                    context_sessions,
+                    context_status,
+                ],
                 show_progress="hidden",
                 concurrency_limit=1,
             )
@@ -279,25 +373,41 @@ class MADAMultiAgentGradioInterface:
                 fn=self.client.update_session_choices,
                 inputs=None,
                 outputs=[session_list],
+            ).then(
+                fn=self.client.update_context_session_choices,
+                inputs=[session_list],
+                outputs=[context_sessions],
+            ).then(
+                fn=self.client.get_context_status_markdown,
+                inputs=None,
+                outputs=[context_status],
             )
 
             # New chat button -> create new session, update session list, select it, clear history
             new_chat_btn.click(
                 fn=self.client.create_new_session,
                 inputs=None,
-                outputs=[session_list, chatbot],  # set choices, value, history
+                outputs=[session_list, context_sessions, context_status, chatbot],
             )
 
             # Selecting a session -> load history into chatbot
-            session_list.change(
-                fn=self.client.select_session, inputs=session_list, outputs=chatbot
+            session_list.input(
+                fn=self.client.select_session,
+                inputs=session_list,
+                outputs=[chatbot, context_sessions, context_status],
+            )
+
+            context_sessions.change(
+                fn=self.client.select_context_sessions,
+                inputs=[context_sessions, session_list],
+                outputs=[context_status],
             )
 
             # Deleting a session
             delete_chat_btn.click(
                 fn=self.client.delete_session,
                 inputs=session_list,
-                outputs=[session_list, chatbot],
+                outputs=[session_list, context_sessions, context_status, chatbot],
             )
 
             # Show confirmation panel when "Delete ALL chats" is clicked
@@ -311,7 +421,7 @@ class MADAMultiAgentGradioInterface:
             confirm_delete_all_btn.click(
                 fn=self.client.delete_all_sessions,
                 inputs=None,
-                outputs=[session_list, chatbot],
+                outputs=[session_list, context_sessions, context_status, chatbot],
             ).then(
                 # Hide confirmation panel after deletion
                 fn=lambda: gr.update(visible=False),

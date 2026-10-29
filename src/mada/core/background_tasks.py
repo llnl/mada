@@ -14,7 +14,11 @@ import json
 from typing import Any, Awaitable, Callable, Dict, Set
 
 from mada.core.database import ChatSessionManager
-
+from mada.core.media import (
+    extract_image_attachments,
+    remove_serialized_image_payloads,
+    strip_image_payload_text,
+)
 
 CollectMessageResponse = Callable[..., Awaitable[str]]
 
@@ -110,10 +114,15 @@ class BackgroundTaskManager:
         self._task_lock = asyncio.Lock()
         self._next_background_task_id = 1
         self._pending_tasks: Dict[str, asyncio.Task[Any]] = {}
-        self._task_results: Dict[str, Dict[str, str]] = {}
+        self._task_results: Dict[str, Dict[str, Any]] = {}
         self._hidden_task_ids: Set[str] = set()
         self._background_tool_poll_tasks: Dict[str, asyncio.Task[None]] = {}
         self._active_agent_queries = 0
+
+    def _session_still_exists(self, session_id: str | None) -> bool:
+        """Check session presence while remaining compatible with older managers."""
+        checker = getattr(self.session_manager, "session_exists", None)
+        return True if not callable(checker) else checker(session_id)
 
     def start_background_tool_poll_from_reply_if_needed(
         self,
@@ -284,9 +293,17 @@ class BackgroundTaskManager:
                 continue
 
             if status == "completed":
-                output = result.get("result", "")
+                raw_output = result.get("result", "")
+                attachments = extract_image_attachments(raw_output)
+                output = remove_serialized_image_payloads(
+                    raw_output, strip_outer_whitespace=True
+                )
+                if attachments and output in (None, {}, []):
+                    output = ""
                 if not isinstance(output, str):
                     output = json.dumps(output, indent=2, default=str)
+                else:
+                    output = strip_image_payload_text(output)
                 message = (
                     f"[{task_id}] Background tool `{tool_name}` completed:\n{output}"
                 )
@@ -301,9 +318,26 @@ class BackgroundTaskManager:
                 )
 
             if session_id is not None:
-                self.session_manager.chat_db.add_message(
-                    session_id, "assistant", message
-                )
+                # A detached task must not resurrect a chat deleted while it
+                # was running; both database backends create missing sessions
+                # when inserting a message.
+                if not self._session_still_exists(session_id):
+                    async with self._task_lock:
+                        self._pending_tasks.pop(task_id, None)
+                        self._task_results.pop(task_id, None)
+                        self._background_tool_poll_tasks.pop(task_id, None)
+                    return
+                if status == "completed" and attachments:
+                    self.session_manager.chat_db.add_message(
+                        session_id,
+                        "assistant",
+                        message,
+                        attachments=attachments,
+                    )
+                else:
+                    self.session_manager.chat_db.add_message(
+                        session_id, "assistant", message
+                    )
             async with self._task_lock:
                 self._pending_tasks.pop(task_id, None)
             return
@@ -332,15 +366,25 @@ class BackgroundTaskManager:
             Exception: Propagates failures from the response collection callable
                 before the query is detached.
         """
+        # Capture the chat before running or scheduling the task. A request
+        # must stay bound to the chat/context selected when it was submitted,
+        # even if the interface switches chats while it is running.
+        originating_session_id = self.session_manager.current_session_id
+        originating_context_session_ids = self.session_manager.get_context_session_ids()
+        if originating_session_id and not self._session_still_exists(
+            originating_session_id
+        ):
+            self.session_manager.create_new_session(originating_session_id)
+
         if blocking:
-            response = await self.collect_message_response(user_input)
+            response = await self.collect_message_response(
+                user_input,
+                persistence_session_id=originating_session_id,
+                context_session_ids=originating_context_session_ids,
+            )
             print(response)
             print("")
             return response
-
-        # Capture the chat before scheduling the task. An isolated follow-up
-        # can start after the interface has switched to another chat session.
-        originating_session_id = self.session_manager.current_session_id
 
         async with self._task_lock:
             use_isolated_session = self._active_agent_queries > 0 or any(
@@ -352,16 +396,31 @@ class BackgroundTaskManager:
 
         first_tool_call = asyncio.Event()
         first_tool_state = {}
+        task_state = {
+            "status": "pending",
+            "type": "agent",
+            "session_id": originating_session_id,
+            "progress_text": "",
+        }
+
+        def record_progress(text: str) -> None:
+            # This callback runs synchronously on the query's event loop.
+            # Bound the UI preview without truncating the persisted final answer.
+            if task_state["status"] in {"pending", "running"}:
+                task_state["progress_text"] = text[-64_000:]
+                task_state["status"] = "running"
 
         task = asyncio.create_task(
             self.collect_message_response(
                 user_input,
                 isolated_session=use_isolated_session,
-                persistence_session_id=(
-                    originating_session_id if use_isolated_session else None
-                ),
+                # Bind every detached query to the chat/context selected when
+                # it was submitted, including the first shared-session query.
+                persistence_session_id=originating_session_id,
+                context_session_ids=originating_context_session_ids,
                 first_tool_call=first_tool_call,
                 first_tool_state=first_tool_state,
+                on_progress=record_progress,
             )
         )
 
@@ -390,11 +449,8 @@ class BackgroundTaskManager:
             task_id = f"task-{self._next_background_task_id}"
             self._next_background_task_id += 1
             self._pending_tasks[task_id] = task
-            self._task_results[task_id] = {
-                "status": "pending",
-                "type": "agent",
-                "tool_name": first_tool_state.get("name", "tool call"),
-            }
+            task_state["tool_name"] = first_tool_state.get("name", "tool call")
+            self._task_results[task_id] = task_state
 
         def _done_callback(done_task: asyncio.Task[str]) -> None:
             async def _finalize() -> None:
@@ -429,7 +485,7 @@ class BackgroundTaskManager:
         print(f"{message}\n")
         return message
 
-    async def get_task_snapshot(self) -> Dict[str, Dict[str, str]]:
+    async def get_task_snapshot(self) -> Dict[str, Dict[str, Any]]:
         """
         Return a copy of interface and MCP background task state.
 

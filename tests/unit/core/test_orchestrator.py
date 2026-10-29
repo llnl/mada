@@ -1,6 +1,9 @@
 # Copyright 2026, Lawrence Livermore National Security, LLC and MADA contributors
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock, call
+
 import pytest
 
 from mada.core.config import (
@@ -10,8 +13,76 @@ from mada.core.config import (
     RemoteA2AAgentConfig,
 )
 from mada.core.coordinator import MCPAgentManager
+from mada.core.media import ImageAttachment
 from mada.core.orchestration.stream_events import InternalError
 from mada.core.orchestrator import MADAOrchestrator
+
+
+def test_normalize_transcript_messages_preserves_tool_call_pairing():
+    orchestrator = object.__new__(MADAOrchestrator)
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": "lookup result",
+            "tool_call_id": "call-1",
+        },
+    ]
+
+    normalized = orchestrator._normalize_transcript_messages(messages)
+
+    assert normalized == [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": messages[0]["tool_calls"],
+        },
+        {
+            "role": "tool",
+            "content": "lookup result",
+            "tool_call_id": "call-1",
+        },
+    ]
+
+    prompt = orchestrator.build_prompt_from_transcript(messages)
+    assert 'TOOL_CALLS:\n[{"id": "call-1"' in prompt
+    assert 'TOOL_CALL_ID:\n"call-1"' in prompt
+
+
+PNG_DATA = b"\x89PNG\r\n\x1a\n" + b"test-image-data"
+
+
+def test_image_routing_uses_configured_specialist_name():
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    orchestrator.mcp_servers = {
+        "local_files": MCPServerConfig(
+            transport="stdio",
+            command="mada-read-image-mcp",
+            description="Reads local images",
+        )
+    }
+    orchestrator._mcp_tools_by_server = {}
+
+    renderer = AgentConfig(
+        agent_name="Renderer",
+        description="Displays local images",
+        mcp_servers=["local_files"],
+    )
+
+    guidance = orchestrator._image_routing_guidance([renderer])
+
+    assert "Renderer" in guidance
+    assert "SimulationAgent" not in guidance
 
 
 @pytest.mark.asyncio
@@ -62,6 +133,7 @@ async def test_connect_agent_passes_verify_to_httpx2(monkeypatch):
 
     class DummyAsyncClient:
         def __init__(self, *, headers, timeout, verify):
+            captured["async_client_headers"] = headers
             captured["async_client_verify"] = verify
 
         async def aclose(self):
@@ -116,6 +188,7 @@ async def test_connect_agent_passes_verify_to_httpx2(monkeypatch):
         ),
         session_manager=object(),
     )
+    orchestrator.bearer_token = "interface-token"
     orchestrator.exit_stack = DummyExitStack()
     monkeypatch.setattr(orchestrator, "create_chat_agent", fake_create_chat_agent)
 
@@ -131,12 +204,14 @@ async def test_connect_agent_passes_verify_to_httpx2(monkeypatch):
                 transport="streamable-http",
                 url="https://mcp.example.invalid/mcp",
                 verify=False,
+                headers={"x-token": "server-token"},
             )
         },
     )
 
     assert captured["resolve_verify_arg"] is False
     assert captured["async_client_verify"] is False
+    assert captured["async_client_headers"]["x-token"] == "server-token"
 
 
 @pytest.mark.asyncio
@@ -217,3 +292,182 @@ async def test_collect_message_response_surfaces_internal_error(monkeypatch):
     response = await orchestrator.collect_message_response("hello")
 
     assert response == "Error processing message: boom"
+
+
+@pytest.mark.asyncio
+async def test_load_persisted_context_messages_merges_context_sessions_before_primary(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "mada.core.coordinator.chat_client_factory.create",
+        lambda _: object(),
+    )
+
+    session_manager = SimpleNamespace(
+        get_loaded_session_ids=lambda primary_session_id=None, context_session_ids=None: [
+            "context-a",
+            "context-b",
+            "primary",
+        ],
+        load_history=lambda session_id=None: [
+            {"role": "assistant", "content": f"from {session_id}"}
+        ],
+    )
+    orchestrator = MADAOrchestrator(
+        model_config=OpenAIModelConfig(
+            provider="openai",
+            model="gpt-4.1-mini",
+            api_key="sk-test",
+            base_url="https://example.invalid/v1",
+        ),
+        session_manager=session_manager,
+    )
+
+    messages = await orchestrator.load_persisted_context_messages()
+
+    assert messages == [
+        {
+            "role": "system",
+            "content": (
+                "The following messages are from separate chat session context-a. "
+                "Treat them as reference context, not as one continuous conversation."
+            ),
+        },
+        {"role": "assistant", "content": "from context-a"},
+        {
+            "role": "system",
+            "content": "End of reference chat session context-a.",
+        },
+        {
+            "role": "system",
+            "content": (
+                "The following messages are from separate chat session context-b. "
+                "Treat them as reference context, not as one continuous conversation."
+            ),
+        },
+        {"role": "assistant", "content": "from context-b"},
+        {
+            "role": "system",
+            "content": "End of reference chat session context-b.",
+        },
+        {"role": "assistant", "content": "from primary"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_context_only_transcript_excludes_active_primary_session(monkeypatch):
+    monkeypatch.setattr(
+        "mada.core.coordinator.chat_client_factory.create",
+        lambda _: object(),
+    )
+
+    session_manager = SimpleNamespace(
+        current_session_id="active",
+        get_loaded_session_ids=lambda **kwargs: ["active"],
+        load_history=lambda session_id=None: [
+            {"role": "assistant", "content": f"from {session_id}"}
+        ],
+    )
+    orchestrator = MADAOrchestrator(
+        model_config=OpenAIModelConfig(
+            provider="openai",
+            model="gpt-4.1-mini",
+            api_key="sk-test",
+            base_url="https://example.invalid/v1",
+        ),
+        session_manager=session_manager,
+    )
+
+    messages = await orchestrator.build_persisted_context_transcript(
+        context_session_ids=["context-a"],
+        include_primary_session=False,
+    )
+
+    assert [message["content"] for message in messages] == [
+        "The following messages are from separate chat session context-a. "
+        "Treat them as reference context, not as one continuous conversation.",
+        "from context-a",
+        "End of reference chat session context-a.",
+    ]
+
+
+def test_normalize_transcript_preserves_image_only_message():
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+
+    transcript = orchestrator._normalize_transcript_messages(
+        [{"role": "assistant", "content": "", "attachments": [attachment]}]
+    )
+
+    assert transcript == [
+        {"role": "assistant", "content": "[Image attachment: plot.png]"}
+    ]
+
+
+def test_normalize_transcript_appends_image_context_to_text_message():
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+
+    transcript = orchestrator._normalize_transcript_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "Here is the plot.",
+                "attachments": [attachment],
+            }
+        ]
+    )
+
+    assert transcript == [
+        {
+            "role": "assistant",
+            "content": "Here is the plot.\n[Image attachment: plot.png]",
+        }
+    ]
+
+
+def test_persist_completed_turn_stores_placeholder_for_image_only_response():
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    orchestrator.session_manager = MagicMock()
+    orchestrator.background_tasks = MagicMock()
+    orchestrator.background_tasks.user_message_already_started_background_task.return_value = False
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+
+    orchestrator._persist_completed_turn(
+        {
+            "message": "Create a plot",
+            "assistant_reply": "",
+            "image_attachments": [attachment],
+        }
+    )
+
+    assert orchestrator.session_manager.add_message.call_args_list == [
+        call("user", "Create a plot"),
+        call(
+            "assistant",
+            "[Image attachment: plot.png]",
+            attachments=[attachment],
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_persist_isolated_response_stores_placeholder_for_image_only_response():
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    orchestrator.session_manager = MagicMock()
+    orchestrator.background_tasks = MagicMock()
+    orchestrator.background_tasks.user_message_already_started_background_task.return_value = False
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png", filename="plot.png")
+
+    await orchestrator._persist_isolated_response(
+        "Create a plot", "", image_attachments=[attachment]
+    )
+
+    assert orchestrator.session_manager.add_message.call_args_list == [
+        call("user", "Create a plot"),
+        call(
+            "assistant",
+            "[Image attachment: plot.png]",
+            attachments=[attachment],
+        ),
+    ]

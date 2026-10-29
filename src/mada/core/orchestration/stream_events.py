@@ -4,17 +4,34 @@
 """
 Internal stream-control events shared by orchestration strategies and interfaces.
 
-These sentinels are empty strings so they can pass through existing text stream
-paths without emitting user-visible content. Metadata attributes carry control
-instructions to consumers that understand MADA's internal stream protocol.
+Control sentinels are empty strings so existing text streams can pass them
+without emitting content. Activity and image signals include visible fallback
+text. Metadata attributes carry instructions to protocol-aware consumers.
 """
 
 from typing import Any
+
+from mada.core.media import ImageAttachment
 
 
 TOOL_CALL_NAME_ATTR = "_mada_tool_call_name"
 RESPONSE_REPLACEMENT_ATTR = "_mada_response_replacement"
 ERROR_MESSAGE_ATTR = "_mada_error_message"
+IMAGE_ATTACHMENT_ATTR = "_mada_image_attachment"
+ACTIVITY_ATTR = "_mada_activity"
+
+
+class InternalActivitySignal(str):
+    """Visible activity text kept separately from the replaceable final answer."""
+
+    def __new__(cls, text: str):
+        value = str.__new__(cls, text)
+        setattr(value, ACTIVITY_ATTR, True)
+        return value
+
+
+def is_activity(chunk: Any) -> bool:
+    return bool(getattr(chunk, ACTIVITY_ATTR, False))
 
 
 class InternalToolCallSignal(str):
@@ -50,6 +67,15 @@ class InternalError(str):
         return value
 
 
+class InternalImageSignal(str):
+    """Stream chunk carrying an MCP image and a safe text fallback."""
+
+    def __new__(cls, attachment: ImageAttachment):
+        value = str.__new__(cls, f"[Image attachment: {attachment.filename}]")
+        setattr(value, IMAGE_ATTACHMENT_ATTR, attachment)
+        return value
+
+
 def tool_call_name(chunk: Any) -> str | None:
     """
     Return the internal tool-call name carried by a stream chunk, if present.
@@ -72,6 +98,12 @@ def error_message(chunk: Any) -> str | None:
     """
     value = getattr(chunk, ERROR_MESSAGE_ATTR, None)
     return None if value is None else str(value)
+
+
+def image_attachment(chunk: Any) -> ImageAttachment | None:
+    """Return the image attachment carried by a stream chunk, if present."""
+    value = getattr(chunk, IMAGE_ATTACHMENT_ATTR, None)
+    return value if isinstance(value, ImageAttachment) else None
 
 
 def apply_text_control(chunks: list[str], chunk: Any) -> tuple[bool, bool]:

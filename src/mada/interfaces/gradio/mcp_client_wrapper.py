@@ -9,11 +9,16 @@ for the Gradio interface, adapted to work with MADA's architecture.
 """
 
 import logging
+import os
+import tempfile
 import traceback
-from typing import Any, AsyncGenerator, Dict, List, Tuple
+from collections.abc import AsyncGenerator
+from typing import Any
 
 import gradio as gr
+from gradio import processing_utils
 
+from mada.core.background_tasks import is_background_task_start_ack
 from mada.core.config import (
     AgentConfig,
     DatabaseConfig,
@@ -22,11 +27,18 @@ from mada.core.config import (
     OrchestrationConfig,
     RemoteA2AAgentConfig,
 )
-from mada.core.background_tasks import is_background_task_start_ack
 from mada.core.database import ChatSessionManager
+from mada.core.media import ImageAttachment, RichResponse
+from mada.core.orchestration.stream_events import (
+    apply_text_control,
+    error_message,
+    image_attachment,
+    is_activity,
+    response_replacement,
+)
 from mada.core.orchestrator import MADAOrchestrator
-from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
 from mada.core.skills.skill_registry import SkillRegistry
+from mada.interfaces.gradio.utils import create_agent_table, cycle_through_tools
 
 LOG = logging.getLogger("mada-gradio")
 
@@ -42,12 +54,12 @@ class MCPGradioClientSession:
     def __init__(
         self,
         model_config: ModelConfig,
-        agents: List[AgentConfig],
+        agents: list[AgentConfig],
         database_config: DatabaseConfig,
         mcp_servers: MCPServerConfig = None,
         skill_registry: SkillRegistry = None,
-        skill_tools: List[Any] = None,
-        a2a_agents: Dict[str, RemoteA2AAgentConfig] = None,
+        skill_tools: list[Any] | None = None,
+        a2a_agents: dict[str, RemoteA2AAgentConfig] | None = None,
         orchestration_config: OrchestrationConfig = None,
         blocking: bool = False,
     ):
@@ -82,10 +94,109 @@ class MCPGradioClientSession:
         self.session_bearer_token = None  # Store session bearer token
         self.skill_registry = skill_registry or SkillRegistry()
         self.skill_tools = list(skill_tools or [])
+        self._attachment_cache = tempfile.TemporaryDirectory(
+            prefix="mada-gradio-images-"
+        )
+        self._formatted_history_source: list[dict[str, Any]] | None = None
+        self._formatted_history_cache: list[dict[str, Any]] | None = None
+        self._attachment_file_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def _attachment_file_message(self, attachment: ImageAttachment) -> dict[str, Any]:
+        """Save an attachment in Gradio's cache and return chat file content."""
+        cache = getattr(self, "_attachment_file_cache", None)
+        if cache is None:
+            cache = self._attachment_file_cache = {}
+        cache_key = (attachment.digest, attachment.filename, attachment.media_type)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            cached_path = cached.get("file", {}).get("path")
+            if cached_path is not None and os.path.isfile(cached_path):
+                return cached
+
+        path = processing_utils.save_bytes_to_cache(
+            attachment.data,
+            attachment.filename,
+            self._attachment_cache.name,
+        )
+        message = {
+            "type": "file",
+            "alt_text": attachment.filename,
+            "file": {
+                "path": path,
+                "orig_name": attachment.filename,
+                "mime_type": attachment.media_type,
+            },
+        }
+        cache[cache_key] = message
+        return message
+
+    @staticmethod
+    def _coerce_attachment(value: Any) -> ImageAttachment:
+        """Normalize attachments loaded from database implementations."""
+        if isinstance(value, ImageAttachment):
+            return value
+        return ImageAttachment.from_data(
+            bytes(value["data"]),
+            str(value["media_type"]),
+            filename=str(value["filename"]),
+        )
+
+    def _format_message_content(
+        self, text: str, attachments: list[Any]
+    ) -> str | list[Any]:
+        """Build native mixed text/file content for a Gradio Chatbot message."""
+        if not attachments:
+            return text
+
+        content: list[Any] = []
+        if text:
+            content.append(text)
+        content.extend(
+            self._attachment_file_message(self._coerce_attachment(attachment))
+            for attachment in attachments
+        )
+        return content
+
+    @staticmethod
+    def _is_image_attachment_placeholder(text: str) -> bool:
+        """Return whether text consists only of internal image markers."""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return bool(lines) and all(
+            line.startswith("[Image attachment: ") and line.endswith("]")
+            for line in lines
+        )
+
+    def _format_history_for_gradio(
+        self, history: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Convert persisted image bytes into Gradio chat file messages."""
+        formatted = []
+        for message in history:
+            attachments = list(message.get("attachments") or [])
+            if not attachments:
+                content = str(message.get("content") or "")
+                if content.strip():
+                    formatted.append(
+                        {
+                            "role": str(message.get("role") or "assistant"),
+                            "content": content,
+                        }
+                    )
+                continue
+            text = str(message.get("content", ""))
+            if self._is_image_attachment_placeholder(text):
+                text = ""
+            formatted.append(
+                {
+                    "role": str(message.get("role") or "assistant"),
+                    "content": self._format_message_content(text, attachments),
+                }
+            )
+        return formatted
 
     async def connect_servers(
         self, agent_table: gr.Dataframe, request: gr.Request
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Connect to MCP servers based on the agent table configuration.
 
@@ -132,7 +243,7 @@ class MCPGradioClientSession:
             LOG.info(
                 f"Initializing orchestrator with {len(self.agents)} agents and {len(self.mcp_servers)} MCP servers..."
             )
-            status_msg, tools = await self.orchestrator.initialize_orchestrator(
+            status_msg, _tools = await self.orchestrator.initialize_orchestrator(
                 agent_configs=self.agents,  # Use provided agents
                 mcp_servers=self.mcp_servers,
                 a2a_agents=self.a2a_agents,
@@ -167,18 +278,17 @@ class MCPGradioClientSession:
 
         except BaseExceptionGroup as eg:
             error_msg = f"Failed to connect to MCP servers: {len(eg.exceptions)} error(s) occurred"
-            LOG.error(error_msg, exc_info=True)
+            LOG.exception(error_msg)
             return error_msg, f"Connection failed: {len(eg.exceptions)} errors"
         except Exception as e:
             error_msg = f"Failed to connect to MCP servers: {e}"
-            LOG.error(error_msg)
-            LOG.error("Full traceback:", exc_info=True)
+            LOG.exception(error_msg)
             return gr.Button(error_msg, variant="stop"), create_agent_table(
                 self.agents,
                 a2a_agents=self.a2a_agents,
             )
 
-    def list_sessions(self) -> List[str]:
+    def list_sessions(self) -> list[str]:
         """
         List all sessions available and create a list of labels for each session.
 
@@ -191,7 +301,47 @@ class MCPGradioClientSession:
             for sid, ts in sessions
         ]
 
-    def get_session_choices(self) -> List[str]:
+    def _current_session_label(self) -> str | None:
+        """
+        Return the current primary session label if it exists in the session list.
+        """
+        current_session_id = self.session_manager.current_session_id
+        if not current_session_id:
+            return None
+
+        session_labels_by_id = {
+            self._extract_id_from_label(label): label for label in self.list_sessions()
+        }
+        return session_labels_by_id.get(current_session_id)
+
+    def ensure_active_session_visible(self) -> None:
+        """
+        Ensure the current primary session exists in storage.
+        """
+        current_session_id = self.session_manager.ensure_current_session_id()
+        known_session_ids = {
+            self._extract_id_from_label(label) for label in self.list_sessions()
+        }
+        if current_session_id and current_session_id not in known_session_ids:
+            self.session_manager.create_new_session(current_session_id)
+
+    @staticmethod
+    def _history_for_display(
+        history: list[dict[str, Any]] | None,
+    ) -> list[dict[str, str]]:
+        """
+        Convert persisted chat history into the shape expected by Gradio chat UI.
+        """
+        return [
+            {
+                "role": str(message.get("role") or "assistant"),
+                "content": str(message.get("content") or ""),
+            }
+            for message in history or []
+            if str(message.get("content") or "").strip()
+        ]
+
+    def get_session_choices(self) -> list[str]:
         """
         List all chat sessions.
 
@@ -209,23 +359,149 @@ class MCPGradioClientSession:
         Returns:
             A gradio update object with new chat session choices.
         """
-        return gr.update(choices=self.list_sessions(), value=None)
+        return gr.update(
+            choices=self.list_sessions(), value=self._current_session_label()
+        )
 
-    def create_new_session(self) -> Tuple[gr.update, List]:
+    def get_context_session_choices(
+        self, primary_session_label: str | None = None
+    ) -> list[str]:
         """
-        Create a new chat session.
+        Return the selectable read-only sessions for additional model context.
+
+        Args:
+            primary_session_label: Optional primary session label to exclude from
+                the additional context choices.
+
+        Returns:
+            Session labels that may be attached as extra read-only context.
+        """
+        primary_session_id = (
+            self._extract_id_from_label(primary_session_label)
+            if primary_session_label
+            else self.session_manager.current_session_id
+        )
+        return [
+            label
+            for label in self.list_sessions()
+            if self._extract_id_from_label(label) != primary_session_id
+        ]
+
+    def _context_labels_from_ids(self, session_ids: list[str]) -> list[str]:
+        """
+        Map stored session IDs back to the current UI labels.
+
+        Args:
+            session_ids: Persisted session IDs.
+
+        Returns:
+            Current UI labels for the supplied session IDs.
+        """
+        session_labels_by_id = {
+            self._extract_id_from_label(label): label for label in self.list_sessions()
+        }
+        return [
+            session_labels_by_id.get(session_id, session_id)
+            for session_id in session_ids
+        ]
+
+    def get_context_status_markdown(self) -> str:
+        """
+        Describe the sessions currently loaded as additional model context.
+
+        Returns:
+            Markdown summary of the extra read-only context sessions.
+        """
+        context_session_ids = self.session_manager.get_context_session_ids()
+        if not context_session_ids:
+            return "No additional context sessions loaded."
+
+        labels = self._context_labels_from_ids(context_session_ids)
+        return "Loaded into model context:\n" + "\n".join(
+            f"- {label}" for label in labels
+        )
+
+    def update_context_session_choices(
+        self, primary_session_label: str | None = None
+    ) -> gr.update:
+        """
+        Update the selectable context sessions and preserve valid selections.
+
+        Args:
+            primary_session_label: Optional primary session label to exclude from
+                the additional context choices.
+
+        Returns:
+            Gradio update containing the valid context-session choices and the
+            subset of current selections that still apply.
+        """
+        choices = self.get_context_session_choices(primary_session_label)
+        valid_choice_ids = {
+            self._extract_id_from_label(label): label for label in choices
+        }
+        selected_labels = self._context_labels_from_ids(
+            [
+                session_id
+                for session_id in self.session_manager.get_context_session_ids()
+                if session_id in valid_choice_ids
+            ]
+        )
+        self.session_manager.set_context_sessions(
+            [self._extract_id_from_label(label) for label in selected_labels]
+        )
+        return gr.update(choices=choices, value=selected_labels)
+
+    def select_context_sessions(
+        self,
+        session_labels: list[str] | None,
+        primary_session_label: str | None = None,
+    ) -> str:
+        """
+        Track additional read-only sessions to load into model context.
+
+        Args:
+            session_labels: Session labels selected as additional context.
+            primary_session_label: Optional primary session label used to keep the
+                writable chat out of the extra context selection.
+
+        Returns:
+            Refreshed status markdown for the current context-session selection.
+        """
+        primary_session_id = (
+            self._extract_id_from_label(primary_session_label)
+            if primary_session_label
+            else self.session_manager.current_session_id
+        )
+        session_ids = [
+            self._extract_id_from_label(label)
+            for label in session_labels or []
+            if self._extract_id_from_label(label) != primary_session_id
+        ]
+        self.session_manager.set_context_sessions(session_ids)
+        return self.get_context_status_markdown()
+
+    def create_new_session(self) -> tuple[gr.update, gr.update, str, list]:
+        """
+        Create a new primary chat session.
 
         Returns:
             A tuple containing a gradio update object for updating the
-                sessions list and an empty chat history.
+            sessions list, a context-session update, a context summary,
+            and an empty chat history. Additional context-session selections are
+            cleared for the new primary chat.
         """
         new_id = self.session_manager.create_session_id()
         self.session_manager.create_new_session(new_id)
         self.session_manager.select_session(new_id)
+        self.session_manager.set_context_sessions([])
         updated_sessions = self.list_sessions()
-        return gr.update(
-            choices=updated_sessions, value=None
-        ), []  # update sessions list, empty chat history
+        selected_label = self._current_session_label()
+        return (
+            gr.update(choices=updated_sessions, value=selected_label),
+            self.update_context_session_choices(),
+            self.get_context_status_markdown(),
+            [],
+        )
 
     def _extract_id_from_label(self, session_label: str) -> str:
         """
@@ -239,32 +515,46 @@ class MCPGradioClientSession:
         """
         try:
             session_id = session_label.split("|", 1)[1].strip()
-        except Exception:
+        except (IndexError, AttributeError):
             session_id = session_label.strip()
 
         return session_id
 
-    def select_session(self, session_label: str) -> List[Dict[str, str]]:
+    def select_session(
+        self, session_label: str
+    ) -> tuple[list[dict[str, Any]], gr.update, str]:
         """
-        Given a label like 'timestamp | session_id', select that session and return its history.
+        Given a label like 'timestamp | session_id', select that session as the
+        primary chat and return its history.
 
         Args:
             session_label (str): The label of the chat session that the user wants to select.
 
         Returns:
-            A list of the chat history.
+            The primary chat history, updated context-session choices, and
+            context summary.
         """
         if not session_label:
-            return []  # nothing selected
+            return (
+                [],
+                self.update_context_session_choices(None),
+                self.get_context_status_markdown(),
+            )
 
         # Extract session id from label
         session_id = self._extract_id_from_label(session_label)
 
         history = self.session_manager.select_session(session_id)
 
-        return history
+        return (
+            self._format_history_for_gradio(history),
+            self.update_context_session_choices(session_label),
+            self.get_context_status_markdown(),
+        )
 
-    def delete_session(self, session_label: str) -> Tuple[gr.update, List]:
+    def delete_session(
+        self, session_label: str
+    ) -> tuple[gr.update, gr.update, str, list]:
         """
         Delete a chat session.
 
@@ -273,45 +563,78 @@ class MCPGradioClientSession:
 
         Returns:
             A tuple containing a gradio update object for updating the
-                sessions list and an empty chat history.
+            sessions list, a context-session update, a context summary,
+            and an empty chat history. Deleted sessions are also removed from the
+            additional context selection.
         """
         # Handle case where no session is selected
         if not session_label:
             # Return current state unchanged
             updated_sessions = self.list_sessions()
-            return gr.update(choices=updated_sessions, value=None), []
+            return (
+                gr.update(
+                    choices=updated_sessions, value=self._current_session_label()
+                ),
+                self.update_context_session_choices(),
+                self.get_context_status_markdown(),
+                [],
+            )
 
         session_id = self._extract_id_from_label(session_label)
         self.session_manager.delete_session(session_id)
+        if session_id == self.session_manager.current_session_id:
+            self.session_manager.current_session_id = None
+        self.session_manager.set_context_sessions(
+            [
+                existing_session_id
+                for existing_session_id in self.session_manager.get_context_session_ids()
+                if existing_session_id != session_id
+            ]
+        )
         updated_sessions = self.list_sessions()
-        return gr.update(
-            choices=updated_sessions, value=None
-        ), []  # update sessions list, clear chat history
+        return (
+            gr.update(choices=updated_sessions, value=self._current_session_label()),
+            self.update_context_session_choices(),
+            self.get_context_status_markdown(),
+            [],
+        )
 
-    def delete_all_sessions(self) -> Tuple[gr.update, List]:
+    def delete_all_sessions(self) -> tuple[gr.update, gr.update, str, list]:
         """
         Delete all chat sessions with proper error handling.
 
         Returns:
-            A tuple containing:
-            - gradio update object for updating the sessions list
-            - chat history (empty if successful, unchanged if error)
+            A tuple containing the updated session list, updated context-session
+            list, current context summary markdown, and chat history.
         """
         try:
             LOG.info("Attempting to delete all sessions")
             self.session_manager.delete_all_sessions(confirm=False)
+            self.session_manager.set_context_sessions([])
             LOG.info("Successfully deleted all sessions")
-            return gr.update(choices=[], value=None), []
-        except Exception as e:
+            return (
+                gr.update(choices=[], value=None),
+                gr.update(choices=[], value=[]),
+                self.get_context_status_markdown(),
+                [],
+            )
+        except Exception as e:  # noqa: BLE001 - preserve UI fallback behavior
             LOG.error(f"Failed to delete all sessions: {e}")
             # Return current state unchanged if deletion fails
             current_sessions = self.list_sessions()
-            return gr.update(choices=current_sessions), []
+            return (
+                gr.update(
+                    choices=current_sessions, value=self._current_session_label()
+                ),
+                self.update_context_session_choices(),
+                self.get_context_status_markdown(),
+                [],
+            )
 
     async def process_message(
         self,
         message: str,
-        history: List,
+        history: list,
         agent_table: gr.Dataframe,
     ) -> AsyncGenerator[str, None]:
         """
@@ -337,15 +660,88 @@ class MCPGradioClientSession:
             return
 
         try:
-            response = await self.orchestrator.background_tasks.run_query(
-                message, blocking=self.blocking
-            )
-            if is_background_task_start_ack(response):
-                self.session_manager.add_message("user", message)
-                self.session_manager.add_message("assistant", response)
-            yield response
+            self.ensure_active_session_visible()
+            originating_session_id = self.session_manager.current_session_id
+            context_session_ids = list(self.session_manager.get_context_session_ids())
+            if not self.blocking:
+                response = await self.orchestrator.background_tasks.run_query(
+                    message, blocking=False
+                )
+                if is_background_task_start_ack(response) and (
+                    self.session_manager.session_exists(originating_session_id)
+                ):
+                    self.session_manager.chat_db.add_message(
+                        originating_session_id, "user", message
+                    )
+                    self.session_manager.chat_db.add_message(
+                        originating_session_id, "assistant", response
+                    )
+                if isinstance(response, RichResponse) and response.images:
+                    text = str(response)
+                    if self._is_image_attachment_placeholder(text):
+                        text = ""
+                    yield self._format_message_content(text, list(response.images))
+                else:
+                    yield response
+                return
 
-        except Exception as e:
+            # Stream the orchestrator directly so Magentic progress notices and
+            # response deltas reach Gradio while the workflow is running. The
+            # orchestrator owns persistence and image attachment handling.
+            response_chunks: list[str] = []
+            activity_chunks: list[str] = []
+            attachments: list[ImageAttachment] = []
+            attachment_digests: set[str] = set()
+            if getattr(self.orchestration_config, "mode", "") == "magentic":
+                activity_chunks.append("\n**Magentic workflow started.**\n")
+                yield self._format_message_content(
+                    "".join(activity_chunks), attachments
+                )
+            async for response_chunk in self.orchestrator.process_message(
+                message,
+                persistence_session_id=originating_session_id,
+                context_session_ids=context_session_ids,
+            ):
+                if is_activity(response_chunk):
+                    activity_chunks.append(str(response_chunk))
+                    yield self._format_message_content(
+                        "".join(activity_chunks + response_chunks), attachments
+                    )
+                    continue
+                attachment = image_attachment(response_chunk)
+                if attachment is not None:
+                    if attachment.digest not in attachment_digests:
+                        attachment_digests.add(attachment.digest)
+                        attachments.append(attachment)
+                    text = "".join(activity_chunks + response_chunks)
+                    yield self._format_message_content(text, attachments)
+                    continue
+
+                replacement = response_replacement(response_chunk)
+                if replacement is not None:
+                    response_chunks[:] = [replacement]
+                else:
+                    handled, terminal = apply_text_control(
+                        response_chunks, response_chunk
+                    )
+                    if handled:
+                        if terminal:
+                            yield self._format_message_content(
+                                "".join(activity_chunks + response_chunks), attachments
+                            )
+                            break
+                    elif str(response_chunk):
+                        response_chunks.append(str(response_chunk))
+
+                error = error_message(response_chunk)
+                if error is not None:
+                    response_chunks[:] = [error]
+
+                yield self._format_message_content(
+                    "".join(activity_chunks + response_chunks), attachments
+                )
+
+        except Exception as e:  # noqa: BLE001 - preserve streamed error handling
             error_msg = f"Error processing message: {e}"
             LOG.error(error_msg)
             traceback.print_exc()
@@ -376,32 +772,99 @@ class MCPGradioClientSession:
 
         return "\n".join(lines)
 
-    async def refresh_chat_and_task_status(self, history: List[Any]) -> Tuple[Any, str]:
+    async def refresh_chat_and_task_status(
+        self,
+        history: list[Any],
+        session_label: str | None,
+        awaiting_response: bool = False,
+    ) -> tuple[Any, str, gr.update, gr.update, gr.update]:
         """
         Refresh chat history and background task status for the Gradio UI.
 
         Args:
             history: Current Gradio chat history.
+            session_label: Currently selected primary-session label.
+            awaiting_response: Whether an optimistic user message is waiting for
+                its first assistant response and must not be overwritten.
 
         Returns:
-            Tuple containing the refreshed chat history or `gr.skip()`, and the
-            task status markdown.
+            Tuple containing the refreshed chat history or `gr.skip()`, the task
+            status markdown, session-list update, context choices update, and
+            context status update.
 
         Raises:
             Exception: Propagates unexpected chat-history load failures.
         """
         task_status = await self.get_task_status_markdown()
-        if (
-            not self.orchestrator
-            or await self.orchestrator.background_tasks.count_pending_tasks() > 0
-        ):
-            return gr.skip(), task_status
+        task_snapshot = (
+            await self.orchestrator.background_tasks.get_task_snapshot()
+            if self.orchestrator
+            else {}
+        )
+        session_list_update = gr.skip()
+        context_choices_update = gr.skip()
+        context_status_update = gr.skip()
+        current_session_label = self._current_session_label()
+        if current_session_label != session_label:
+            session_list_update = self.update_session_choices()
+            context_choices_update = self.update_context_session_choices(
+                current_session_label
+            )
+            context_status_update = self.get_context_status_markdown()
 
-        persisted_history = self.session_manager.load_history()
-        if persisted_history == list(history):
-            return gr.skip(), task_status
+        if awaiting_response or not self.orchestrator:
+            return (
+                gr.skip(),
+                task_status,
+                session_list_update,
+                context_choices_update,
+                context_status_update,
+            )
 
-        return persisted_history, task_status
+        raw_history = self.session_manager.load_history()
+        if raw_history == self._formatted_history_source:
+            persisted_history = self._formatted_history_cache or []
+        else:
+            persisted_history = self._format_history_for_gradio(raw_history)
+            self._formatted_history_source = raw_history
+            self._formatted_history_cache = persisted_history
+        # Overlay live previews on their original acknowledgements. Provisional
+        # text stays out of chat storage and never appears in another session.
+        display_history = [dict(message) for message in persisted_history]
+        rendered_tasks = set()
+        for message in reversed(display_history):
+            content = message.get("content")
+            if message.get("role") != "assistant" or not isinstance(content, str):
+                continue
+            if not is_background_task_start_ack(content):
+                continue
+            task_id = content[1:].partition("]")[0]
+            if task_id in rendered_tasks:
+                continue
+            task = task_snapshot.get(task_id, {})
+            if (
+                task.get("session_id") == self.session_manager.current_session_id
+                and task.get("status") in {"pending", "running"}
+                and task.get("progress_text")
+            ):
+                message["content"] = f"{content}\n\n{task['progress_text']}"
+                rendered_tasks.add(task_id)
+        if display_history == list(history):
+            return (
+                gr.skip(),
+                task_status,
+                session_list_update,
+                context_choices_update,
+                context_status_update,
+            )
+
+        return (
+            display_history,
+            task_status,
+            session_list_update,
+            context_choices_update,
+            context_status_update,
+        )
 
     async def cleanup(self) -> None:
         """
@@ -417,6 +880,7 @@ class MCPGradioClientSession:
                 LOG.warning(
                     f"Multiple errors during cleanup ({len(eg.exceptions)} errors, suppressed)"
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - cleanup must suppress failures
                 LOG.error(f"Error during cleanup: {e}")
+        self._attachment_cache.cleanup()
         self.initialized = False

@@ -235,6 +235,9 @@ internal modes are supported:
 | -------------- | --------------------------------------------------------------------------- | --------- | ----------------- |
 | `mode`         | Internal orchestration mode. Supported values are `agent-as-tool` and `magentic`. | No        | `agent-as-tool`   |
 | `participants` | Optional list of specialist agent names to include. `PlanningAgent` is excluded. | No        | All non-`PlanningAgent` agents |
+| `max_rounds` | Magentic coordination rounds before a final synthesis is requested. | No | `4` |
+| `timeout_seconds` | Magentic request wall-clock limit, including coordination and synthesis. | No | `120` |
+| `max_stalls` | Consecutive repeated progress cycles allowed before final synthesis. | No | `1` |
 
 ### Example
 
@@ -257,9 +260,26 @@ hidden Magentic manager. Otherwise MADA uses its built-in manager instructions.
 ```json
 "orchestration": {
     "mode": "magentic",
-    "participants": ["JobManagementAgent", "InverseDesignAgent"]
+    "participants": ["JobManagementAgent", "InverseDesignAgent"],
+    "max_rounds": 4,
+    "timeout_seconds": 120,
+    "max_stalls": 1
 }
 ```
+
+When a Magentic workflow reaches one of these limits, MADA asks the hidden
+manager to synthesize the best answer from the work completed so far. These
+limits apply only to `magentic` mode; `agent-as-tool` is unchanged.
+
+For a constrained simulation campaign, the optional `simulation_budget` object
+adds a per-request submission guard. It requires `limit`, `submission_tool` and
+an explicit `allowed_tools` list; `initial_limit` can reserve room for a follow-up.
+`batch_argument` selects a dotted argument path when automatic detection of an
+explicit `jobs`, `runs`, `parameter_runs` or `job_specs` list is insufficient.
+Reservations happen before submission and are not refunded on uncertain failures.
+This counts submitted run entries, so each entry must execute one simulation.
+See [the Vertex-CFD demo guide](../magentic_presentation.md) for the complete
+configuration, preflight and server contract.
 
 ## (Optional) Telemetry Configuration
 

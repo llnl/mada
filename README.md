@@ -100,6 +100,8 @@ The orchestration block currently exposes:
 
 - `mode`: `agent-as-tool` or `magentic`
 - `participants`: optional ordered specialist subset for either mode
+- Magentic convergence limits: `max_rounds` (default `4`),
+  `timeout_seconds` (default `120`), and `max_stalls` (default `1`)
 
 `PlanningAgent` is never a participant. If present in your config, it customizes the visible planner in `agent-as-tool` mode and the hidden manager in `magentic` mode.
 

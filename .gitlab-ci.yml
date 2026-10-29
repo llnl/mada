@@ -22,7 +22,6 @@ stages:
 
 .on_cz:
   tags:
-    - shell
     - tuolumne
   rules:
     - if: $SOURCE_ZONE == "CZ"
@@ -30,7 +29,6 @@ stages:
 
 .on_rz:
   tags:
-    - shell
     - rzadams
   rules:
     - if: $SOURCE_ZONE == "RZ"
@@ -38,7 +36,6 @@ stages:
 
 .on_scf:
   tags:
-    - shell
     - tenaya
   rules:
     - if: $SOURCE_ZONE == "SCF"
