@@ -1,0 +1,124 @@
+{
+  "model": {
+    "provider": "livai",
+    "model": "gpt-5.4",
+    "api_key": "${LIVAI_API_KEY}",
+    "base_url": "https://livai-api.llnl.gov/v1"
+  },
+  "agents": [
+    {
+      "agent_name": "PlanningAgent",
+      "description": "Coordinates the bounded Vertex-CFD demonstration",
+      "mcp_servers": [],
+      "instructions": [
+        "Complete a constrained Vertex-CFD campaign with at most three simulations. Use the tool schemas and existing simulation defaults to resolve routine details; do not invent physical constraints or QoI values."
+      ]
+    },
+    {
+      "agent_name": "JobManagementAgent",
+      "description": "Owns Flux submission and job-status tools. Reviews and executes candidate batches supplied by SimulationAgent; delegates all Vertex-CFD template, parameter and QoI questions to SimulationAgent.",
+      "domain": "job_management",
+      "mcp_servers": [
+        "flux"
+      ],
+      "instructions": [
+        "You are a Job Management Agent specialized in job execution.",
+        "You have access to Flux for executing runs.",
+        "You get the returned json from SimulationAgent tool 'generate_parameter_runs' to start running the simulations.",
+        "Once the SimulationAgent generates parameter runs you can execute the run jobs using the tool 'submit_jobs_async' and the returned json."
+      ]
+    },
+    {
+      "agent_name": "SimulationAgent",
+      "description": "Owns Vertex-CFD generate_parameter_runs and post_process_runs. First contact for case setup, parameter names, supported velocity QoI, candidate generation, analysis and image display. Does not submit Flux jobs. Owns read_vertex_campaign for actual sampled values, submission manifests, measured center-probe speed and generated plot paths.",
+      "domain": "inverse_design",
+      "mcp_servers": [
+        "vertex_cfd",
+        "image_files"
+      ],
+      "instructions": [
+        "You are a Simulation Agent specialized in creating Vertex-CFD parameter runs and analyzing simulation results.",
+        "You have access to Vertex-CFD for parameter run creation and result analysis.",
+        "Your responsibilities include generating Vertex-CFD parameter runs with the tool 'generate_parameter_runs' and analyzing the results with the tool 'post_process_runs'.",
+        "You do NOT execute jobs - that is handled by the JobManagementAgent.",
+        "You pass the returned json from 'generate_parameter_runs' to JobManagementAgent so it can start running the simulations.",
+        "Use the image_files read_image tool when the user asks to display a local PNG, JPEG, GIF, or WebP. Return the tool result as an image attachment; never paste base64 or a data URI into your response.",
+        "After the first runs finish, post-process them, report measured QoI and critique diversity versus performance. Hear JobManagementAgent's critique before recommending one optional follow-up.",
+        "If analysis produces plots, call read_image on the returned file paths during this request. Keep public action/result summaries concise and preserve all job-to-parameter mappings."
+      ]
+    }
+  ],
+  "mcp_servers": {
+    "flux": {
+      "transport": "streamable-http",
+      "url": "http://localhost:8101/mcp",
+      "description": "Flux workload manager for job execution"
+    },
+    "vertex_cfd": {
+      "transport": "streamable-http",
+      "url": "http://localhost:8107/mcp",
+      "description": "Vertex-CFD simulation"
+    },
+    "image_files": {
+      "transport": "stdio",
+      "command": "mada-read-image-mcp",
+      "env": {
+        "MADA_IMAGE_ROOTS": "${MADA_IMAGE_ROOTS:-../}"
+      },
+      "description": "Reads approved images and Vertex-CFD campaign metadata, measured center-probe velocity and artifact paths"
+    }
+  },
+  "orchestration": {
+    "mode": "magentic",
+    "participants": [
+      "SimulationAgent",
+      "JobManagementAgent"
+    ],
+    "max_rounds": 20,
+    "timeout_seconds": 600,
+    "max_stalls": 2,
+    "simulation_budget": {
+      "limit": 3,
+      "initial_limit": 2,
+      "submission_tool": "submit_jobs",
+      "batch_argument": "run_info_json",
+      "allowed_tools": [
+        "generate_parameter_runs",
+        "post_process_runs",
+        "read_image",
+        "submit_jobs",
+        "get_background_task_result",
+        "check_job_status",
+        "continuously_check_job_status",
+        "read_vertex_campaign",
+        "check_vertex_artifact_support"
+      ],
+      "poll_seconds": 2,
+      "critique_agents": [
+        "SimulationAgent",
+        "JobManagementAgent"
+      ],
+      "analysis_tool": "read_vertex_campaign",
+      "read_only_tools": [
+        "read_vertex_campaign",
+        "read_image",
+        "check_job_status",
+        "continuously_check_job_status",
+        "get_background_task_result",
+        "check_vertex_artifact_support"
+      ],
+      "execution_mode": "auto"
+    }
+  },
+  "interface": {
+    "title": "MADA Multi-Agent Orchestrator",
+    "description": "Coordinate multiple agents for complex engineering workflows",
+    "chat_placeholder": "Describe your workflow or ask for help...",
+    "port": 7861,
+    "share": false,
+    "in_situ_viz": {
+      "sim_server": "vertex_cfd",
+      "update_time": 60
+    }
+  }
+}

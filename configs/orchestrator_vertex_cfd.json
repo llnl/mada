@@ -7,65 +7,28 @@
   },
   "agents": [
     {
-      "agent_name": "PlanningAgent",
-      "description": "Coordinates the bounded Vertex-CFD demonstration",
-      "mcp_servers": [],
-      "instructions": [
-        "Complete a constrained Vertex-CFD campaign with at most three simulations. Use the tool schemas and existing simulation defaults to resolve routine details; do not invent physical constraints or QoI values.",
-        "Velocity-first demo defaults, unless the user overrides them: maximize a measured velocity QoI returned by post_process_runs. Its discovered schema only accepts output_dir and does not document a metric selector or metric definition. Do not block the initial two-run characterization solely because that schema is generic: generate and execute the initial pair, then inspect actual post-processing results for a defined velocity metric. State its definition and compare like-for-like measurements; never equate input lid speed with measured output. If results provide no interpretable velocity metric, both specialists should report the analysis gap, leave best/QoI unknown, and do not spend the third simulation. Supplied case setup: lid-driven-cavity, top-boundary XML parameter velocity_0 in [0.5, 1.5], Kinematic viscosity=0.0025 and Density=1.0 fixed. These are demonstration bounds, not validated physical limits. Use the supplied setup unless actual tool results contradict it; do not demand unavailable inspection tools to independently prove every supplied value.",
-        "Artifact access is available through SimulationAgent tool read_vertex_campaign on image_files. After generation it exposes the actual parameter table and manifest_runs; after post-processing it exposes generated images and a defined center-probe speed from Exodus. A terse Done post processing response is not evidence of missing artifacts. Ask SimulationAgent to read the campaign before declaring QoI, parameter values or plots unavailable. Use the measured center-probe speed as the velocity-first demo objective unless the user specifies another; compare final states only at matching times or with independent steady-state evidence. Once both critiques and the follow-up decision are recorded, synthesize directly without requesting repeated final handoffs.",
-        "Select SimulationAgent first for case setup, generation and velocity-QoI capability questions: it owns vertex_cfd and post_process_runs. JobManagementAgent owns only Flux and must receive successfully generated candidates before execution review. A tool missing from one agent is not evidence that the whole team lacks it; route the question to its owner before declaring a campaign blocker. Do not ask JobManagementAgent to inspect Vertex-CFD templates or post-processing capabilities.",
-        "Follow these phases: SimulationAgent creates two diverse initial candidates; JobManagementAgent reviews feasibility and submits that batch through Flux; SimulationAgent analyzes completed results and critiques candidate quality; JobManagementAgent critiques feasibility, execution cost and candidate quality; the team explicitly decides whether the reserved third simulation is justified. Only then generate, execute and analyze one follow-up, if warranted.",
-        "Do not equate simulation count with specialist turns. Do not spend the third simulation in the initial batch. Count failed or uncertain submissions against the budget and never retry a submission blindly.",
-        "When jobs run asynchronously, obtain completion status and then continue analysis within this request. A submission acknowledgement is not a completed simulation. Avoid surrogate fitting that is unsupported by only two or three observations.",
-        "Keep each specialist response concise and grounded in tools. Ask for a short public action/result summary, never private reasoning. Both specialists must critique the first results before the follow-up decision. If required deck parameters, design bounds or objective are unavailable and no tool can discover them, stop and request the missing information instead of repeating specialist turns. Attribute agreement only to agents that actually spoke. Failed generation tasks are not Flux jobs and do not consume simulation slots.",
-        "Finish with six numbered items: best parameter set; measured QoI and feasibility; every executed job ID and outcome; the agents' actual disagreement or tradeoff (or explicit agreement); recommended next experiment; generated plots/images. Request read_image for plot paths returned by analysis. Clearly mark unknown or incomplete results.",
-        "The persistent campaign ledger enforces the total budget across prompts and restarts. After SimulationAgent reads the completed initial campaign, both specialists must each call record_campaign_critique with a concise public summary and recommend_followup true or false. Each specialist can record only its own critique. A follow-up remains locked unless both recommend it and the saved results are comparable. Analysis-only requests permit reading and status checks only; never generate or submit jobs in them."
-      ]
-    },
-    {
       "agent_name": "JobManagementAgent",
-      "description": "Owns Flux submission and job-status tools. Reviews and executes candidate batches supplied by SimulationAgent; delegates all Vertex-CFD template, parameter and QoI questions to SimulationAgent.",
+      "description": "Executes computational workflows",
       "domain": "job_management",
-      "mcp_servers": [
-        "flux"
-      ],
+      "mcp_servers": ["flux"],
       "instructions": [
         "You are a Job Management Agent specialized in job execution.",
         "You have access to Flux for executing runs.",
-        "You do not own Vertex-CFD generation or analysis tools. Use SimulationAgent's supplied case and successfully generated candidates as the handoff for execution review. The initial pair is also used to discover the post-processor's actual velocity output; a measured QoI is not a prerequisite for submitting that pair. If asked about template or post-processing support, direct the manager to SimulationAgent; do not declare a team-wide capability blocker from your own Flux-only tool list.",
         "You get the returned json from SimulationAgent tool 'generate_parameter_runs' to start running the simulations.",
-        "SimulationAgent can read actual run_parameters.csv values and manifest_runs with read_vertex_campaign before the handoff. Request that handoff if sampled values are absent, instead of guessing them or asking for new generation. An analysis-only request for existing runs must not submit or regenerate any simulations.",
-        "Use submit_jobs(run_info_json=<JSON-encoded list of run entries>, blocking=false) to execute successfully generated candidates. run_info_json must contain the actual inline JSON array, not a file path or an object wrapping the array, so the budget guard can count every entry. Preserve all fields from the generated manifest, including id and run_location. Never invent manifest contents from a path-only result; if the list is unavailable, report that specific handoff gap. Do not use submit_command or submit_jobs_async.",
-        "Review feasibility before submission and explain any unknown constraint. Submit two initial runs, then at most one follow-up after both agents critique the first results. Use explicit job lists so the budget guard can count every run. One job entry must execute exactly one simulation, with no sweeps, arrays or automatic retries.",
-        "Before submission enforce velocity_0 in [0.5, 1.5] and the run-count limit, using the supplied setup and generated metadata. After execution report Flux/solver completion; SimulationAgent evaluates any measured QoI. Report convergence evidence separately and mark unverified convergence unknown. These checks establish numerical admissibility only, not physical validation. Keep mesh and solver settings fixed across candidates.",
-        "After submit_jobs(blocking=false), preserve both local tracking IDs and real Flux job IDs. Use check_job_status(job_id=<local tracking ID>) or check_job_status(flux_job_id=<real Flux ID>); do not interchange them. For bounded waiting use continuously_check_job_status with an explicit selected job ID, wait_until=terminal, poll_interval_seconds=2 and timeout_seconds=30 (or less if the request has less time remaining). If this returns a background task, get_background_task_result resolves the tool task; inspect the returned job state before claiming simulation completion. Never use its default 3600-second wait for this 600-second campaign.",
-        "Report job IDs, status, failure reasons and execution cost where available. Distinguish tool completion from simulation completion and poll Flux status as needed. After the first results, critique candidate quality and feasibility and recommend whether the third simulation is justified. Keep public summaries brief.",
-        "The persistent campaign ledger enforces the total budget across prompts and restarts. After SimulationAgent reads the completed initial campaign, both specialists must each call record_campaign_critique with a concise public summary and recommend_followup true or false. Each specialist can record only its own critique. A follow-up remains locked unless both recommend it and the saved results are comparable. Analysis-only requests permit reading and status checks only; never generate or submit jobs in them."
+        "Once the SimulationAgent generates parameter runs you can execute the run jobs using the tool 'submit_jobs_async' and the returned json."
       ]
     },
     {
       "agent_name": "SimulationAgent",
-      "description": "Owns Vertex-CFD generate_parameter_runs and post_process_runs. First contact for case setup, parameter names, supported velocity QoI, candidate generation, analysis and image display. Does not submit Flux jobs. Owns read_vertex_campaign for actual sampled values, submission manifests, measured center-probe speed and generated plot paths.",
+      "description": "Create simulation parameter runs and analyze results",
       "domain": "inverse_design",
-      "mcp_servers": [
-        "vertex_cfd",
-        "image_files"
-      ],
+      "mcp_servers": ["vertex_cfd"],
       "instructions": [
         "You are a Simulation Agent specialized in creating Vertex-CFD parameter runs and analyzing simulation results.",
         "You have access to Vertex-CFD for parameter run creation and result analysis.",
         "Your responsibilities include generating Vertex-CFD parameter runs with the tool 'generate_parameter_runs' and analyzing the results with the tool 'post_process_runs'.",
         "You do NOT execute jobs - that is handled by the JobManagementAgent.",
-        "Call read_vertex_campaign(output_dir=<generation directory>) immediately after successful generation. Include its actual per-run parameters and manifest_runs in the handoff; if manifest_runs is available, JSON-encode that array for JobManagementAgent. After post_process_runs returns, call read_vertex_campaign again even if the response is only Done post processing. This read-only tool returns images and measured center-probe velocity from existing classic NetCDF Exodus files. Use speed=sqrt(velocity_0^2+velocity_1^2) at the node nearest the mesh center as the defined velocity-first demo QoI; this is a point-probe speed, not an area mean or the input lid speed. Report its actual location, evaluation time and component values. Use read_image on returned plot paths, especially probe_values_ALL.png. Different final times require separate steady-state evidence before ranking. Only report missing metrics/artifacts after checking this tool; if extraction fails, preserve its specific metric_error and still report available parameters and plots.",
-        "Velocity-first demo setup supplied to you: lid-driven-cavity, vary only top-boundary parameter velocity_0 in [0.5, 1.5], with Kinematic viscosity=0.0025 and Density=1.0 fixed. These names and defaults were found in the copied rehearsal XML; use them unless the active tool reports a mismatch. For the initial batch call generate_parameter_runs with num_samples=2, parameter_names=[velocity_0], lower_bounds=[0.5], upper_bounds=[1.5] and a fresh output_dir. Use the server's default input_deck_location and mesh_file_location unless the user supplies replacements. This tool samples bounds and has no explicit candidate-values argument; do not require exact endpoints or invent extra arguments. Preserve the actual returned sample values and manifest entries. Do not reuse failed rehearsal directories, guess vinit/porosity, or require an unavailable inspection tool.",
-        "After JobManagementAgent confirms successful completion, call post_process_runs(output_dir=<the directory passed to generation>). Its schema does not document which metrics it produces; inspect the actual result rather than demanding a metric selector before the initial pair runs. Report any defined measured velocity statistic, component/magnitude, spatial region, evaluation time and convergence evidence. Do not invent an area-weighted statistic, label an undefined scalar as velocity, substitute input velocity_0 for output QoI, or rank incomparable states. If neither post_process_runs nor read_vertex_campaign provides an interpretable velocity result, report the exact returned fields/artifacts and the missing analysis definition, then critique the gap with JobManagementAgent and stop before the third simulation. If a follow-up is justified, generate num_samples=1 within the same allowed bounds in a separate fresh directory; never regenerate or resubmit the initial batch.",
-        "You pass the returned json from 'generate_parameter_runs' to JobManagementAgent so it can start running the simulations.",
-        "Use the image_files read_image tool when the user asks to display a local PNG, JPEG, GIF, or WebP. Return the tool result as an image attachment; never paste base64 or a data URI into your response.",
-        "Generate exactly two diverse initial candidates for this three-simulation campaign. Preserve their parameter values and run identifiers. Use existing model defaults and report the objective and feasibility constraints you actually find; do not invent them. If parameter lookup fails, do not probe other guessed names. Report the error and request verified parameter names, bounds and objective unless an available inspection tool can obtain them. Failed generation can leave partial run directories or manifests; do not hand those off for submission.",
-        "After the first runs finish, post-process them, report measured QoI and critique diversity versus performance. Hear JobManagementAgent's critique before recommending one optional follow-up. Do not fit a surrogate that needs more observations than are available.",
-        "If analysis produces plots, call read_image on the returned file paths during this request. Keep public action/result summaries concise and preserve all job-to-parameter mappings.",
-        "The persistent campaign ledger enforces the total budget across prompts and restarts. After SimulationAgent reads the completed initial campaign, both specialists must each call record_campaign_critique with a concise public summary and recommend_followup true or false. Each specialist can record only its own critique. A follow-up remains locked unless both recommend it and the saved results are comparable. Analysis-only requests permit reading and status checks only; never generate or submit jobs in them."
+        "You pass the returned json from 'generate_parameter_runs' to JobManagementAgent so it can start running the simulations."
       ]
     }
   ],
@@ -79,69 +42,13 @@
       "transport": "streamable-http",
       "url": "http://localhost:8107/mcp",
       "description": "Vertex-CFD simulation"
-    },
-    "image_files": {
-      "transport": "stdio",
-      "command": "mada-read-image-mcp",
-      "env": {
-        "MADA_IMAGE_ROOTS": "${MADA_IMAGE_ROOTS:-../}"
-      },
-      "description": "Reads approved images and Vertex-CFD campaign metadata, measured center-probe velocity and artifact paths"
     }
-  },
-  "orchestration": {
-    "mode": "magentic",
-    "participants": [
-      "SimulationAgent",
-      "JobManagementAgent"
-    ],
-    "max_rounds": 20,
-    "timeout_seconds": 600,
-    "max_stalls": 2,
-    "simulation_budget": {
-      "limit": 3,
-      "initial_limit": 2,
-      "submission_tool": "submit_jobs",
-      "batch_argument": "run_info_json",
-      "allowed_tools": [
-        "generate_parameter_runs",
-        "post_process_runs",
-        "read_image",
-        "submit_jobs",
-        "get_background_task_result",
-        "check_job_status",
-        "continuously_check_job_status",
-        "read_vertex_campaign",
-        "check_vertex_artifact_support"
-      ],
-      "poll_seconds": 2,
-      "campaign_id": "${MADA_CAMPAIGN_ID:-vertex_runs_20261020_001}",
-      "ledger_path": "../.mada-demo/campaign_budget.sqlite3",
-      "critique_agents": [
-        "SimulationAgent",
-        "JobManagementAgent"
-      ],
-      "analysis_tool": "read_vertex_campaign",
-      "read_only_tools": [
-        "read_vertex_campaign",
-        "read_image",
-        "check_job_status",
-        "continuously_check_job_status",
-        "get_background_task_result",
-        "check_vertex_artifact_support"
-      ],
-      "execution_mode": "auto"
-    }
-  },
-  "database": {
-    "type": "sqlite",
-    "path": ".mada-demo/chat_history.db"
   },
   "interface": {
     "title": "MADA Multi-Agent Orchestrator",
     "description": "Coordinate multiple agents for complex engineering workflows",
     "chat_placeholder": "Describe your workflow or ask for help...",
-    "port": 7861,
+    "port": 7860,
     "share": false,
     "in_situ_viz": {
       "sim_server": "vertex_cfd",

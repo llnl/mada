@@ -1,6 +1,6 @@
 {
   "model": {
-    "provider": "livai",
+    "provider": "openai",
     "model": "gpt-5",
     "api_key": "${API_KEY}",
     "base_url": "${API_BASE_URL:-https://api.openai.com/v1/responses}"
