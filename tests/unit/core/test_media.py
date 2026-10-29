@@ -19,6 +19,8 @@ from mada.core.orchestration.agent_as_tool_strategy import (
 )
 from mada.core.orchestration.magentic_strategy import MagenticOrchestrationStrategy
 from mada.core.orchestration.stream_events import (
+    InternalActivitySignal,
+    InternalError,
     InternalImageSignal,
     InternalResponseReplacement,
 )
@@ -319,6 +321,36 @@ async def test_collect_message_response_converts_serialized_image_text(monkeypat
     assert isinstance(response, RichResponse)
     assert response == "Here is the plot."
     assert len(response.images) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("control", [InternalResponseReplacement, InternalError])
+async def test_progress_keeps_activity_and_applies_text_controls(monkeypatch, control):
+    orchestrator = MADAOrchestrator.__new__(MADAOrchestrator)
+    attachment = ImageAttachment.from_data(PNG_DATA, "image/png")
+
+    async def process_message(*args, **kwargs):
+        yield InternalActivitySignal("SimulationAgent: running\n")
+        yield "hello"
+        yield " "
+        yield "world"
+        yield InternalImageSignal(attachment)
+        yield control("Authoritative response")
+
+    monkeypatch.setattr(orchestrator, "process_message", process_message)
+    previews = []
+    response = await orchestrator.collect_message_response(
+        "run", on_progress=previews.append
+    )
+    assert previews == [
+        "SimulationAgent: running\n",
+        "SimulationAgent: running\nhello",
+        "SimulationAgent: running\nhello ",
+        "SimulationAgent: running\nhello world",
+        "SimulationAgent: running\nAuthoritative response",
+    ]
+    assert response == "Authoritative response"
+    assert response.images == (attachment,)
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,5 @@
 import base64
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -92,3 +93,42 @@ async def test_blocking_query_snapshots_session_and_context():
         persistence_session_id="primary",
         context_session_ids=["reference"],
     )
+
+
+@pytest.mark.asyncio
+async def test_overlapping_background_progress_is_isolated_and_bounded():
+    session_manager = SimpleNamespace(
+        current_session_id="primary",
+        get_context_session_ids=lambda: ["reference"],
+        session_exists=lambda session_id: True,
+    )
+    callbacks = {}
+    finish = asyncio.Event()
+
+    async def collect(message, **kwargs):
+        callbacks[message] = kwargs["on_progress"]
+        kwargs["on_progress"](f"{message}: starting")
+        kwargs["first_tool_state"]["name"] = "submit_jobs"
+        kwargs["first_tool_call"].set()
+        await finish.wait()
+        return "Done"
+
+    manager = BackgroundTaskManager(session_manager, {}, collect)
+    try:
+        await manager.run_query("one", blocking=False)
+        session_manager.current_session_id = "other"
+        await manager.run_query("two", blocking=False)
+        callbacks["one"]("one: completed first simulation")
+        snapshot = await manager.get_task_snapshot()
+        assert snapshot["task-1"]["progress_text"] == "one: completed first simulation"
+        assert snapshot["task-1"]["session_id"] == "primary"
+        assert snapshot["task-2"]["progress_text"] == "two: starting"
+        assert snapshot["task-2"]["session_id"] == "other"
+        callbacks["two"]("x" * 70_000)
+        assert (
+            len((await manager.get_task_snapshot())["task-2"]["progress_text"])
+            == 64_000
+        )
+    finally:
+        finish.set()
+        await manager.cleanup()

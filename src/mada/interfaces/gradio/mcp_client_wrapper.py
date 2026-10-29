@@ -660,13 +660,22 @@ class MCPGradioClientSession:
             return
 
         try:
+            self.ensure_active_session_visible()
+            originating_session_id = self.session_manager.current_session_id
+            context_session_ids = list(self.session_manager.get_context_session_ids())
             if not self.blocking:
                 response = await self.orchestrator.background_tasks.run_query(
                     message, blocking=False
                 )
-                if is_background_task_start_ack(response):
-                    self.session_manager.add_message("user", message)
-                    self.session_manager.add_message("assistant", response)
+                if is_background_task_start_ack(response) and (
+                    self.session_manager.session_exists(originating_session_id)
+                ):
+                    self.session_manager.chat_db.add_message(
+                        originating_session_id, "user", message
+                    )
+                    self.session_manager.chat_db.add_message(
+                        originating_session_id, "assistant", response
+                    )
                 if isinstance(response, RichResponse) and response.images:
                     text = str(response)
                     if self._is_image_attachment_placeholder(text):
@@ -688,7 +697,11 @@ class MCPGradioClientSession:
                 yield self._format_message_content(
                     "".join(activity_chunks), attachments
                 )
-            async for response_chunk in self.orchestrator.process_message(message):
+            async for response_chunk in self.orchestrator.process_message(
+                message,
+                persistence_session_id=originating_session_id,
+                context_session_ids=context_session_ids,
+            ):
                 if is_activity(response_chunk):
                     activity_chunks.append(str(response_chunk))
                     yield self._format_message_content(
@@ -783,6 +796,11 @@ class MCPGradioClientSession:
             Exception: Propagates unexpected chat-history load failures.
         """
         task_status = await self.get_task_status_markdown()
+        task_snapshot = (
+            await self.orchestrator.background_tasks.get_task_snapshot()
+            if self.orchestrator
+            else {}
+        )
         session_list_update = gr.skip()
         context_choices_update = gr.skip()
         context_status_update = gr.skip()
@@ -794,11 +812,7 @@ class MCPGradioClientSession:
             )
             context_status_update = self.get_context_status_markdown()
 
-        if (
-            awaiting_response
-            or not self.orchestrator
-            or await self.orchestrator.background_tasks.count_pending_tasks() > 0
-        ):
+        if awaiting_response or not self.orchestrator:
             return (
                 gr.skip(),
                 task_status,
@@ -814,7 +828,28 @@ class MCPGradioClientSession:
             persisted_history = self._format_history_for_gradio(raw_history)
             self._formatted_history_source = raw_history
             self._formatted_history_cache = persisted_history
-        if persisted_history == list(history):
+        # Overlay live previews on their original acknowledgements. Provisional
+        # text stays out of chat storage and never appears in another session.
+        display_history = [dict(message) for message in persisted_history]
+        rendered_tasks = set()
+        for message in reversed(display_history):
+            content = message.get("content")
+            if message.get("role") != "assistant" or not isinstance(content, str):
+                continue
+            if not is_background_task_start_ack(content):
+                continue
+            task_id = content[1:].partition("]")[0]
+            if task_id in rendered_tasks:
+                continue
+            task = task_snapshot.get(task_id, {})
+            if (
+                task.get("session_id") == self.session_manager.current_session_id
+                and task.get("status") in {"pending", "running"}
+                and task.get("progress_text")
+            ):
+                message["content"] = f"{content}\n\n{task['progress_text']}"
+                rendered_tasks.add(task_id)
+        if display_history == list(history):
             return (
                 gr.skip(),
                 task_status,
@@ -824,7 +859,7 @@ class MCPGradioClientSession:
             )
 
         return (
-            persisted_history,
+            display_history,
             task_status,
             session_list_update,
             context_choices_update,

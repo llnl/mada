@@ -114,7 +114,7 @@ class BackgroundTaskManager:
         self._task_lock = asyncio.Lock()
         self._next_background_task_id = 1
         self._pending_tasks: Dict[str, asyncio.Task[Any]] = {}
-        self._task_results: Dict[str, Dict[str, str]] = {}
+        self._task_results: Dict[str, Dict[str, Any]] = {}
         self._hidden_task_ids: Set[str] = set()
         self._background_tool_poll_tasks: Dict[str, asyncio.Task[None]] = {}
         self._active_agent_queries = 0
@@ -396,6 +396,19 @@ class BackgroundTaskManager:
 
         first_tool_call = asyncio.Event()
         first_tool_state = {}
+        task_state = {
+            "status": "pending",
+            "type": "agent",
+            "session_id": originating_session_id,
+            "progress_text": "",
+        }
+
+        def record_progress(text: str) -> None:
+            # This callback runs synchronously on the query's event loop.
+            # Bound the UI preview without truncating the persisted final answer.
+            if task_state["status"] in {"pending", "running"}:
+                task_state["progress_text"] = text[-64_000:]
+                task_state["status"] = "running"
 
         task = asyncio.create_task(
             self.collect_message_response(
@@ -407,6 +420,7 @@ class BackgroundTaskManager:
                 context_session_ids=originating_context_session_ids,
                 first_tool_call=first_tool_call,
                 first_tool_state=first_tool_state,
+                on_progress=record_progress,
             )
         )
 
@@ -435,11 +449,8 @@ class BackgroundTaskManager:
             task_id = f"task-{self._next_background_task_id}"
             self._next_background_task_id += 1
             self._pending_tasks[task_id] = task
-            self._task_results[task_id] = {
-                "status": "pending",
-                "type": "agent",
-                "tool_name": first_tool_state.get("name", "tool call"),
-            }
+            task_state["tool_name"] = first_tool_state.get("name", "tool call")
+            self._task_results[task_id] = task_state
 
         def _done_callback(done_task: asyncio.Task[str]) -> None:
             async def _finalize() -> None:
@@ -474,7 +485,7 @@ class BackgroundTaskManager:
         print(f"{message}\n")
         return message
 
-    async def get_task_snapshot(self) -> Dict[str, Dict[str, str]]:
+    async def get_task_snapshot(self) -> Dict[str, Dict[str, Any]]:
         """
         Return a copy of interface and MCP background task state.
 

@@ -99,6 +99,11 @@ When you enter prompts, the agent(s) will run them as background processes so th
 
 All background tasks can be tracked in the "Task Status" collapsible window on the right side of the screen, as shown above.
 
+While a task is running, its chat acknowledgement shows a live preview of public
+activity and response text, refreshed every half second. You can continue using
+other chats; progress stays with the chat that started the task. Previews are
+temporary, and the final answer and images are saved normally when work completes.
+
 When tasks finish running, the output from the agent will be displayed in the chat window:
 
 ![Gradio Completed Background Tasks](../../assets/images/gradio-completed-tasks.png)

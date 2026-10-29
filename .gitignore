@@ -11,3 +11,4 @@ livai_models.py
 **/.codex
 .venv/
 .mada-demo/
+configs/*.local.json

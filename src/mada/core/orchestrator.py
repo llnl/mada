@@ -21,7 +21,7 @@ from contextlib import AsyncExitStack
 from contextvars import ContextVar, Token
 from pathlib import Path
 from types import TracebackType
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Type
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple, Type
 
 import httpcore2
 import httpx2
@@ -61,6 +61,7 @@ from mada.core.orchestration import (
 from mada.core.orchestration.stream_events import (
     apply_text_control,
     image_attachment,
+    is_activity,
     tool_call_name,
 )
 from mada.core.skills.skill_registry import SkillRegistry
@@ -1749,6 +1750,7 @@ Guidelines:
         context_session_ids: Optional[List[str]] = None,
         first_tool_call: Optional[asyncio.Event] = None,
         first_tool_state: Optional[Dict[str, str]] = None,
+        on_progress: Optional[Callable[[str], None]] = None,
     ) -> str:
         """
         Collect a streamed assistant response into a single string.
@@ -1774,6 +1776,8 @@ Guidelines:
                 reports a tool call.
             first_tool_state: Optional mutable mapping populated with the first
                 tool call name under the `name` key.
+            on_progress: Optional callback receiving the current public progress
+                preview. Activity is retained when provisional text is replaced.
 
         Returns:
             Concatenated assistant response text, including any tool-call notices
@@ -1783,6 +1787,12 @@ Guidelines:
             Exception: Propagates unexpected failures from `process_message`.
         """
         response_chunks = []
+        activity_chunks = []
+
+        def publish_progress():
+            if on_progress is not None:
+                on_progress("".join(activity_chunks + response_chunks))
+
         image_attachments = []
         image_digests = set()
         async for response_chunk in self.process_message(
@@ -1792,6 +1802,14 @@ Guidelines:
             stateless_session=stateless_session,
             context_session_ids=context_session_ids,
         ):
+            if is_activity(response_chunk) and on_progress is not None:
+                activity_chunks.append(
+                    strip_image_payload_text(
+                        str(response_chunk), strip_outer_whitespace=False
+                    )
+                )
+                publish_progress()
+                continue
             attachment = image_attachment(response_chunk)
             if attachment is not None:
                 if attachment.digest not in image_digests:
@@ -1805,7 +1823,9 @@ Guidelines:
                     if text_attachment.digest not in image_digests:
                         image_digests.add(text_attachment.digest)
                         image_attachments.append(text_attachment)
-                response_chunk = strip_image_payload_text(response_chunk)
+                response_chunk = strip_image_payload_text(
+                    response_chunk, strip_outer_whitespace=bool(text_attachments)
+                )
                 if not response_chunk:
                     continue
 
@@ -1821,11 +1841,13 @@ Guidelines:
 
             handled, terminal = apply_text_control(response_chunks, response_chunk)
             if handled:
+                publish_progress()
                 if terminal:
                     break
                 continue
 
             response_chunks.append(str(response_chunk))
+            publish_progress()
             if (
                 first_tool_call
                 and first_tool_state is not None

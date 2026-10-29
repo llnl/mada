@@ -82,7 +82,7 @@ async def test_gradio_client_yields_rich_response_as_mixed_content():
             return RichResponse("Done", [attachment])
 
     client.initialized = True
-    client.blocking = True
+    client.blocking = False
     client.orchestrator = SimpleNamespace(background_tasks=BackgroundTasks())
     client.session_manager = MagicMock()
     try:
@@ -109,7 +109,7 @@ async def test_gradio_client_hides_image_only_text_fallback():
             )
 
     client.initialized = True
-    client.blocking = True
+    client.blocking = False
     client.orchestrator = SimpleNamespace(background_tasks=BackgroundTasks())
     client.session_manager = MagicMock()
     try:
